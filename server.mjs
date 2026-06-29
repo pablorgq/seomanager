@@ -2,6 +2,7 @@ import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { randomBytes } from 'crypto';
+import { Storage } from '@google-cloud/storage';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app  = express();
@@ -13,6 +14,22 @@ const PORT = process.env.PORT || 3000;
 const OPENAI_KEY = process.env.OPENAI_API_KEY || null;
 const AUTH_USER  = process.env.AUTH_USER || 'pablo';
 const AUTH_PASS  = process.env.AUTH_PASS  || null;
+
+/* ─────────────────────────────────────────────
+   GOOGLE CLOUD STORAGE
+───────────────────────────────────────────── */
+const GCS_BUCKET = process.env.GCS_BUCKET_NAME || null;
+let gcs = null;
+
+if (process.env.GCS_SERVICE_ACCOUNT_JSON && GCS_BUCKET) {
+  try {
+    const creds = JSON.parse(process.env.GCS_SERVICE_ACCOUNT_JSON);
+    gcs = new Storage({ credentials: creds, projectId: creds.project_id });
+    console.log(`[gcs] bucket: ${GCS_BUCKET}`);
+  } catch (e) {
+    console.warn('[gcs] Failed to parse GCS_SERVICE_ACCOUNT_JSON:', e.message);
+  }
+}
 
 if (!AUTH_PASS) {
   if (process.env.NODE_ENV === 'production') {
@@ -326,11 +343,48 @@ async function proxyOpenAI(url, req, res) {
   }
 }
 
-app.get('/api/config', (req, res) => res.json({ hasServerKey: !!OPENAI_KEY }));
+app.get('/api/config', (req, res) => res.json({ hasServerKey: !!OPENAI_KEY, hasGcs: !!(gcs && GCS_BUCKET) }));
 
 app.post('/api/openai/text',   apiGuard, (req, res) => proxyOpenAI('https://api.openai.com/v1/responses', req, res));
 app.post('/api/openai/images', apiGuard, (req, res) => proxyOpenAI('https://api.openai.com/v1/images/generations', req, res));
 app.post('/api/openai/chat',   apiGuard, (req, res) => proxyOpenAI('https://api.openai.com/v1/chat/completions', req, res));
+
+/* ─────────────────────────────────────────────
+   GCS FOLDER CREATION
+───────────────────────────────────────────── */
+app.post('/api/gcs/create-folder', apiGuard, async (req, res) => {
+  if (!gcs || !GCS_BUCKET) {
+    return res.status(503).json({ error: { message: 'GCS not configured on this server.' } });
+  }
+
+  const { slug } = sanitizeBody(req.body);
+  if (!slug || typeof slug !== 'string') {
+    return res.status(400).json({ error: { message: 'slug is required.' } });
+  }
+
+  // GCS object name rules: lowercase, letters, numbers, hyphens, max 63 chars
+  const safeSlug = slug.toLowerCase().replace(/[^a-z0-9\-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 63);
+  if (!safeSlug) {
+    return res.status(400).json({ error: { message: 'Could not derive a valid folder name from slug.' } });
+  }
+
+  try {
+    const bucket = gcs.bucket(GCS_BUCKET);
+
+    // Create a placeholder object so the folder exists and is publicly readable
+    const file = bucket.file(`${safeSlug}/.keep`);
+    await file.save('', {
+      contentType: 'text/plain',
+      predefinedAcl: 'publicRead',
+    });
+
+    const url = `https://storage.googleapis.com/${GCS_BUCKET}/${safeSlug}/`;
+    res.json({ url, bucket: GCS_BUCKET, folder: safeSlug });
+  } catch (e) {
+    console.error('[gcs create-folder]', e.message);
+    res.status(500).json({ error: { message: `GCS error: ${e.message}` } });
+  }
+});
 
 /* ─────────────────────────────────────────────
    SPA FALLBACK

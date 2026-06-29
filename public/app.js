@@ -50,6 +50,7 @@ const SAFETY_PREFIX = 'Editorial healthcare photography for a professional medic
 /* ── STATE ── */
 let apiKey = null;
 let hasServerKey = false;
+let hasGcs = false;
 let generatedBlogs = [];
 let igImages = [];
 
@@ -57,6 +58,7 @@ let igImages = [];
 async function init() {
   const cfg = await fetch('/api/config').then(r => r.json()).catch(() => ({}));
   hasServerKey = !!cfg.hasServerKey;
+  hasGcs = !!cfg.hasGcs;
   if (hasServerKey) {
     document.getElementById('settingsToggle').style.display = 'none';
   } else {
@@ -371,6 +373,39 @@ function renderCard(blog, num, doImages) {
   card.querySelector('.btn-save-txt').addEventListener('click', () => {
     downloadText(`blog-${slugify(blog.blogName)}.txt`, formatBlogText(blog));
   });
+
+  // GCS folder creation
+  if (hasGcs) {
+    const gcsSection = card.querySelector('.card-gcs-section');
+    gcsSection.classList.remove('hidden');
+    const gcsBtn = card.querySelector('.btn-gcs-create');
+    const gcsUrlWrap = card.querySelector('.card-gcs-url');
+    const gcsLink = card.querySelector('.gcs-url-link');
+    gcsBtn.addEventListener('click', async () => {
+      gcsBtn.disabled = true;
+      gcsBtn.textContent = 'Creating…';
+      try {
+        const r = await fetch('/api/gcs/create-folder', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ slug: slugify(blog.blogName) })
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error?.message || `GCS error ${r.status}`);
+        blog._gcsUrl = d.url;
+        gcsLink.href = d.url;
+        gcsLink.textContent = d.url;
+        gcsBtn.classList.add('hidden');
+        gcsUrlWrap.classList.remove('hidden');
+        card.querySelector('.gcs-copy-btn').addEventListener('click', () => {
+          copyText(card.querySelector('.gcs-copy-btn'), d.url);
+        });
+      } catch (e) {
+        gcsBtn.textContent = `✕ ${e.message}`.slice(0, 60);
+        gcsBtn.disabled = false;
+      }
+    });
+  }
 
   // Store card reference on blog object for later image injection
   blog._card = card;

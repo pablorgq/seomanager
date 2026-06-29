@@ -566,6 +566,19 @@ details[open] .card-prompts-toggle::before { transform: rotate(90deg); }
   margin-top: 14px;
 }
 
+.card-gcs-section { margin-top: 10px; }
+.btn-gcs-create {
+  background: var(--accent-dim); color: var(--accent);
+  border: 1px solid rgba(67,97,238,.2);
+}
+.btn-gcs-create:hover { background: rgba(67,97,238,.15); }
+.card-gcs-url { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.gcs-url-link {
+  font-size: 11px; color: var(--accent); word-break: break-all;
+  flex: 1; text-decoration: none;
+}
+.gcs-url-link:hover { text-decoration: underline; }
+
 /* ── IMAGE GENERATOR ── */
 .ig-controls-row {
   display: grid;
