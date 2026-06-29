@@ -54,7 +54,7 @@ let igImages = [];
 
 /* ── INIT ── */
 async function init() {
-  apiKey = await Store.get('bbf_api_key');
+  apiKey = await Store.get('seomanager_api_key');
   if (apiKey) {
     document.getElementById('apiKeyInput').value = apiKey;
   }
@@ -72,14 +72,14 @@ function bindEvents() {
   document.getElementById('saveKeyBtn').addEventListener('click', async () => {
     const val = document.getElementById('apiKeyInput').value.trim();
     if (!val) return;
-    await Store.set('bbf_api_key', val);
+    await Store.set('seomanager_api_key', val);
     apiKey = val;
     document.getElementById('settingsPanel').classList.remove('open');
   });
 
   // Clear API key
   document.getElementById('clearKeyBtn').addEventListener('click', async () => {
-    await Store.remove('bbf_api_key');
+    await Store.remove('seomanager_api_key');
     apiKey = null;
     document.getElementById('apiKeyInput').value = '';
   });
@@ -126,7 +126,7 @@ function bindEvents() {
 /* ── API KEY GUARD ── */
 async function getApiKey() {
   if (apiKey) return apiKey;
-  apiKey = await Store.get('bbf_api_key');
+  apiKey = await Store.get('seomanager_api_key');
   if (!apiKey) {
     document.getElementById('settingsPanel').classList.add('open');
     throw new Error('Enter your OpenAI API key in Settings first.');

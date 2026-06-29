@@ -1,7 +1,7 @@
 {
-  "name": "blog-brand-forge",
+  "name": "seomanager",
   "version": "1.0.0",
-  "description": "Blog Brand Forge — SEO branding asset generator web app",
+  "description": "SEO Manager — SEO branding asset generator web app",
   "type": "module",
   "main": "server.mjs",
   "scripts": {
