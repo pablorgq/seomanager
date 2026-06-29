@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Blog Brand Forge</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&family=DM+Sans:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ── HEADER ── -->
+  <header class="header">
+    <div class="header-inner">
+      <div class="header-brand">
+        <div class="logo-mark">⚡</div>
+        <div>
+          <h1 class="app-title">Blog Brand Forge</h1>
+          <p class="app-subtitle">SEO Branding Asset Generator</p>
+        </div>
+      </div>
+      <button class="btn-icon settings-toggle" id="settingsToggle" title="API Settings">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- ── SETTINGS PANEL ── -->
+  <div class="settings-panel" id="settingsPanel">
+    <div class="settings-inner">
+      <div class="settings-content">
+        <label class="settings-label">OpenAI API Key</label>
+        <div class="settings-row">
+          <input type="password" id="apiKeyInput" class="settings-input" placeholder="sk-..." autocomplete="off" />
+          <button class="btn btn-secondary" id="saveKeyBtn">Save</button>
+          <button class="btn btn-ghost" id="clearKeyBtn">Clear</button>
+        </div>
+        <p class="settings-note">Stored locally in your browser's localStorage — never sent to any server, only directly to OpenAI.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── TAB NAV ── -->
+  <nav class="tab-nav">
+    <button class="tab-btn active" data-tab="brands">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+      Blog Brands
+    </button>
+    <button class="tab-btn" data-tab="images">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+      Image Generator
+    </button>
+  </nav>
+
+  <!-- ── MAIN ── -->
+  <main class="main">
+
+    <!-- ── BRANDS TAB ── -->
+    <div class="tab-panel active" id="tab-brands">
+
+      <div class="error-banner hidden" id="brandsError">
+        <span class="error-text"></span>
+        <button class="error-close">✕</button>
+      </div>
+
+      <!-- Form -->
+      <div class="form-card">
+        <div class="form-grid">
+          <div class="form-group">
+            <label class="form-label">Number of Blogs</label>
+            <input type="number" id="blogCount" class="form-input" min="1" max="10" value="3" />
+          </div>
+          <div class="form-group form-group--wide">
+            <label class="form-label">Industry / Area Instructions</label>
+            <textarea id="industryInput" class="form-textarea" rows="3" placeholder="e.g. health and wellness, sustainable living, home improvement…"></textarea>
+          </div>
+        </div>
+        <div class="form-row">
+          <label class="toggle-label">
+            <input type="checkbox" id="generateImages" class="toggle-input" checked />
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            Generate AI images (logo + cover hero)
+          </label>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn-primary" id="generateBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+            Generate Blogs
+          </button>
+          <div class="export-wrap" id="exportWrap" style="display:none">
+            <button class="btn btn-secondary export-toggle">
+              Export All
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <div class="export-dropdown hidden">
+              <button class="export-opt" data-fmt="json">JSON</button>
+              <button class="export-opt" data-fmt="csv">CSV</button>
+              <button class="export-opt" data-fmt="txt">TXT</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Progress -->
+      <div class="progress-wrap hidden" id="progressWrap">
+        <div class="progress-label" id="progressLabel">
+          <span class="progress-dot"></span>
+          <span id="progressText">Starting…</span>
+        </div>
+        <div class="progress-bar-track">
+          <div class="progress-bar-fill" id="progressFill" style="width:0%"></div>
+        </div>
+      </div>
+
+      <!-- Cards -->
+      <div class="cards-grid" id="cardsGrid"></div>
+
+    </div><!-- /brands tab -->
+
+    <!-- ── IMAGE GENERATOR TAB ── -->
+    <div class="tab-panel" id="tab-images">
+
+      <div class="error-banner hidden" id="igError">
+        <span class="error-text"></span>
+        <button class="error-close">✕</button>
+      </div>
+
+      <div class="form-card">
+        <div class="form-group">
+          <label class="form-label">Image Topic / Instructions</label>
+          <textarea id="igTopic" class="form-textarea" rows="3" placeholder="e.g. medical spa treatments, non-invasive body contouring, luxury skincare…"></textarea>
+        </div>
+        <div class="ig-controls-row">
+          <div class="form-group">
+            <label class="form-label">Number of Images</label>
+            <input type="number" id="igCount" class="form-input" min="1" max="10" value="4" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Visual Style</label>
+            <select id="igStyle" class="form-select">
+              <option value="realistic">Realistic Photo</option>
+              <option value="editorial">Editorial / Magazine</option>
+              <option value="lifestyle">Lifestyle / Warm</option>
+              <option value="clinical">Clinical / Professional</option>
+              <option value="minimal">Minimalist / Clean</option>
+              <option value="dramatic">Dramatic / Moody</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Size</label>
+            <select id="igSize" class="form-select">
+              <option value="1024x1024">Square 1024×1024</option>
+              <option value="1536x1024">Landscape 1536×1024</option>
+              <option value="1024x1536">Portrait 1024×1536</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn-primary" id="igGenerateBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+            Generate Images
+          </button>
+          <button class="btn btn-secondary hidden" id="igDownloadAllBtn">Download All</button>
+        </div>
+      </div>
+
+      <div class="ig-gallery" id="igGallery"></div>
+
+    </div><!-- /images tab -->
+
+  </main>
+
+  <!-- ── CARD TEMPLATE ── -->
+  <template id="cardTemplate">
+    <article class="blog-card">
+      <div class="card-accent-bar"></div>
+      <div class="card-body">
+
+        <div class="card-meta-row">
+          <span class="card-num"></span>
+          <div class="palette-swatches"></div>
+        </div>
+
+        <div class="card-title-row">
+          <h2 class="card-blog-name"></h2>
+          <button class="btn-copy-inline" data-copy="name" title="Copy">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
+        </div>
+
+        <div class="card-subtitle-row">
+          <p class="card-blog-title"></p>
+          <button class="btn-copy-inline" data-copy="title" title="Copy">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
+        </div>
+
+        <div class="card-tagline-row">
+          <p class="card-tagline"></p>
+          <button class="btn-copy-inline" data-copy="tagline" title="Copy">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
+        </div>
+
+        <!-- Images -->
+        <div class="card-images">
+          <div class="img-frame img-frame--logo">
+            <span class="img-label">Logo</span>
+            <div class="img-container">
+              <div class="img-spinner"><div class="spinner"></div></div>
+              <div class="img-error hidden">⚠ Failed</div>
+              <img class="img-result hidden" alt="Logo" />
+            </div>
+            <div class="img-actions hidden">
+              <button class="btn-sm btn-copy-prompt" data-type="logo">Copy Prompt</button>
+              <button class="btn-sm btn-download" data-type="logo">Download</button>
+            </div>
+          </div>
+          <div class="img-frame img-frame--hero">
+            <span class="img-label">Cover Hero</span>
+            <div class="img-container">
+              <div class="img-spinner"><div class="spinner"></div></div>
+              <div class="img-error hidden">⚠ Failed</div>
+              <img class="img-result hidden" alt="Hero" />
+            </div>
+            <div class="img-actions hidden">
+              <button class="btn-sm btn-copy-prompt" data-type="hero">Copy Prompt</button>
+              <button class="btn-sm btn-download" data-type="hero">Download</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- About Us -->
+        <div class="card-section">
+          <div class="card-section-header">
+            <span class="card-section-title">About Us</span>
+            <button class="btn-copy-inline" data-copy="aboutUs" title="Copy">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            </button>
+          </div>
+          <p class="card-about-us"></p>
+        </div>
+
+        <!-- Image Prompts (collapsible) -->
+        <details class="card-prompts">
+          <summary class="card-prompts-toggle">View Image Prompts</summary>
+          <div class="card-prompts-body">
+            <div class="prompt-item">
+              <span class="prompt-label">Logo prompt</span>
+              <p class="prompt-logo-text"></p>
+            </div>
+            <div class="prompt-item">
+              <span class="prompt-label">Hero prompt</span>
+              <p class="prompt-hero-text"></p>
+            </div>
+          </div>
+        </details>
+
+        <!-- Card footer -->
+        <div class="card-footer">
+          <button class="btn-sm btn-copy-all">Copy All Text</button>
+          <button class="btn-sm btn-copy-json">Copy JSON</button>
+          <button class="btn-sm btn-save-txt">Save TXT</button>
+        </div>
+
+      </div>
+    </article>
+  </template>
+
+  <script src="app.js"></script>
+</body>
+</html>
