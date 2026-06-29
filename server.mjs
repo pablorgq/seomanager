@@ -49,6 +49,23 @@ app.post('/api/openai/images', async (req, res) => {
   }
 });
 
+/* ── CHAT PROXY → OpenAI /v1/chat/completions ── */
+app.post('/api/openai/chat', async (req, res) => {
+  const key = OPENAI_KEY || req.headers['x-client-key'];
+  if (!key) return res.status(401).json({ error: { message: 'No API key configured on server. Enter your key in Settings.' } });
+  try {
+    const upstream = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+      body: JSON.stringify(req.body)
+    });
+    const data = await upstream.json();
+    res.status(upstream.status).json(data);
+  } catch (e) {
+    res.status(502).json({ error: { message: `Proxy error: ${e.message}` } });
+  }
+});
+
 app.get('*', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'index.html'));
 });

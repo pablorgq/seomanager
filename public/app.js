@@ -63,6 +63,11 @@ async function init() {
     apiKey = await Store.get('seomanager_api_key');
     if (apiKey) document.getElementById('apiKeyInput').value = apiKey;
   }
+  const popKey = await Store.get('seomanager_pop_key');
+  if (popKey) {
+    const el = document.getElementById('ag-popKey');
+    if (el) el.value = popKey;
+  }
   bindEvents();
 }
 
@@ -646,6 +651,395 @@ function downloadDataUrl(dataUrl, filename) {
 
 function slugify(str) {
   return (str || 'blog').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
+/* ═══════════════════════════════════════════════
+   SEO ARTICLE GENERATOR
+════════════════════════════════════════════════ */
+
+const POP_API = 'https://app.pageoptimizer.pro/api';
+let agSteps = [];
+let agTermsData = null;
+let agArticleText = '';
+let agArticleHtml = '';
+
+function agTogglePw(id, btn) {
+  const el = document.getElementById(id);
+  el.type = el.type === 'password' ? 'text' : 'password';
+  btn.textContent = el.type === 'password' ? 'show' : 'hide';
+}
+
+function agLog(msg) {
+  const el = document.getElementById('ag-logEl');
+  el.textContent = msg;
+  el.classList.add('show');
+}
+
+function agInitSteps(labels) {
+  agSteps = labels.map(l => ({ label: l, state: 'pending', detail: '' }));
+  agRenderSteps();
+  document.getElementById('ag-progressSection').style.display = 'block';
+  document.getElementById('ag-emptyState').style.display = 'none';
+  document.getElementById('ag-outputSection').style.display = 'none';
+}
+
+function agRenderSteps() {
+  const icons = { pending: '○', active: '◎', done: '✓', error: '✗' };
+  document.getElementById('ag-stepsEl').innerHTML = agSteps.map(s =>
+    `<div class="ag-step ${s.state}">
+      <span class="ag-step-icon">${icons[s.state]}</span>
+      <span>${s.label}${s.detail ? ' — ' + s.detail : ''}</span>
+    </div>`
+  ).join('');
+}
+
+function agSetStep(i, state, detail) {
+  agSteps[i].state = state;
+  if (detail !== undefined) agSteps[i].detail = detail;
+  agRenderSteps();
+}
+
+function agShowTermEditors(variations, lsaPhrases) {
+  const varList = document.getElementById('ag-varList');
+  varList.innerHTML = variations.map((v, i) => {
+    const phrase = typeof v === 'string' ? v : (v.phrase || v.variation || String(v));
+    return `<label class="ag-term-item">
+      <input type="checkbox" checked data-phrase="${phrase}">
+      <span class="ag-term-phrase">${phrase}</span>
+      <span class="ag-term-badge ag-badge-var">var</span>
+    </label>`;
+  }).join('');
+  document.getElementById('ag-varCount').textContent = `(${variations.length})`;
+
+  const lsiList = document.getElementById('ag-lsiList');
+  lsiList.innerHTML = lsaPhrases.map((t, i) => {
+    const phrase = t.phrase || String(t);
+    const avg = t.averageCount || 0;
+    return `<label class="ag-term-item">
+      <input type="checkbox" checked data-phrase="${phrase}">
+      <span class="ag-term-phrase">${phrase}</span>
+      <span class="ag-term-count">avg ${avg}</span>
+      <span class="ag-term-badge ag-badge-lsi">lsi</span>
+    </label>`;
+  }).join('');
+  document.getElementById('ag-lsiCount').textContent = `(${lsaPhrases.length})`;
+
+  document.getElementById('ag-varEditor').style.display = 'block';
+  document.getElementById('ag-lsiEditor').style.display = 'block';
+  document.getElementById('ag-continueBtn').style.display = 'flex';
+}
+
+function agToggleAll(listId, checked) {
+  document.querySelectorAll(`#${listId} input[type=checkbox]`).forEach(cb => cb.checked = checked);
+}
+
+function agGetSelected(listId) {
+  return [...document.querySelectorAll(`#${listId} input[type=checkbox]:checked`)]
+    .map(cb => cb.dataset.phrase);
+}
+
+async function agPopPost(path, body) {
+  agLog('POST ' + path + '…');
+  const r = await fetch(POP_API + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const j = await r.json();
+  agLog('← ' + r.status + ' ' + JSON.stringify(j).slice(0, 120));
+  if (j.status === 'FAILURE') throw new Error('POP: ' + (j.msg || JSON.stringify(j).slice(0, 120)));
+  return j;
+}
+
+async function agPollTerms(taskId, stepIdx) {
+  for (let i = 1; i <= 40; i++) {
+    await new Promise(r => setTimeout(r, 4000));
+    agSetStep(stepIdx, 'active', `attempt ${i}/40`);
+    agLog(`Polling terms attempt ${i}`);
+    const d = await fetch(`${POP_API}/task/${taskId}/results/`).then(r => r.json());
+    agLog(`terms ← ${d.status}${d.value ? ' ' + d.value + '%' : ''}${d.prepareId ? ' → prepareId:' + d.prepareId : ''}`);
+    if (d.status === 'FAILURE') throw new Error('get-terms task failed');
+    if (d.prepareId) return d;
+  }
+  throw new Error('get-terms timed out after 40 attempts');
+}
+
+async function agPollReport(taskId, stepIdx) {
+  for (let i = 1; i <= 40; i++) {
+    await new Promise(r => setTimeout(r, 4000));
+    agSetStep(stepIdx, 'active', `attempt ${i}/40`);
+    agLog(`Polling report attempt ${i}`);
+    const d = await fetch(`${POP_API}/task/${taskId}/results/`).then(r => r.json());
+    agLog(`report ← ${d.status}${d.value ? ' ' + d.value + '%' : ''}${d.report && d.report.id ? ' → id:' + d.report.id : ''}`);
+    if (d.status === 'FAILURE') throw new Error('create-report task failed');
+    if (d.report && d.report.id) return d;
+  }
+  throw new Error('create-report timed out after 40 attempts');
+}
+
+function agBoldTerms(text, terms) {
+  const sorted = [...terms].sort((a, b) => b.length - a.length);
+  let result = text;
+  sorted.forEach(term => {
+    if (!term || term.length < 3) return;
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    result = result.replace(new RegExp(`\\b(${escaped})\\b`, 'gi'), '<strong>$1</strong>');
+  });
+  return result;
+}
+
+function agRenderArticle(text, terms) {
+  let html = agBoldTerms(text, terms);
+  html = html
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1>$1</h1>');
+  return html.split(/\n\n+/).map(line => {
+    line = line.trim();
+    if (!line) return '';
+    if (line.startsWith('<h')) return line;
+    return '<p>' + line.replace(/\n/g, ' ') + '</p>';
+  }).filter(Boolean).join('\n');
+}
+
+function agRenderScore(score) {
+  const num = parseFloat(score) || 0;
+  const cls = num >= 80 ? 'good' : num >= 60 ? 'warn' : 'bad';
+  const msg = num >= 80 ? 'Target score achieved ✓' : num >= 60 ? 'Needs improvement' : 'Below target — regenerate recommended';
+  document.getElementById('ag-scoreBadge').innerHTML =
+    `<div class="ag-score-badge ${cls}">POP Score: ${num} / 100 — ${msg}</div>`;
+}
+
+async function agStartFlow() {
+  const popKey  = document.getElementById('ag-popKey').value.trim();
+  const keyword = document.getElementById('ag-keyword').value.trim();
+  const targetUrl    = document.getElementById('ag-targetUrl').value.trim() || 'https://example.com';
+  const pageNotBuilt = document.getElementById('ag-pageNotBuilt').checked ? 1 : 0;
+  const locName  = document.getElementById('ag-locationName').value;
+  const targLang = document.getElementById('ag-targetLanguage').value;
+  const compRaw  = document.getElementById('ag-competitors').value.trim();
+
+  if (!popKey)  { alert('Enter your POP API key.'); return; }
+  if (!keyword) { alert('Enter a keyword.');         return; }
+  if (!hasServerKey) {
+    const k = apiKey || await Store.get('seomanager_api_key');
+    if (!k) { alert('Enter your OpenAI API key in Settings first.'); return; }
+  }
+
+  await Store.set('seomanager_pop_key', popKey);
+
+  const btn = document.getElementById('ag-genBtn');
+  btn.disabled = true;
+  btn.textContent = 'Working…';
+
+  document.getElementById('ag-outputSection').style.display = 'none';
+  document.getElementById('ag-varEditor').style.display = 'none';
+  document.getElementById('ag-lsiEditor').style.display = 'none';
+  document.getElementById('ag-continueBtn').style.display = 'none';
+
+  const competitors = compRaw ? compRaw.split('\n').map(s => s.trim()).filter(Boolean) : [];
+
+  agInitSteps([
+    'Step 1 — Request POP terms',
+    'Step 2 — Poll: terms ready',
+    'Step 3 — Review & edit terms ✎',
+    'Step 4 — Create POP report',
+    'Step 5 — Poll: report ready',
+    'Step 6 — Fetch recommendations',
+    'Step 7 — Generate article with OpenAI',
+  ]);
+
+  try {
+    agSetStep(0, 'active');
+    const body1 = { apiKey: popKey, keyword, locationName: locName, targetUrl, targetLanguage: targLang };
+    if (competitors.length) body1.competitors = competitors;
+    const r1 = await agPopPost('/expose/get-terms/', body1);
+    const tid1 = r1.taskId || r1.task_id;
+    if (!tid1) throw new Error('No taskId from get-terms');
+    agSetStep(0, 'done', 'taskId: ' + tid1);
+
+    agSetStep(1, 'active');
+    const td = await agPollTerms(tid1, 1);
+    agTermsData = td;
+    agSetStep(1, 'done', `${td.variations.length} vars · ${td.lsaPhrases.length} LSI`);
+
+    agSetStep(2, 'active', 'review terms below → uncheck brand names → click Continue');
+    agShowTermEditors(td.variations, td.lsaPhrases);
+    agLog('Terms loaded — uncheck any brand/competitor names, then click Continue.');
+
+    window._agFlow = { popKey, keyword, targetUrl, pageNotBuilt, locName, targLang };
+
+  } catch(e) {
+    agLog('ERROR: ' + e.message);
+    const ai = agSteps.findIndex(s => s.state === 'active');
+    if (ai >= 0) agSetStep(ai, 'error', e.message.slice(0, 130));
+    btn.disabled = false;
+    btn.textContent = 'Generate SEO Article';
+  }
+}
+
+async function agContinueWithSelected() {
+  const { popKey, keyword, targetUrl, pageNotBuilt, locName, targLang } = window._agFlow;
+  const enableNlp = document.getElementById('ag-enableNlp').checked ? 1 : 0;
+  const overOpt   = document.getElementById('ag-overOpt').checked ? 1 : 0;
+  const strategy  = document.getElementById('ag-strategy').value;
+  const approach  = document.getElementById('ag-approach').value;
+  const tone      = document.getElementById('ag-tone').value;
+  const model     = document.getElementById('ag-oaiModel').value;
+
+  const selectedVars = agGetSelected('ag-varList');
+  const selectedLsi  = agGetSelected('ag-lsiList');
+  const fullLsa = (agTermsData.lsaPhrases || []).filter(t => selectedLsi.includes(t.phrase || String(t)));
+
+  document.getElementById('ag-continueBtn').style.display = 'none';
+  agSetStep(2, 'done', `${selectedVars.length} vars · ${selectedLsi.length} LSI selected`);
+
+  const btn = document.getElementById('ag-genBtn');
+
+  try {
+    agSetStep(3, 'active');
+    const r4 = await agPopPost('/expose/create-report/', {
+      apiKey: popKey, prepareId: agTermsData.prepareId,
+      variations: selectedVars, lsaPhrases: fullLsa,
+      considerOverOptimization: overOpt, specialLanguageSupport: 0,
+      pageNotBuiltYet: pageNotBuilt, googleNlpCalculation: enableNlp
+    });
+    const tid4 = r4.taskId || r4.task_id;
+    if (!tid4) throw new Error('No taskId from create-report');
+    agSetStep(3, 'done', 'taskId: ' + tid4);
+
+    agSetStep(4, 'active');
+    const rd = await agPollReport(tid4, 4);
+    const reportId  = rd.report.id;
+    const wcTarget  = (rd.report.wordCount && rd.report.wordCount.target) || 600;
+    const h2Target  = rd.report.subHeadingsCount || 3;
+    const pageScore = rd.report.pageScore || rd.report.pageScoreValue || '?';
+    const cbTerms   = (rd.report.cleanedContentBrief && rd.report.cleanedContentBrief.p) || [];
+    const nlpEntities = enableNlp && rd.report.googleNlpSchemaData
+      ? (rd.report.googleNlpSchemaData.entities || []).slice(0, 20) : [];
+    agSetStep(4, 'done', `reportId:${reportId} · score:${pageScore} · wc:${wcTarget}`);
+
+    agSetStep(5, 'active');
+    agLog('Fetching recommendations → reportId: ' + reportId);
+    const recResp = await agPopPost('/expose/get-custom-recommendations/', { apiKey: popKey, reportId, strategy, approach });
+    const recs = recResp.recommendations || {};
+    agSetStep(5, 'done', `exact:${(recs.exactKeyword||[]).length} lsi:${(recs.lsi||[]).length} vars:${(recs.variations||[]).length}`);
+
+    agSetStep(6, 'active');
+    const bodyTerms = cbTerms.filter(t => t.contentBrief && t.contentBrief.target > 0).slice(0, 25);
+    const termLines = bodyTerms.length > 0
+      ? bodyTerms.map(t => `"${t.term.phrase}" (${t.term.type}) → ~${t.contentBrief.target} times`).join('\n')
+      : selectedLsi.slice(0, 15).map(p => `"${p}" → ~1 time`).join('\n');
+    const titleTerms = ((rd.report.cleanedContentBrief && rd.report.cleanedContentBrief.pageTitle) || [])
+      .filter(t => t.contentBrief && t.contentBrief.target > 0).map(t => t.term.phrase);
+    const h2Terms = ((rd.report.cleanedContentBrief && rd.report.cleanedContentBrief.subHeadings) || [])
+      .filter(t => t.contentBrief && t.contentBrief.target > 0).map(t => t.term.phrase);
+    const nlpEntityNames = nlpEntities.map(e => e.name).filter(Boolean);
+
+    const prompt = `You are an expert SEO content writer. Write a high-quality, fully optimised article following these exact specifications:
+
+KEYWORD: "${keyword}"
+TARGET WORD COUNT: ~${wcTarget} words
+LANGUAGE: ${targLang}
+TONE: ${tone}
+H2 SUBHEADINGS: ${h2Target}
+
+TITLE MUST INCLUDE: ${titleTerms.length ? titleTerms.join(', ') : keyword}
+H2 SUBHEADINGS SHOULD INCLUDE: ${h2Terms.length ? h2Terms.join(', ') : 'relevant variations'}
+
+BODY TERM TARGETS (incorporate naturally at these frequencies):
+${termLines}
+${nlpEntityNames.length ? '\nGOOGLE NLP ENTITIES (weave in naturally):\n' + nlpEntityNames.join(', ') : ''}
+
+VARIATIONS TO USE NATURALLY: ${selectedVars.join(', ')}
+
+RULES:
+- Write one H1 title, ${h2Target} H2 sections, and a brief conclusion
+- Every term must appear naturally — never forced or keyword-stuffed
+- Write fluent, human-sounding prose a real expert would write
+- Do NOT mention SEO, term counts, word counts, or this prompt
+- Do NOT use bullet lists — use flowing paragraphs only`;
+
+    agLog(`Calling OpenAI (${model})…`);
+    const chatHeaders = { 'Content-Type': 'application/json' };
+    if (!hasServerKey) {
+      const k = apiKey || await Store.get('seomanager_api_key');
+      if (k) chatHeaders['x-client-key'] = k;
+    }
+    const oaiRes = await fetch('/api/openai/chat', {
+      method: 'POST',
+      headers: chatHeaders,
+      body: JSON.stringify({ model, max_tokens: 2000, messages: [{ role: 'user', content: prompt }] })
+    });
+    if (!oaiRes.ok) {
+      const err = await oaiRes.json();
+      throw new Error(`OpenAI ${oaiRes.status}: ${err.error?.message || JSON.stringify(err).slice(0, 100)}`);
+    }
+    const oaiData = await oaiRes.json();
+    const articleText = oaiData.choices[0].message.content;
+    const wordCount = articleText.split(/\s+/).length;
+    agSetStep(6, 'done', `~${wordCount} words · score: ${pageScore}`);
+    agLog('Done! Article generated.');
+
+    const allTerms = bodyTerms.map(t => t.term.phrase).concat(selectedVars).concat(selectedLsi).filter(Boolean);
+
+    document.getElementById('ag-outputTitle').textContent = keyword;
+    agRenderScore(pageScore);
+
+    document.getElementById('ag-metaCards').innerHTML = [
+      { label: 'POP Score',   value: pageScore,       sub: '/ 100 target' },
+      { label: 'Word count',  value: wordCount,        sub: `target ~${wcTarget}` },
+      { label: 'H2 sections', value: h2Target,         sub: 'recommended' },
+      { label: 'Terms used',  value: allTerms.length,  sub: 'POP-recommended' },
+    ].map(c => `<div class="ag-meta-card">
+      <div class="ag-meta-label">${c.label}</div>
+      <div class="ag-meta-value">${c.value}</div>
+      <div class="ag-meta-sub">${c.sub}</div>
+    </div>`).join('');
+
+    agArticleHtml = agRenderArticle(articleText, allTerms);
+    agArticleText = articleText;
+    document.getElementById('ag-articleBox').innerHTML = agArticleHtml;
+
+    document.getElementById('ag-termsSummary').innerHTML =
+      `<strong style="color:var(--text-primary)">Variations:</strong> ${selectedVars.join(' · ')}<br>` +
+      `<strong style="color:var(--text-primary)">LSI terms:</strong> ${selectedLsi.join(' · ')}`;
+
+    if (nlpEntities.length) {
+      const nlpSection = document.getElementById('ag-nlpSection');
+      nlpSection.style.display = 'block';
+      document.getElementById('ag-nlpChips').innerHTML =
+        nlpEntities.map(e => `<span class="ag-nlp-chip" title="${e.type}">${e.name}</span>`).join('');
+    }
+
+    document.getElementById('ag-outputSection').style.display = 'block';
+    document.getElementById('ag-outputSection').scrollIntoView({ behavior: 'smooth' });
+
+  } catch(e) {
+    agLog('ERROR: ' + e.message);
+    const ai = agSteps.findIndex(s => s.state === 'active');
+    if (ai >= 0) agSetStep(ai, 'error', e.message.slice(0, 130));
+    document.getElementById('ag-continueBtn').style.display = 'flex';
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Generate SEO Article';
+}
+
+function agCopyArticle() {
+  navigator.clipboard.writeText(agArticleText || '').then(() => {
+    const b = event.target; const orig = b.textContent;
+    b.textContent = 'Copied!';
+    setTimeout(() => b.textContent = orig, 1500);
+  }).catch(() => {});
+}
+
+function agCopyHtml() {
+  navigator.clipboard.writeText(agArticleHtml || '').then(() => {
+    const b = event.target; const orig = b.textContent;
+    b.textContent = 'Copied!';
+    setTimeout(() => b.textContent = orig, 1500);
+  }).catch(() => {});
 }
 
 /* ── START ── */
