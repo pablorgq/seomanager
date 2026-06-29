@@ -6,8 +6,8 @@ const Store = {
 };
 
 /* ── CONSTANTS ── */
-const OPENAI_TEXT_URL  = 'https://api.openai.com/v1/responses';
-const OPENAI_IMAGE_URL = 'https://api.openai.com/v1/images/generations';
+const OPENAI_TEXT_URL  = '/api/openai/text';
+const OPENAI_IMAGE_URL = '/api/openai/images';
 const IMAGE_MODELS     = ['gpt-image-1', 'dall-e-3', 'dall-e-2'];
 
 const FRAMING_VARIATIONS = [
@@ -49,14 +49,19 @@ const SAFETY_PREFIX = 'Editorial healthcare photography for a professional medic
 
 /* ── STATE ── */
 let apiKey = null;
+let hasServerKey = false;
 let generatedBlogs = [];
 let igImages = [];
 
 /* ── INIT ── */
 async function init() {
-  apiKey = await Store.get('seomanager_api_key');
-  if (apiKey) {
-    document.getElementById('apiKeyInput').value = apiKey;
+  const cfg = await fetch('/api/config').then(r => r.json()).catch(() => ({}));
+  hasServerKey = !!cfg.hasServerKey;
+  if (hasServerKey) {
+    document.getElementById('settingsToggle').style.display = 'none';
+  } else {
+    apiKey = await Store.get('seomanager_api_key');
+    if (apiKey) document.getElementById('apiKeyInput').value = apiKey;
   }
   bindEvents();
 }
@@ -125,6 +130,7 @@ function bindEvents() {
 
 /* ── API KEY GUARD ── */
 async function getApiKey() {
+  if (hasServerKey) return null;
   if (apiKey) return apiKey;
   apiKey = await Store.get('seomanager_api_key');
   if (!apiKey) {
@@ -235,12 +241,11 @@ Return ONLY a valid JSON array with exactly ${count} objects, no markdown, no ex
   }
 ]`;
 
+  const textHeaders = { 'Content-Type': 'application/json' };
+  if (!hasServerKey && key) textHeaders['x-client-key'] = key;
   const res = await fetch(OPENAI_TEXT_URL, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${key}`
-    },
+    headers: textHeaders,
     body: JSON.stringify({
       model: 'gpt-4o',
       max_output_tokens: 6000,
@@ -530,12 +535,11 @@ async function tryModel(key, model, prompt, size) {
   const body = { model, prompt, n: 1, size: effectiveSize };
   // DO NOT include response_format — causes "Unknown parameter" error on many tiers
 
+  const imgHeaders = { 'Content-Type': 'application/json' };
+  if (!hasServerKey && key) imgHeaders['x-client-key'] = key;
   const res = await fetch(OPENAI_IMAGE_URL, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${key}`
-    },
+    headers: imgHeaders,
     body: JSON.stringify(body)
   });
 
