@@ -176,6 +176,8 @@ async function handleGenerateBlogs() {
   const instr   = document.getElementById('industryInput').value.trim();
   const doImages = document.getElementById('generateImages').checked;
 
+  if (instr.length > 500) { showError('brandsError', 'Description too long (max 500 characters).'); return; }
+
   const btn = document.getElementById('generateBtn');
   btn.disabled = true;
   document.getElementById('cardsGrid').innerHTML = '';
@@ -427,6 +429,7 @@ async function handleGenerateImages() {
   const size   = document.getElementById('igSize').value;
 
   if (!topic) { showError('igError', 'Enter an image topic first.'); return; }
+  if (topic.length > 500) { showError('igError', 'Topic too long (max 500 characters).'); return; }
 
   const btn = document.getElementById('igGenerateBtn');
   btn.disabled = true;
@@ -473,7 +476,11 @@ async function handleGenerateImages() {
         downloadDataUrl(dataUrl, `blog-image-${i + 1}.png`);
       });
     } catch(e) {
-      imgDiv.innerHTML = `<div class="img-error">⚠ ${e.message}</div>`;
+      const errDiv = document.createElement('div');
+      errDiv.className = 'img-error';
+      errDiv.textContent = `⚠ ${e.message}`;
+      imgDiv.innerHTML = '';
+      imgDiv.appendChild(errDiv);
     }
   });
 
@@ -622,6 +629,14 @@ function formatBlogText(blog, num) {
 /* ═══════════════════════════════════════════════
    UTILITIES
 ════════════════════════════════════════════════ */
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 function copyText(btn, text) {
   navigator.clipboard.writeText(text).then(() => {
     const orig = btn.innerHTML;
@@ -685,12 +700,20 @@ function agInitSteps(labels) {
 
 function agRenderSteps() {
   const icons = { pending: '○', active: '◎', done: '✓', error: '✗' };
-  document.getElementById('ag-stepsEl').innerHTML = agSteps.map(s =>
-    `<div class="ag-step ${s.state}">
-      <span class="ag-step-icon">${icons[s.state]}</span>
-      <span>${s.label}${s.detail ? ' — ' + s.detail : ''}</span>
-    </div>`
-  ).join('');
+  const container = document.getElementById('ag-stepsEl');
+  container.innerHTML = '';
+  agSteps.forEach(s => {
+    const div = document.createElement('div');
+    div.className = `ag-step ${s.state}`;
+    const icon = document.createElement('span');
+    icon.className = 'ag-step-icon';
+    icon.textContent = icons[s.state];
+    const text = document.createElement('span');
+    text.textContent = s.label + (s.detail ? ' — ' + s.detail : '');
+    div.appendChild(icon);
+    div.appendChild(text);
+    container.appendChild(div);
+  });
 }
 
 function agSetStep(i, state, detail) {
@@ -701,24 +724,24 @@ function agSetStep(i, state, detail) {
 
 function agShowTermEditors(variations, lsaPhrases) {
   const varList = document.getElementById('ag-varList');
-  varList.innerHTML = variations.map((v, i) => {
+  varList.innerHTML = variations.map(v => {
     const phrase = typeof v === 'string' ? v : (v.phrase || v.variation || String(v));
     return `<label class="ag-term-item">
-      <input type="checkbox" checked data-phrase="${phrase}">
-      <span class="ag-term-phrase">${phrase}</span>
+      <input type="checkbox" checked data-phrase="${escHtml(phrase)}">
+      <span class="ag-term-phrase">${escHtml(phrase)}</span>
       <span class="ag-term-badge ag-badge-var">var</span>
     </label>`;
   }).join('');
   document.getElementById('ag-varCount').textContent = `(${variations.length})`;
 
   const lsiList = document.getElementById('ag-lsiList');
-  lsiList.innerHTML = lsaPhrases.map((t, i) => {
+  lsiList.innerHTML = lsaPhrases.map(t => {
     const phrase = t.phrase || String(t);
     const avg = t.averageCount || 0;
     return `<label class="ag-term-item">
-      <input type="checkbox" checked data-phrase="${phrase}">
-      <span class="ag-term-phrase">${phrase}</span>
-      <span class="ag-term-count">avg ${avg}</span>
+      <input type="checkbox" checked data-phrase="${escHtml(phrase)}">
+      <span class="ag-term-phrase">${escHtml(phrase)}</span>
+      <span class="ag-term-count">avg ${escHtml(String(avg))}</span>
       <span class="ag-term-badge ag-badge-lsi">lsi</span>
     </label>`;
   }).join('');
@@ -777,19 +800,20 @@ async function agPollReport(taskId, stepIdx) {
   throw new Error('create-report timed out after 40 attempts');
 }
 
-function agBoldTerms(text, terms) {
+function agBoldTerms(html, terms) {
   const sorted = [...terms].sort((a, b) => b.length - a.length);
-  let result = text;
+  let result = html;
   sorted.forEach(term => {
     if (!term || term.length < 3) return;
-    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    result = result.replace(new RegExp(`\\b(${escaped})\\b`, 'gi'), '<strong>$1</strong>');
+    const safeEsc = escHtml(term).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    result = result.replace(new RegExp(`\\b(${safeEsc})\\b`, 'gi'), '<strong>$1</strong>');
   });
   return result;
 }
 
 function agRenderArticle(text, terms) {
-  let html = agBoldTerms(text, terms);
+  let html = escHtml(text);          // escape before injecting any markup
+  html = agBoldTerms(html, terms);
   html = html
     .replace(/^### (.+)$/gm, '<h3>$1</h3>')
     .replace(/^## (.+)$/gm, '<h2>$1</h2>')
@@ -821,6 +845,7 @@ async function agStartFlow() {
 
   if (!popKey)  { alert('Enter your POP API key.'); return; }
   if (!keyword) { alert('Enter a keyword.');         return; }
+  if (keyword.length > 200) { alert('Keyword too long (max 200 characters).'); return; }
   if (!hasServerKey) {
     const k = apiKey || await Store.get('seomanager_api_key');
     if (!k) { alert('Enter your OpenAI API key in Settings first.'); return; }
@@ -993,7 +1018,7 @@ RULES:
       { label: 'Terms used',  value: allTerms.length,  sub: 'POP-recommended' },
     ].map(c => `<div class="ag-meta-card">
       <div class="ag-meta-label">${c.label}</div>
-      <div class="ag-meta-value">${c.value}</div>
+      <div class="ag-meta-value">${escHtml(String(c.value))}</div>
       <div class="ag-meta-sub">${c.sub}</div>
     </div>`).join('');
 
@@ -1002,14 +1027,14 @@ RULES:
     document.getElementById('ag-articleBox').innerHTML = agArticleHtml;
 
     document.getElementById('ag-termsSummary').innerHTML =
-      `<strong style="color:var(--text-primary)">Variations:</strong> ${selectedVars.join(' · ')}<br>` +
-      `<strong style="color:var(--text-primary)">LSI terms:</strong> ${selectedLsi.join(' · ')}`;
+      `<strong style="color:var(--text-primary)">Variations:</strong> ${selectedVars.map(escHtml).join(' · ')}<br>` +
+      `<strong style="color:var(--text-primary)">LSI terms:</strong> ${selectedLsi.map(escHtml).join(' · ')}`;
 
     if (nlpEntities.length) {
       const nlpSection = document.getElementById('ag-nlpSection');
       nlpSection.style.display = 'block';
       document.getElementById('ag-nlpChips').innerHTML =
-        nlpEntities.map(e => `<span class="ag-nlp-chip" title="${e.type}">${e.name}</span>`).join('');
+        nlpEntities.map(e => `<span class="ag-nlp-chip" title="${escHtml(e.type || '')}">${escHtml(e.name || '')}</span>`).join('');
     }
 
     document.getElementById('ag-outputSection').style.display = 'block';

@@ -601,24 +601,12 @@ details[open] .card-prompts-toggle::before { transform: rotate(90deg); }
 .ig-card-actions { display: flex; gap: 6px; }
 
 /* ── SEO ARTICLE GENERATOR ── */
-.ag-layout {
+.ag-settings-row {
   display: grid;
-  grid-template-columns: 260px 1fr;
-  gap: 20px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 28px;
   align-items: start;
 }
-.ag-sidebar {
-  position: sticky;
-  top: 80px;
-  max-height: calc(100vh - 100px);
-  overflow-y: auto;
-  padding-bottom: 20px;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
-}
-.ag-sidebar::-webkit-scrollbar { width: 4px; }
-.ag-sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-.ag-card { margin-bottom: 12px !important; }
 .ag-card-title {
   font-size: 10px;
   font-weight: 700;
@@ -745,8 +733,7 @@ details[open] .card-prompts-toggle::before { transform: rotate(90deg); }
   .cards-grid { grid-template-columns: 1fr; }
   .ig-gallery { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
   .card-images { grid-template-columns: 1fr; }
-  .ag-layout { grid-template-columns: 1fr; }
-  .ag-sidebar { position: static; max-height: none; }
+  .ag-settings-row { grid-template-columns: 1fr; }
   .ag-article-box { padding: 20px; }
 }
 @media (max-width: 400px) {

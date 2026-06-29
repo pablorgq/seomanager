@@ -1,29 +1,158 @@
 import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { randomBytes } from 'crypto';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
+/* ─────────────────────────────────────────────
+   CREDENTIALS  (never hardcoded — env vars only)
+───────────────────────────────────────────── */
 const OPENAI_KEY = process.env.OPENAI_API_KEY || null;
 const AUTH_USER  = process.env.AUTH_USER || 'pablo';
-const AUTH_PASS  = process.env.AUTH_PASS || 'reateguijara';
-const AUTH_TOKEN = Buffer.from(`${AUTH_USER}:${AUTH_PASS}:sm2025`).toString('base64');
+const AUTH_PASS  = process.env.AUTH_PASS  || null;
 
-/* ── Cookie parser (no extra dependency) ── */
+if (!AUTH_PASS) {
+  if (process.env.NODE_ENV === 'production') {
+    console.error('FATAL: AUTH_PASS env var is required in production');
+    process.exit(1);
+  }
+  console.warn('[auth] AUTH_PASS not set — all login attempts will fail until it is configured');
+}
+
+/* ─────────────────────────────────────────────
+   SESSION STORE  (in-memory, crypto-random tokens)
+───────────────────────────────────────────── */
+const sessions = new Map();          // token → { expiresAt }
+const SESSION_TTL = 30 * 24 * 60 * 60 * 1000;  // 30 days
+
+function createSession() {
+  const token = randomBytes(32).toString('hex');
+  sessions.set(token, { expiresAt: Date.now() + SESSION_TTL });
+  return token;
+}
+
+function isValidSession(token) {
+  const s = sessions.get(token);
+  if (!s) return false;
+  if (s.expiresAt < Date.now()) { sessions.delete(token); return false; }
+  return true;
+}
+
+/* ─────────────────────────────────────────────
+   CSRF  (single-use tokens, 15-min TTL)
+───────────────────────────────────────────── */
+const csrfTokens = new Map();        // token → expiresAt
+
+function createCsrf() {
+  const token = randomBytes(16).toString('hex');
+  csrfTokens.set(token, Date.now() + 15 * 60 * 1000);
+  return token;
+}
+
+function consumeCsrf(token) {
+  const exp = csrfTokens.get(token);
+  if (!exp || exp < Date.now()) return false;
+  csrfTokens.delete(token);          // single-use — delete immediately
+  return true;
+}
+
+/* ─────────────────────────────────────────────
+   BRUTE-FORCE PROTECTION  (5 attempts → 15 min lockout)
+───────────────────────────────────────────── */
+const loginAttempts = new Map();     // ip → { count, lockUntil }
+const MAX_ATTEMPTS  = 5;
+const LOCKOUT_MS    = 15 * 60 * 1000;
+
+function getIp(req) {
+  return (req.headers['x-forwarded-for'] || '').split(',')[0].trim()
+    || req.socket.remoteAddress || '0.0.0.0';
+}
+
+function isLockedOut(ip) {
+  const r = loginAttempts.get(ip);
+  if (!r) return false;
+  if (r.lockUntil > Date.now()) return true;
+  loginAttempts.delete(ip);
+  return false;
+}
+
+function recordFailedLogin(ip) {
+  const r = loginAttempts.get(ip) || { count: 0, lockUntil: 0 };
+  r.count++;
+  if (r.count >= MAX_ATTEMPTS) r.lockUntil = Date.now() + LOCKOUT_MS;
+  loginAttempts.set(ip, r);
+}
+
+/* ─────────────────────────────────────────────
+   API RATE LIMITING  (40 req/min per session)
+───────────────────────────────────────────── */
+const apiWindows = new Map();        // token → [timestamps]
+const API_WINDOW = 60_000;
+const API_LIMIT  = 40;
+
+function isApiRateLimited(token) {
+  const now  = Date.now();
+  const hits = (apiWindows.get(token) || []).filter(t => now - t < API_WINDOW);
+  if (hits.length >= API_LIMIT) return true;
+  hits.push(now);
+  apiWindows.set(token, hits);
+  return false;
+}
+
+/* ─────────────────────────────────────────────
+   PERIODIC CLEANUP  (prevent memory growth)
+───────────────────────────────────────────── */
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of sessions)      if (v.expiresAt < now) sessions.delete(k);
+  for (const [k, v] of csrfTokens)    if (v < now) csrfTokens.delete(k);
+  for (const [k, v] of loginAttempts) if (v.lockUntil && v.lockUntil < now - LOCKOUT_MS) loginAttempts.delete(k);
+  if (sessions.size   > 500) sessions.clear();
+  if (apiWindows.size > 500) apiWindows.clear();
+}, 60 * 60 * 1000).unref();
+
+/* ─────────────────────────────────────────────
+   HELPERS
+───────────────────────────────────────────── */
 function parseCookies(req) {
   const out = {};
-  const raw = req.headers.cookie || '';
-  raw.split(';').forEach(part => {
+  (req.headers.cookie || '').split(';').forEach(part => {
     const [k, ...v] = part.split('=');
     if (k) out[k.trim()] = decodeURIComponent(v.join('=').trim());
   });
   return out;
 }
 
-/* ── Login page HTML ── */
-function loginPage(error = false) {
+function sanitizeBody(obj, depth = 0) {
+  if (depth > 4 || typeof obj !== 'object' || obj === null) return obj;
+  const BANNED = new Set(['__proto__', 'constructor', 'prototype']);
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (BANNED.has(k)) continue;
+    out[k] = typeof v === 'object' ? sanitizeBody(v, depth + 1) : v;
+  }
+  return out;
+}
+
+function isValidApiKeyFormat(key) {
+  return !key || /^sk-[A-Za-z0-9\-_.]{20,}$/.test(key);
+}
+
+function isSecureRequest(req) {
+  return req.headers['x-forwarded-proto'] === 'https' || req.secure;
+}
+
+/* ─────────────────────────────────────────────
+   LOGIN PAGE
+───────────────────────────────────────────── */
+function loginPage(opts = {}) {
+  const { error = false, locked = false, csrf = '' } = opts;
+  const msg = locked
+    ? 'Too many failed attempts. Please wait 15 minutes before trying again.'
+    : error ? 'Invalid username or password.' : '';
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -36,138 +165,180 @@ function loginPage(error = false) {
 body{font-family:'DM Sans',system-ui,sans-serif;background:#F0F2F7;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
 .card{background:#fff;border:1px solid #E2E6EF;border-radius:16px;padding:44px 40px;width:100%;max-width:380px;box-shadow:0 4px 32px rgba(67,97,238,.1)}
 .brand{display:flex;align-items:center;gap:11px;margin-bottom:32px}
-.logo-mark{width:40px;height:40px;background:linear-gradient(135deg,#4361EE,#4CC9F0);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px;box-shadow:0 4px 14px rgba(67,97,238,.3);flex-shrink:0}
-.brand-name{font-family:'Syne',sans-serif;font-size:18px;font-weight:800;color:#1A1D2E;line-height:1.2}
-.brand-sub{font-size:11px;color:#9BA3BF;text-transform:uppercase;letter-spacing:.06em}
+.lm{width:40px;height:40px;background:linear-gradient(135deg,#4361EE,#4CC9F0);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px;box-shadow:0 4px 14px rgba(67,97,238,.3);flex-shrink:0}
+.bn{font-family:'Syne',sans-serif;font-size:18px;font-weight:800;color:#1A1D2E;line-height:1.2}
+.bs{font-size:11px;color:#9BA3BF;text-transform:uppercase;letter-spacing:.06em}
 h2{font-size:22px;font-weight:700;color:#1A1D2E;margin-bottom:6px}
 .hint{font-size:13px;color:#5A6080;margin-bottom:28px}
-.error-msg{background:rgba(229,56,59,.08);border:1px solid rgba(229,56,59,.25);border-radius:8px;padding:10px 14px;font-size:13px;color:#E5383B;margin-bottom:20px}
-.field{margin-bottom:18px}
+.err{background:rgba(229,56,59,.08);border:1px solid rgba(229,56,59,.25);border-radius:8px;padding:10px 14px;font-size:13px;color:#E5383B;margin-bottom:20px}
+.f{margin-bottom:18px}
 label{display:block;font-size:11px;font-weight:600;color:#5A6080;text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px}
-input{width:100%;padding:10px 14px;border:1px solid #E2E6EF;border-radius:9px;font-size:14px;color:#1A1D2E;background:#F8F9FC;outline:none;transition:border-color .18s,box-shadow .18s;font-family:inherit}
+input[type=text],input[type=password]{width:100%;padding:10px 14px;border:1px solid #E2E6EF;border-radius:9px;font-size:14px;color:#1A1D2E;background:#F8F9FC;outline:none;transition:border-color .18s,box-shadow .18s;font-family:inherit}
 input:focus{border-color:#4361EE;box-shadow:0 0 0 3px rgba(67,97,238,.1);background:#fff}
 button{width:100%;padding:12px;background:#4361EE;color:#fff;border:none;border-radius:9px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;box-shadow:0 4px 16px rgba(67,97,238,.3);transition:all .18s;margin-top:4px}
-button:hover{background:#3451d1;box-shadow:0 6px 22px rgba(67,97,238,.4);transform:translateY(-1px)}
-button:active{transform:translateY(0)}
+button:hover:not(:disabled){background:#3451d1;box-shadow:0 6px 22px rgba(67,97,238,.4)}
+button:disabled{opacity:.45;cursor:not-allowed}
 </style>
 </head>
 <body>
 <div class="card">
   <div class="brand">
-    <div class="logo-mark">⚡</div>
-    <div>
-      <div class="brand-name">SEO Manager</div>
-      <div class="brand-sub">Sign in to continue</div>
-    </div>
+    <div class="lm">⚡</div>
+    <div><div class="bn">SEO Manager</div><div class="bs">Sign in to continue</div></div>
   </div>
   <h2>Welcome back</h2>
   <p class="hint">Enter your credentials to access the dashboard.</p>
-  ${error ? '<div class="error-msg">Invalid username or password. Please try again.</div>' : ''}
-  <form method="POST" action="/login">
-    <div class="field">
+  ${msg ? `<div class="err">${msg}</div>` : ''}
+  <form method="POST" action="/login" autocomplete="on">
+    <input type="hidden" name="_csrf" value="${csrf}">
+    <div class="f">
       <label for="u">Username</label>
-      <input type="text" id="u" name="username" autocomplete="username" required autofocus>
+      <input type="text" id="u" name="username" autocomplete="username" required${locked ? ' disabled' : ''} autofocus>
     </div>
-    <div class="field">
+    <div class="f">
       <label for="p">Password</label>
-      <input type="password" id="p" name="password" autocomplete="current-password" required>
+      <input type="password" id="p" name="password" autocomplete="current-password" required${locked ? ' disabled' : ''}>
     </div>
-    <button type="submit">Sign In</button>
+    <button type="submit"${locked ? ' disabled' : ''}>Sign In</button>
   </form>
 </div>
 </body>
 </html>`;
 }
 
-app.use(express.json({ limit: '2mb' }));
-app.use(express.urlencoded({ extended: false }));
+/* ─────────────────────────────────────────────
+   MIDDLEWARE STACK
+───────────────────────────────────────────── */
+app.use(express.json({ limit: '512kb' }));
+app.use(express.urlencoded({ extended: false, limit: '16kb' }));
 
-/* ── Auth middleware — protects everything except /login ── */
+/* Security headers — applied to every response */
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  res.setHeader('Content-Security-Policy', [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline'",   // needed for existing onclick attrs; tighten later
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com",
+    "img-src 'self' data: blob:",
+    "connect-src 'self' https://api.openai.com https://app.pageoptimizer.pro",
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+  ].join('; '));
+  if (isSecureRequest(req)) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+});
+
+/* Auth guard — everything except /login requires a valid session */
 app.use((req, res, next) => {
   if (req.path === '/login') return next();
-  const cookies = parseCookies(req);
-  if (cookies.sm_auth === AUTH_TOKEN) return next();
+  if (isValidSession(parseCookies(req).sm_auth)) return next();
   res.redirect('/login');
 });
 
-/* ── Static files (served only to authenticated users) ── */
+/* Static files served only to authenticated users */
 app.use(express.static(join(__dirname, 'public')));
 
-/* ── Login routes ── */
+/* ─────────────────────────────────────────────
+   LOGIN / LOGOUT
+───────────────────────────────────────────── */
 app.get('/login', (req, res) => {
-  const cookies = parseCookies(req);
-  if (cookies.sm_auth === AUTH_TOKEN) return res.redirect('/');
-  res.send(loginPage(false));
+  if (isValidSession(parseCookies(req).sm_auth)) return res.redirect('/');
+  res.send(loginPage({ csrf: createCsrf() }));
 });
 
 app.post('/login', (req, res) => {
-  const { username, password } = req.body;
-  if (username === AUTH_USER && password === AUTH_PASS) {
-    const isSecure = req.headers['x-forwarded-proto'] === 'https';
-    res.setHeader('Set-Cookie',
-      `sm_auth=${AUTH_TOKEN}; HttpOnly; SameSite=Strict; Max-Age=${60 * 60 * 24 * 30}${isSecure ? '; Secure' : ''}`
-    );
-    return res.redirect('/');
+  const ip = getIp(req);
+
+  if (isLockedOut(ip)) {
+    return res.status(429).send(loginPage({ locked: true, csrf: createCsrf() }));
   }
-  res.send(loginPage(true));
+
+  const { username = '', password = '', _csrf = '' } = req.body;
+
+  if (!consumeCsrf(_csrf)) {
+    return res.status(403).send(loginPage({ error: true, csrf: createCsrf() }));
+  }
+
+  if (!AUTH_PASS || username !== AUTH_USER || password !== AUTH_PASS) {
+    recordFailedLogin(ip);
+    return res.status(401).send(
+      loginPage({ error: true, locked: isLockedOut(ip), csrf: createCsrf() })
+    );
+  }
+
+  loginAttempts.delete(ip);
+  const token  = createSession();
+  const secure = isSecureRequest(req);
+  res.setHeader('Set-Cookie',
+    `sm_auth=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${30 * 24 * 60 * 60}${secure ? '; Secure' : ''}`
+  );
+  res.redirect('/');
 });
 
 app.get('/logout', (req, res) => {
-  res.setHeader('Set-Cookie', 'sm_auth=; HttpOnly; SameSite=Strict; Max-Age=0');
+  const token = parseCookies(req).sm_auth;
+  if (token) sessions.delete(token);          // server-side invalidation
+  res.setHeader('Set-Cookie', 'sm_auth=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
   res.redirect('/login');
 });
 
-/* ── CONFIG ── */
-app.get('/api/config', (req, res) => {
-  res.json({ hasServerKey: !!OPENAI_KEY });
-});
+/* ─────────────────────────────────────────────
+   API MIDDLEWARE  (rate limit + sanitise + key check)
+───────────────────────────────────────────── */
+function apiGuard(req, res, next) {
+  const token = parseCookies(req).sm_auth;
+  if (isApiRateLimited(token)) {
+    return res.status(429).json({ error: { message: 'Rate limit exceeded — wait a moment and try again.' } });
+  }
+  const clientKey = req.headers['x-client-key'];
+  if (clientKey && !isValidApiKeyFormat(clientKey)) {
+    return res.status(400).json({ error: { message: 'Invalid API key format.' } });
+  }
+  if (typeof req.body === 'object' && req.body !== null) {
+    req.body = sanitizeBody(req.body);
+  }
+  next();
+}
 
-/* ── TEXT PROXY → OpenAI /v1/responses ── */
-app.post('/api/openai/text', async (req, res) => {
+/* ─────────────────────────────────────────────
+   OPENAI PROXY ROUTES
+───────────────────────────────────────────── */
+async function proxyOpenAI(url, req, res) {
   const key = OPENAI_KEY || req.headers['x-client-key'];
   if (!key) return res.status(401).json({ error: { message: 'No API key configured.' } });
   try {
-    const up = await fetch('https://api.openai.com/v1/responses', {
+    const up = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
-      body: JSON.stringify(req.body)
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      body: JSON.stringify(req.body),
     });
     res.status(up.status).json(await up.json());
-  } catch (e) { res.status(502).json({ error: { message: `Proxy error: ${e.message}` } }); }
-});
+  } catch {
+    res.status(502).json({ error: { message: 'Upstream request failed. Try again.' } });
+  }
+}
 
-/* ── IMAGE PROXY → OpenAI /v1/images/generations ── */
-app.post('/api/openai/images', async (req, res) => {
-  const key = OPENAI_KEY || req.headers['x-client-key'];
-  if (!key) return res.status(401).json({ error: { message: 'No API key configured.' } });
-  try {
-    const up = await fetch('https://api.openai.com/v1/images/generations', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
-      body: JSON.stringify(req.body)
-    });
-    res.status(up.status).json(await up.json());
-  } catch (e) { res.status(502).json({ error: { message: `Proxy error: ${e.message}` } }); }
-});
+app.get('/api/config', (req, res) => res.json({ hasServerKey: !!OPENAI_KEY }));
 
-/* ── CHAT PROXY → OpenAI /v1/chat/completions ── */
-app.post('/api/openai/chat', async (req, res) => {
-  const key = OPENAI_KEY || req.headers['x-client-key'];
-  if (!key) return res.status(401).json({ error: { message: 'No API key configured.' } });
-  try {
-    const up = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
-      body: JSON.stringify(req.body)
-    });
-    res.status(up.status).json(await up.json());
-  } catch (e) { res.status(502).json({ error: { message: `Proxy error: ${e.message}` } }); }
-});
+app.post('/api/openai/text',   apiGuard, (req, res) => proxyOpenAI('https://api.openai.com/v1/responses', req, res));
+app.post('/api/openai/images', apiGuard, (req, res) => proxyOpenAI('https://api.openai.com/v1/images/generations', req, res));
+app.post('/api/openai/chat',   apiGuard, (req, res) => proxyOpenAI('https://api.openai.com/v1/chat/completions', req, res));
 
+/* ─────────────────────────────────────────────
+   SPA FALLBACK
+───────────────────────────────────────────── */
 app.get('*', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'index.html'));
 });
 
 app.listen(PORT, () => {
-  console.log(`SEO Manager running on port ${PORT}${OPENAI_KEY ? ' (server key active)' : ''}`);
+  console.log(`SEO Manager :${PORT} | key=${OPENAI_KEY ? 'server' : 'client'} | auth=${AUTH_PASS ? 'enabled' : 'DISABLED'}`);
 });
