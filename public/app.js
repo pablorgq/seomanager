@@ -827,7 +827,8 @@ async function agPopPost(path, body) {
     body: JSON.stringify(sendBody)
   });
   const j = await r.json();
-  agLog('← ' + r.status + ' ' + JSON.stringify(j).slice(0, 120));
+  agLog('← ' + r.status + ' ' + JSON.stringify(j).slice(0, 200));
+  if (!r.ok || j.error || j.detail) throw new Error('POP error: ' + (j.error || j.detail || j.message || r.status));
   if (j.status === 'FAILURE') throw new Error('POP: ' + (j.msg || JSON.stringify(j).slice(0, 120)));
   return j;
 }
@@ -939,8 +940,8 @@ async function agStartFlow() {
     const body1 = { apiKey: popKey, keyword, locationName: locName, targetUrl, targetLanguage: targLang };
     if (competitors.length) body1.competitors = competitors;
     const r1 = await agPopPost('/expose/get-terms/', body1);
-    const tid1 = r1.taskId || r1.task_id;
-    if (!tid1) throw new Error('No taskId from get-terms');
+    const tid1 = r1.taskId || r1.task_id || r1.id;
+    if (!tid1) throw new Error('No taskId from get-terms — response: ' + JSON.stringify(r1).slice(0, 200));
     agSetStep(0, 'done', 'taskId: ' + tid1);
 
     agSetStep(1, 'active');
@@ -1196,11 +1197,12 @@ function rtRender() {
     tr.dataset.id = kw.id;
     tr.innerHTML = `
       <td class="rt-td-rank">${rtRankBadge(kw.rank, kw.prevRank)}</td>
+      <td class="rt-td-local">${rtLocalBadge(kw.localRank)}</td>
       <td class="rt-td-url"><a href="${escHtml(kw.url || '')}" target="_blank" rel="noopener" class="rt-url-link" title="${escHtml(kw.url || '')}">${escHtml(rtShortUrl(kw.url || ''))}</a></td>
       <td class="rt-td-kw rt-editable" data-field="keyword">${escHtml(kw.keyword || '')}</td>
       <td class="rt-td-vol">${kw.volume ? escHtml(String(kw.volume)) : '<span class="rt-na">—</span>'}</td>
       <td class="rt-td-delta">${rtDeltaCell(kw.rank, kw.prevRank)}</td>
-      <td class="rt-td-pop rt-editable" data-field="popStatus">${rtPopCell(kw)}</td>
+      <td class="rt-td-pop">${rtPopCell(kw)}</td>
       <td class="rt-td-note rt-editable" data-field="note">${escHtml(kw.note || '')}</td>
       <td class="rt-td-check">${escHtml(rtFormatDate(kw.lastCheck) || '')}</td>
       <td class="rt-td-del"><button class="rt-del-btn" title="Delete row">✕</button></td>`;
@@ -1220,8 +1222,18 @@ function rtDeltaCell(rank, prev) {
     : `<span class="rt-delta rt-down">↓${Math.abs(diff)}</span>`;
 }
 
+function rtLocalBadge(rank) {
+  if (!rank) return '<span class="rt-na">—</span>';
+  const cls = rank <= 3 ? 'rt-green' : rank <= 10 ? 'rt-orange' : 'rt-red';
+  return `<span class="rt-rank-badge ${cls}">${rank}</span>`;
+}
+
 function rtPopCell(kw) {
-  if (!kw.popStatus) return '<span class="rt-na">—</span>';
+  if (!kw.popStatus) {
+    const kw64 = encodeURIComponent(kw.keyword || '');
+    const url64 = encodeURIComponent(kw.url || '');
+    return `<button class="rt-run-pop-btn" data-kw="${escHtml(kw.keyword||'')}" data-url="${escHtml(kw.url||'')}" title="Run POP analysis">Run POP</button>`;
+  }
   const date = kw.popDate ? ` <span class="rt-pop-date">${escHtml(kw.popDate)}</span>` : '';
   return `<span class="rt-pop-badge">POP ✓</span>${date}<br><span style="font-size:10px;color:var(--text-muted)">${escHtml(kw.popStatus)}</span>`;
 }
@@ -1255,10 +1267,26 @@ function rtInit() {
       document.getElementById('rt-clientName').value = opt.dataset.name || '';
   });
 
-  // Table delegation: edit + delete
+  // Table delegation: edit + delete + Run POP
   document.getElementById('rt-tbody').addEventListener('click', e => {
     const delBtn = e.target.closest('.rt-del-btn');
     if (delBtn) { rtDeleteRow(delBtn.closest('tr').dataset.id); return; }
+
+    const popBtn = e.target.closest('.rt-run-pop-btn');
+    if (popBtn) {
+      const kw  = popBtn.dataset.kw;
+      const url = popBtn.dataset.url;
+      // Pre-fill generator fields and switch to article tab
+      document.getElementById('ag-keyword').value   = kw;
+      document.getElementById('ag-targetUrl').value = url;
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      document.querySelector('.tab-btn[data-tab="article"]').classList.add('active');
+      document.getElementById('tab-article').classList.add('active');
+      document.getElementById('ag-keyword').focus();
+      return;
+    }
+
     const editCell = e.target.closest('.rt-editable');
     if (editCell) {
       const tr  = editCell.closest('tr');
@@ -1541,7 +1569,7 @@ async function rtRefreshAll() {
     const rkRows = await aaQuery({
       asset: 'campaign-rankings',
       operation: 'read',
-      fields: ['keyword_id', 'keyword_phrase', 'google_ranking', 'google_mobile_ranking', 'volume', 'competition'],
+      fields: ['keyword_id', 'keyword_phrase', 'google_ranking', 'google_local_ranking', 'google_mobile_ranking', 'volume', 'competition'],
       filters: [
         { end_date:    { '$lessthanorequal_comparison': today } },
         { start_date:  { '$greaterthanorequal_comparison': today } },
@@ -1572,10 +1600,11 @@ async function rtRefreshAll() {
         if (aaKw) rk = rkByKwId[aaKw.id];
       }
       if (!rk) continue;
-      kw.prevRank  = kw.rank;
-      kw.rank      = rk.google_ranking ?? null;
-      kw.volume    = rk.volume ?? kw.volume;
-      kw.lastCheck = today;
+      kw.prevRank   = kw.rank;
+      kw.rank       = rk.google_ranking ?? null;
+      kw.localRank  = rk.google_local_ranking ?? null;
+      kw.volume     = rk.volume ?? kw.volume;
+      kw.lastCheck  = today;
       updated++;
     }
 
