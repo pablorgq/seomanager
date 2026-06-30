@@ -1530,7 +1530,7 @@ async function rtRefreshAll() {
       fields: ['id', 'keyword_phrase'],
       filters: [{ campaign_id: { '$equals_comparison': campId } }],
       sort: [{ id: 'asc' }],
-      limit: 1000,
+      limit: 500,
       offset: 0,
     });
     if (!kwRows.length) throw new Error(`No keywords found for campaign ID ${campId}. Verify the campaign ID in ✎ edit.`);
@@ -1550,7 +1550,7 @@ async function rtRefreshAll() {
         { start_date:  { '$greaterthanorequal_comparison': today } },
       ],
       sort: [{ date: 'desc' }],
-      limit: 2000,
+      limit: 500,
       offset: 0,
     });
 
