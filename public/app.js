@@ -1553,19 +1553,16 @@ async function rtRefreshAll() {
       offset: 0,
     });
 
-    // Debug: show what keys AA actually returns per row
-    const firstRowKeys = rkRows[0] ? Object.keys(rkRows[0]).join(', ') : 'no rows';
-
-    // Build lookups — AA may auto-include keyword_id / keyword_phrase even without requesting them
-    const rkByKwId  = {};
+    // Build phrase lookup from campaign-rankings rows (keyword_phrase + keyword_id both returned)
     const rkByPhrase = {};
+    const rkByKwId   = {};
     for (const r of rkRows) {
-      if (r.keyword_id   != null && !rkByKwId[r.keyword_id])              rkByKwId[r.keyword_id]  = r;
       const p = (r.keyword_phrase || '').toLowerCase();
       if (p && !rkByPhrase[p]) rkByPhrase[p] = r;
+      if (r.keyword_id != null && !rkByKwId[r.keyword_id]) rkByKwId[r.keyword_id] = r;
     }
 
-    // Match stored keywords: direct phrase → or via keyword_id join from step 1
+    // Match stored keywords by phrase first, then by keyword_id via step-1 map
     let updated = 0;
     for (const kw of c.keywords) {
       const kwLower = (kw.keyword || '').toLowerCase();
@@ -1584,7 +1581,7 @@ async function rtRefreshAll() {
 
     rtSave();
     document.getElementById('rt-lastRefresh').textContent =
-      `Updated ${updated}/${c.keywords.length} keywords · ${new Date().toLocaleTimeString()} [row keys: ${firstRowKeys}]`;
+      `Updated ${updated}/${c.keywords.length} keywords · ${new Date().toLocaleTimeString()}`;
     rtRender();
   } catch (e) {
     alert('Refresh failed: ' + e.message);
