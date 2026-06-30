@@ -1441,10 +1441,23 @@ async function rtRefreshAll() {
   btn.textContent = 'Refreshing…';
 
   try {
+    const today    = new Date().toISOString().slice(0, 10);
+    const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const queryBody = {
-      asset: 'keyword-rankings',
+      provider: 'agency-analytics-v2',
+      asset: 'campaign-rankings',
       operation: 'read',
-      campaign_id: Number(c.aaCampaignId),
+      fields: [
+        'date', 'keyword_id', 'keyword_phrase',
+        'google_ranking', 'google_mobile_ranking',
+        'volume', 'competition',
+      ],
+      filters: [
+        { campaign_id: { '$equals_comparison': Number(c.aaCampaignId) } },
+        { end_date:    { '$lessthanorequal_comparison': today } },
+        { start_date:  { '$greaterthanorequal_comparison': monthAgo } },
+      ],
+      sort: [{ id: 'desc' }],
       limit: 500,
       offset: 0,
     };
@@ -1459,20 +1472,28 @@ async function rtRefreshAll() {
     }
     const data = await res.json();
 
-    // AA v2 returns { data: [...] } or similar
-    const rows = Array.isArray(data?.data)     ? data.data
-               : Array.isArray(data?.results)  ? data.results
-               : Array.isArray(data?.keywords) ? data.keywords
-               : Array.isArray(data)           ? data
-               : [];
+    // AA returns { data: [...] }
+    const allRows = Array.isArray(data?.data) ? data.data
+                  : Array.isArray(data)        ? data
+                  : [];
 
-    if (!rows.length) throw new Error(
-      `No ranking rows returned (response keys: ${Object.keys(data || {}).join(', ') || 'none'}). Check the campaign ID.`
+    if (!allRows.length) throw new Error(
+      `No rows returned — keys: ${Object.keys(data || {}).join(', ') || 'none'}. Check campaign ID.`
     );
 
-    // Match by keyword phrase — try every common field name AA might use
-    const kwPhrase = r =>
-      r.keywordPhrase ?? r.keyword_phrase ?? r.keyword?.keyword ?? r.keyword ?? r.phrase ?? '';
+    // Deduplicate: keep only the most-recent row per keyword (sorted desc already)
+    const seenKw = new Set();
+    const rows = [];
+    for (const r of allRows) {
+      const key = r.keyword_id ?? r.keyword_phrase ?? r.id;
+      if (key != null && !seenKw.has(key)) { seenKw.add(key); rows.push(r); }
+    }
+
+    // Show first-row keys in success msg so we can confirm field names (first deploy only)
+    const firstRowKeys = allRows[0] ? Object.keys(allRows[0]).join(', ') : '';
+
+    // Match by keyword phrase (case-insensitive)
+    const kwPhrase = r => r.keyword_phrase ?? r.keywordPhrase ?? r.keyword?.keyword ?? r.keyword ?? '';
 
     let updated = 0;
     for (const kw of c.keywords) {
@@ -1480,16 +1501,17 @@ async function rtRefreshAll() {
       const match = rows.find(r => kwPhrase(r).toLowerCase() === kwLower);
       if (match) {
         kw.prevRank  = kw.rank;
-        kw.rank      = match.googleRanking ?? match.google_ranking ?? match.rank ?? match.position ?? null;
-        kw.volume    = match.searchVolume  ?? match.search_volume  ?? match.volume ?? kw.volume;
+        kw.rank      = match.google_ranking  ?? match.googleRanking  ?? match.rank ?? null;
+        kw.volume    = match.volume          ?? match.search_volume  ?? kw.volume;
         kw.lastCheck = new Date().toISOString().slice(0, 10);
         updated++;
       }
     }
 
     rtSave();
+    const debugSuffix = firstRowKeys ? ` [fields: ${firstRowKeys}]` : '';
     document.getElementById('rt-lastRefresh').textContent =
-      `Updated ${updated}/${c.keywords.length} keywords · ${new Date().toLocaleTimeString()}`;
+      `Updated ${updated}/${c.keywords.length} keywords · ${new Date().toLocaleTimeString()}${debugSuffix}`;
     rtRender();
   } catch (e) {
     alert('Refresh failed: ' + e.message);
