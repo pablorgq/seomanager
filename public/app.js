@@ -1247,6 +1247,13 @@ function rtInit() {
   document.getElementById('rt-addRowBtn').addEventListener('click', rtAddRow);
   document.getElementById('rt-saveClientBtn').addEventListener('click', rtSaveClient);
   document.getElementById('rt-deleteClientBtn').addEventListener('click', rtDeleteClient);
+  document.getElementById('rt-campaignPick').addEventListener('change', e => {
+    const opt = e.target.selectedOptions[0];
+    if (!opt?.value) return;
+    document.getElementById('rt-campaignId').value = opt.value;
+    if (!document.getElementById('rt-clientName').value.trim())
+      document.getElementById('rt-clientName').value = opt.dataset.name || '';
+  });
 
   // Table delegation: edit + delete
   document.getElementById('rt-tbody').addEventListener('click', e => {
@@ -1268,23 +1275,61 @@ function rtInit() {
 }
 
 /* ── client management ── */
+async function rtLoadCampaigns(preselectId) {
+  const wrap = document.getElementById('rt-campaignPickWrap');
+  const sel  = document.getElementById('rt-campaignPick');
+  wrap.classList.remove('hidden');
+  sel.innerHTML = '<option value="">— loading campaigns… —</option>';
+  sel.disabled  = true;
+  try {
+    const r = await fetch('/api/aa', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'agency-analytics-v2',
+        asset: 'campaign',
+        operation: 'read',
+        fields: ['id', 'company', 'url', 'status'],
+        sort: [{ id: 'asc' }],
+        limit: 200,
+        offset: 0,
+      }),
+    });
+    const data = await r.json();
+    const list = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
+    sel.innerHTML = '<option value="">— select a campaign —</option>' +
+      list.map(c =>
+        `<option value="${escHtml(String(c.id))}" data-name="${escHtml(c.company || '')}">`+
+        `${escHtml(c.company || c.url || String(c.id))}</option>`
+      ).join('');
+    if (preselectId) sel.value = String(preselectId);
+  } catch (e) {
+    sel.innerHTML = `<option value="">— failed to load (${escHtml(e.message)}) —</option>`;
+  }
+  sel.disabled = false;
+}
+
 function rtShowAddClient() {
-  document.getElementById('rt-modalTitle').textContent    = 'Add Client';
-  document.getElementById('rt-clientName').value          = '';
-  document.getElementById('rt-campaignId').value          = '';
+  document.getElementById('rt-modalTitle').textContent     = 'Add Client';
+  document.getElementById('rt-clientName').value           = '';
+  document.getElementById('rt-campaignId').value           = '';
   document.getElementById('rt-deleteClientBtn').classList.add('hidden');
   document.getElementById('rt-saveClientBtn').dataset.mode = 'add';
+  if (hasAA) rtLoadCampaigns();
+  else document.getElementById('rt-campaignPickWrap').classList.add('hidden');
   rtOpenModal('rt-clientModal');
 }
 
 function rtShowEditClient() {
   const c = rtActiveClient();
   if (!c) return;
-  document.getElementById('rt-modalTitle').textContent    = 'Edit Client';
-  document.getElementById('rt-clientName').value          = c.name;
-  document.getElementById('rt-campaignId').value          = c.aaCampaignId || '';
+  document.getElementById('rt-modalTitle').textContent     = 'Edit Client';
+  document.getElementById('rt-clientName').value           = c.name;
+  document.getElementById('rt-campaignId').value           = c.aaCampaignId || '';
   document.getElementById('rt-deleteClientBtn').classList.remove('hidden');
   document.getElementById('rt-saveClientBtn').dataset.mode = 'edit';
+  if (hasAA) rtLoadCampaigns(c.aaCampaignId);
+  else document.getElementById('rt-campaignPickWrap').classList.add('hidden');
   rtOpenModal('rt-clientModal');
 }
 
