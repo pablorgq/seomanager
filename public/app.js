@@ -1441,77 +1441,78 @@ async function rtRefreshAll() {
   btn.textContent = 'Refreshing…';
 
   try {
-    const today    = new Date().toISOString().slice(0, 10);
-    const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    const queryBody = {
-      provider: 'agency-analytics-v2',
-      asset: 'campaign-rankings',
+    const today  = new Date().toISOString().slice(0, 10);
+    const campId = String(c.aaCampaignId);
+
+    async function aaQuery(body) {
+      const r = await fetch('/api/aa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: 'agency-analytics-v2', ...body }),
+      });
+      if (!r.ok) {
+        const e = await r.json().catch(() => ({}));
+        throw new Error(e.error?.message || e.message || `AA error ${r.status}`);
+      }
+      const d = await r.json();
+      return Array.isArray(d?.data) ? d.data : Array.isArray(d) ? d : [];
+    }
+
+    // Step 1: get keyword phrases + ids for this campaign
+    const kwRows = await aaQuery({
+      asset: 'keyword',
       operation: 'read',
-      fields: [
-        'date', 'keyword_id', 'keyword_phrase',
-        'google_ranking', 'google_mobile_ranking',
-        'volume', 'competition',
-      ],
-      filters: [
-        { campaign_id: { '$equals_comparison': Number(c.aaCampaignId) } },
-        { end_date:    { '$lessthanorequal_comparison': today } },
-        { start_date:  { '$greaterthanorequal_comparison': monthAgo } },
-      ],
-      sort: [{ id: 'desc' }],
-      limit: 500,
+      fields: ['id', 'keyword_phrase', 'volume'],
+      filters: [{ campaign_id: { '$equals_comparison': campId } }],
+      sort: [{ id: 'asc' }],
+      limit: 1000,
       offset: 0,
-    };
-    const res = await fetch('/api/aa', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(queryBody),
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error?.message || err.message || `AA error ${res.status}`);
+    if (!kwRows.length) throw new Error(`No keywords found for campaign ID ${campId}. Verify the campaign ID in ✎ edit.`);
+
+    // keyword_id → { phrase, volume }
+    const kwById = {};
+    for (const k of kwRows) kwById[k.id] = { phrase: k.keyword_phrase, volume: k.volume };
+
+    // Step 2: get latest rankings for this campaign (today)
+    const rkRows = await aaQuery({
+      asset: 'keyword-rankings',
+      operation: 'read',
+      fields: ['keyword_id', 'date', 'google_ranking', 'google_mobile_ranking', 'volume'],
+      filters: [
+        { campaign_id: { '$equals_comparison': campId } },
+        { end_date:    { '$lessthanorequal_comparison': today } },
+        { start_date:  { '$greaterthanorequal_comparison': today } },
+      ],
+      sort: [{ date: 'desc' }],
+      limit: 2000,
+      offset: 0,
+    });
+
+    // keyword_id → most-recent ranking row
+    const rkByKwId = {};
+    for (const r of rkRows) {
+      if (r.keyword_id && !rkByKwId[r.keyword_id]) rkByKwId[r.keyword_id] = r;
     }
-    const data = await res.json();
 
-    // AA returns { data: [...] }
-    const allRows = Array.isArray(data?.data) ? data.data
-                  : Array.isArray(data)        ? data
-                  : [];
-
-    if (!allRows.length) throw new Error(
-      `No rows returned — keys: ${Object.keys(data || {}).join(', ') || 'none'}. Check campaign ID.`
-    );
-
-    // Deduplicate: keep only the most-recent row per keyword (sorted desc already)
-    const seenKw = new Set();
-    const rows = [];
-    for (const r of allRows) {
-      const key = r.keyword_id ?? r.keyword_phrase ?? r.id;
-      if (key != null && !seenKw.has(key)) { seenKw.add(key); rows.push(r); }
-    }
-
-    // Show first-row keys in success msg so we can confirm field names (first deploy only)
-    const firstRowKeys = allRows[0] ? Object.keys(allRows[0]).join(', ') : '';
-
-    // Match by keyword phrase (case-insensitive)
-    const kwPhrase = r => r.keyword_phrase ?? r.keywordPhrase ?? r.keyword?.keyword ?? r.keyword ?? '';
-
+    // Match stored keywords by phrase → keyword_id → ranking
     let updated = 0;
     for (const kw of c.keywords) {
       const kwLower = (kw.keyword || '').toLowerCase();
-      const match = rows.find(r => kwPhrase(r).toLowerCase() === kwLower);
-      if (match) {
-        kw.prevRank  = kw.rank;
-        kw.rank      = match.google_ranking  ?? match.googleRanking  ?? match.rank ?? null;
-        kw.volume    = match.volume          ?? match.search_volume  ?? kw.volume;
-        kw.lastCheck = new Date().toISOString().slice(0, 10);
-        updated++;
-      }
+      const aaKw = kwRows.find(k => (k.keyword_phrase || '').toLowerCase() === kwLower);
+      if (!aaKw) continue;
+      const rk = rkByKwId[aaKw.id];
+      if (!rk) continue;
+      kw.prevRank  = kw.rank;
+      kw.rank      = rk.google_ranking ?? null;
+      kw.volume    = rk.volume ?? aaKw.volume ?? kw.volume;
+      kw.lastCheck = today;
+      updated++;
     }
 
     rtSave();
-    const debugSuffix = firstRowKeys ? ` [fields: ${firstRowKeys}]` : '';
     document.getElementById('rt-lastRefresh').textContent =
-      `Updated ${updated}/${c.keywords.length} keywords · ${new Date().toLocaleTimeString()}${debugSuffix}`;
+      `Updated ${updated}/${c.keywords.length} keywords · ${new Date().toLocaleTimeString()}`;
     rtRender();
   } catch (e) {
     alert('Refresh failed: ' + e.message);
