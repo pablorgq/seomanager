@@ -358,11 +358,11 @@ app.get('/api/config', (req, res) => res.json({
 /* ─────────────────────────────────────────────
    AGENCY ANALYTICS PROXY
 ───────────────────────────────────────────── */
-app.get('/api/aa/*', apiGuard, async (req, res) => {
+app.use('/api/aa', apiGuard, async (req, res) => {
   if (!AA_KEY) return res.status(503).json({ error: { message: 'AA_API_KEY not configured on this server.' } });
-  const path = req.params[0];
-  const qs   = new URLSearchParams(req.query).toString();
-  const url  = qs ? `${AA_BASE}/${path}?${qs}` : `${AA_BASE}/${path}`;
+  const aaPath = req.path.replace(/^\//, '');  // strip leading slash
+  const qs     = new URLSearchParams(req.query).toString();
+  const url    = `${AA_BASE}/${aaPath}${qs ? '?' + qs : ''}`;
   try {
     const r = await fetch(url, { headers: { Authorization: AA_KEY } });
     res.status(r.status).json(await r.json());
