@@ -22,6 +22,12 @@ const AA_KEY  = process.env.AA_API_KEY || null;
 const AA_BASE = 'https://app.agencyanalytics.com/api/v2';
 
 /* ─────────────────────────────────────────────
+   PAGE OPTIMIZER PRO
+───────────────────────────────────────────── */
+const POP_KEY  = process.env.POP_API_KEY || null;
+const POP_BASE = 'https://app.pageoptimizer.pro/api';
+
+/* ─────────────────────────────────────────────
    GOOGLE CLOUD STORAGE
 ───────────────────────────────────────────── */
 const GCS_BUCKET = process.env.GCS_BUCKET_NAME || null;
@@ -263,6 +269,9 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
   if (req.path === '/login') return next();
   if (isValidSession(parseCookies(req).sm_auth)) return next();
+  if (req.path.startsWith('/api/')) {
+    return res.status(401).json({ error: { message: 'Session expired — please reload the page and sign in again.' } });
+  }
   res.redirect('/login');
 });
 
@@ -351,9 +360,33 @@ async function proxyOpenAI(url, req, res) {
 
 app.get('/api/config', (req, res) => res.json({
   hasServerKey: !!OPENAI_KEY,
-  hasGcs: !!(gcs && GCS_BUCKET),
-  hasAA: !!AA_KEY,
+  hasGcs:       !!(gcs && GCS_BUCKET),
+  hasAA:        !!AA_KEY,
+  hasPop:       !!POP_KEY,
 }));
+
+/* ─────────────────────────────────────────────
+   PAGE OPTIMIZER PRO PROXY
+   POST routes inject apiKey from server env.
+   GET routes (polling) forward as-is.
+───────────────────────────────────────────── */
+app.use('/api/pop', apiGuard, async (req, res) => {
+  if (!POP_KEY) return res.status(503).json({ error: { message: 'POP_API_KEY not configured on this server.' } });
+  const popPath = req.path.replace(/^\//, '');
+  const url     = `${POP_BASE}/${popPath}`;
+  try {
+    let opts = { method: req.method, headers: { 'Content-Type': 'application/json' } };
+    if (req.method === 'POST') {
+      // Inject server API key; remove any client-supplied key to prevent leakage in logs
+      const { apiKey: _dropped, ...rest } = sanitizeBody(req.body) || {};
+      opts.body = JSON.stringify({ ...rest, apiKey: POP_KEY });
+    }
+    const r = await fetch(url, opts);
+    res.status(r.status).json(await r.json());
+  } catch (e) {
+    res.status(502).json({ error: { message: e.message } });
+  }
+});
 
 /* ─────────────────────────────────────────────
    AGENCY ANALYTICS PROXY
