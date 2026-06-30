@@ -159,11 +159,13 @@ function parseCookies(req) {
 
 function sanitizeBody(obj, depth = 0) {
   if (depth > 4 || typeof obj !== 'object' || obj === null) return obj;
+  // Preserve arrays — Object.entries on an array produces {0:…,1:…} which breaks API consumers
+  if (Array.isArray(obj)) return obj.map(item => sanitizeBody(item, depth + 1));
   const BANNED = new Set(['__proto__', 'constructor', 'prototype']);
   const out = {};
   for (const [k, v] of Object.entries(obj)) {
     if (BANNED.has(k)) continue;
-    out[k] = typeof v === 'object' ? sanitizeBody(v, depth + 1) : v;
+    out[k] = sanitizeBody(v, depth + 1);
   }
   return out;
 }

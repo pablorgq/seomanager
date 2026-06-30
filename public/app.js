@@ -787,11 +787,15 @@ function agShowTermEditors(variations, lsaPhrases) {
   lsiList.innerHTML = lsaPhrases.map(t => {
     const phrase = t.phrase || String(t);
     const avg = t.averageCount || 0;
+    const isNlp = t.type === 'nlp' || t.isNlp || t.nlp;
+    const badge = isNlp
+      ? `<span class="ag-term-badge ag-badge-nlp">nlp</span>`
+      : `<span class="ag-term-badge ag-badge-lsi">lsi</span>`;
     return `<label class="ag-term-item">
       <input type="checkbox" checked data-phrase="${escHtml(phrase)}">
       <span class="ag-term-phrase">${escHtml(phrase)}</span>
       <span class="ag-term-count">avg ${escHtml(String(avg))}</span>
-      <span class="ag-term-badge ag-badge-lsi">lsi</span>
+      ${badge}
     </label>`;
   }).join('');
   document.getElementById('ag-lsiCount').textContent = `(${lsaPhrases.length})`;
@@ -979,10 +983,10 @@ async function agContinueWithSelected() {
 
   const selectedVars = agGetSelected('ag-varList');
   const selectedLsi  = agGetSelected('ag-lsiList');
-  // POP create-report expects plain strings, not objects
+  // POP create-report expects the original lsaPhrase objects from get-terms,
+  // filtered to only the ones the user kept checked
   const fullLsa = (agTermsData.lsaPhrases || [])
-    .filter(t => selectedLsi.includes(t.phrase || String(t)))
-    .map(t => t.phrase || String(t));
+    .filter(t => selectedLsi.includes(t.phrase || String(t)));
 
   document.getElementById('ag-continueBtn').style.display = 'none';
   agSetStep(2, 'done', `${selectedVars.length} vars · ${selectedLsi.length} LSI selected`);

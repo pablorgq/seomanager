@@ -685,6 +685,7 @@ details[open] .card-prompts-toggle::before { transform: rotate(90deg); }
 .ag-term-badge { font-size: 9px; padding: 1px 6px; border-radius: 100px; font-weight: 600; }
 .ag-badge-lsi { background: var(--accent-dim); color: var(--accent); }
 .ag-badge-var { background: rgba(229,56,59,.1); color: var(--red); }
+.ag-badge-nlp { background: rgba(59,130,246,.12); color: #3b82f6; }
 
 /* Score badge */
 .ag-score-badge {
