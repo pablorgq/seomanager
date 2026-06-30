@@ -828,7 +828,7 @@ async function agPopPost(path, body) {
   });
   const j = await r.json();
   agLog('← ' + r.status + ' ' + JSON.stringify(j).slice(0, 200));
-  if (!r.ok || j.error || j.detail) throw new Error('POP error: ' + (j.error || j.detail || j.message || r.status));
+  if (!r.ok || j.error || j.detail) throw new Error('POP error: ' + (j.error || j.detail || j.message || JSON.stringify(j).slice(0, 200) || r.status));
   if (j.status === 'FAILURE') throw new Error('POP: ' + (j.msg || JSON.stringify(j).slice(0, 120)));
   return j;
 }
@@ -975,7 +975,10 @@ async function agContinueWithSelected() {
 
   const selectedVars = agGetSelected('ag-varList');
   const selectedLsi  = agGetSelected('ag-lsiList');
-  const fullLsa = (agTermsData.lsaPhrases || []).filter(t => selectedLsi.includes(t.phrase || String(t)));
+  // POP create-report expects plain strings, not objects
+  const fullLsa = (agTermsData.lsaPhrases || [])
+    .filter(t => selectedLsi.includes(t.phrase || String(t)))
+    .map(t => t.phrase || String(t));
 
   document.getElementById('ag-continueBtn').style.display = 'none';
   agSetStep(2, 'done', `${selectedVars.length} vars · ${selectedLsi.length} LSI selected`);
