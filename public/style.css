@@ -731,9 +731,11 @@ details[open] .card-prompts-toggle::before { transform: rotate(90deg); }
   color: var(--text-secondary); line-height: 1.7;
 }
 .ag-nlp-chip {
-  padding: 4px 12px; border-radius: 100px; font-size: 11px;
-  background: var(--accent-dim); color: var(--accent); font-weight: 500;
+  padding: 4px 12px; border-radius: 100px; font-size: 11px; font-weight: 500;
+  background: var(--accent-dim); color: var(--accent);
 }
+.ag-nlp-brief  { background: rgba(59,130,246,.12); color: #3b82f6; }
+.ag-nlp-google { background: rgba(139,92,246,.12);  color: #8b5cf6; }
 
 /* ── RANK TRACKER ── */
 .rt-topbar {

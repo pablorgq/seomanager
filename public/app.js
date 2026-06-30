@@ -828,7 +828,11 @@ async function agPopPost(path, body) {
   });
   const j = await r.json();
   agLog('← ' + r.status + ' ' + JSON.stringify(j).slice(0, 200));
-  if (!r.ok || j.error || j.detail) throw new Error('POP error: ' + (j.error || j.detail || j.message || JSON.stringify(j).slice(0, 200) || r.status));
+  if (!r.ok || j.error || j.detail) {
+    const toStr = v => !v ? '' : typeof v === 'string' ? v : JSON.stringify(v);
+    const msg = toStr(j.error) || toStr(j.detail) || toStr(j.message) || JSON.stringify(j).slice(0, 300);
+    throw new Error('POP error: ' + msg);
+  }
   if (j.status === 'FAILURE') throw new Error('POP: ' + (j.msg || JSON.stringify(j).slice(0, 120)));
   return j;
 }
@@ -1121,15 +1125,24 @@ ${selectedVars.join(', ')}
     agArticleText = articleText;
     document.getElementById('ag-articleBox').innerHTML = agArticleHtml;
 
+    // NLP terms from content brief (blue words) — always available after step 4
+    const nlpBriefTerms = bodyTerms.filter(t => t.term && t.term.type === 'nlp').map(t => t.term.phrase);
+
     document.getElementById('ag-termsSummary').innerHTML =
       `<strong style="color:var(--text-primary)">Variations:</strong> ${selectedVars.map(escHtml).join(' · ')}<br>` +
       `<strong style="color:var(--text-primary)">LSI terms:</strong> ${selectedLsi.map(escHtml).join(' · ')}`;
 
-    if (nlpEntities.length) {
+    // Show NLP section — content brief NLP terms + Google NLP entities
+    const allNlpChips = [
+      ...nlpBriefTerms.map(p => `<span class="ag-nlp-chip ag-nlp-brief" title="POP content brief NLP">${escHtml(p)}</span>`),
+      ...nlpEntities.map(e => `<span class="ag-nlp-chip ag-nlp-google" title="Google NLP: ${escHtml(e.type || '')}">${escHtml(e.name || '')}</span>`),
+    ];
+    if (allNlpChips.length) {
       const nlpSection = document.getElementById('ag-nlpSection');
       nlpSection.style.display = 'block';
-      document.getElementById('ag-nlpChips').innerHTML =
-        nlpEntities.map(e => `<span class="ag-nlp-chip" title="${escHtml(e.type || '')}">${escHtml(e.name || '')}</span>`).join('');
+      document.getElementById('ag-nlpSection').querySelector('div').textContent =
+        `NLP Terms (${allNlpChips.length}) — use these in body content`;
+      document.getElementById('ag-nlpChips').innerHTML = allNlpChips.join('');
     }
 
     document.getElementById('ag-outputSection').style.display = 'block';
