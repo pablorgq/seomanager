@@ -1458,11 +1458,11 @@ async function rtRefreshAll() {
       return Array.isArray(d?.data) ? d.data : Array.isArray(d) ? d : [];
     }
 
-    // Step 1: get keyword phrases + ids for this campaign
+    // Step 1: get keyword phrases + ids for this campaign (no date fields — they're date-dependent)
     const kwRows = await aaQuery({
       asset: 'keyword',
       operation: 'read',
-      fields: ['id', 'keyword_phrase', 'volume'],
+      fields: ['id', 'keyword_phrase'],
       filters: [{ campaign_id: { '$equals_comparison': campId } }],
       sort: [{ id: 'asc' }],
       limit: 1000,
@@ -1470,9 +1470,9 @@ async function rtRefreshAll() {
     });
     if (!kwRows.length) throw new Error(`No keywords found for campaign ID ${campId}. Verify the campaign ID in ✎ edit.`);
 
-    // keyword_id → { phrase, volume }
+    // keyword_id → phrase
     const kwById = {};
-    for (const k of kwRows) kwById[k.id] = { phrase: k.keyword_phrase, volume: k.volume };
+    for (const k of kwRows) kwById[k.id] = k.keyword_phrase;
 
     // Step 2: get latest rankings for this campaign (today)
     const rkRows = await aaQuery({
@@ -1505,7 +1505,7 @@ async function rtRefreshAll() {
       if (!rk) continue;
       kw.prevRank  = kw.rank;
       kw.rank      = rk.google_ranking ?? null;
-      kw.volume    = rk.volume ?? aaKw.volume ?? kw.volume;
+      kw.volume    = rk.volume ?? kw.volume;
       kw.lastCheck = today;
       updated++;
     }
