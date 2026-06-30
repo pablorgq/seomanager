@@ -50,7 +50,8 @@ const SAFETY_PREFIX = 'Editorial healthcare photography for a professional medic
 /* ── STATE ── */
 let apiKey = null;
 let hasServerKey = false;
-let hasGcs = false;
+let hasGcs  = false;
+let hasPop  = false;
 let generatedBlogs = [];
 let igImages = [];
 
@@ -60,6 +61,7 @@ async function init() {
   hasServerKey = !!cfg.hasServerKey;
   hasGcs       = !!cfg.hasGcs;
   hasAA        = !!cfg.hasAA;
+  hasPop       = !!cfg.hasPop;
   if (hasServerKey) {
     document.getElementById('settingsToggle').style.display = 'none';
   } else {
@@ -67,6 +69,14 @@ async function init() {
     if (apiKey) document.getElementById('apiKeyInput').value = apiKey;
   }
   rtInit();
+
+  // Hide POP key field when key is configured server-side
+  if (hasPop) {
+    const grp = document.getElementById('ag-popKeyGroup');
+    const ind = document.getElementById('ag-popServerInd');
+    if (grp) grp.classList.add('hidden');
+    if (ind) ind.classList.remove('hidden');
+  }
 
   const popKey = await Store.get('seomanager_pop_key');
   if (popKey) {
@@ -710,7 +720,8 @@ function slugify(str) {
    SEO ARTICLE GENERATOR
 ════════════════════════════════════════════════ */
 
-const POP_API = 'https://app.pageoptimizer.pro/api';
+const POP_API_DIRECT = 'https://app.pageoptimizer.pro/api';
+const POP_API_PROXY  = '/api/pop';
 let agSteps = [];
 let agTermsData = null;
 let agArticleText = '';
@@ -801,10 +812,19 @@ function agGetSelected(listId) {
 
 async function agPopPost(path, body) {
   agLog('POST ' + path + '…');
-  const r = await fetch(POP_API + path, {
+  let url, sendBody;
+  if (hasPop) {
+    url = POP_API_PROXY + path;
+    const { apiKey: _drop, ...rest } = body;  // server injects key — don't send client copy
+    sendBody = rest;
+  } else {
+    url = POP_API_DIRECT + path;
+    sendBody = body;
+  }
+  const r = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
+    body: JSON.stringify(sendBody)
   });
   const j = await r.json();
   agLog('← ' + r.status + ' ' + JSON.stringify(j).slice(0, 120));
@@ -813,11 +833,12 @@ async function agPopPost(path, body) {
 }
 
 async function agPollTerms(taskId, stepIdx) {
+  const base = hasPop ? POP_API_PROXY : POP_API_DIRECT;
   for (let i = 1; i <= 40; i++) {
     await new Promise(r => setTimeout(r, 4000));
     agSetStep(stepIdx, 'active', `attempt ${i}/40`);
     agLog(`Polling terms attempt ${i}`);
-    const d = await fetch(`${POP_API}/task/${taskId}/results/`).then(r => r.json());
+    const d = await fetch(`${base}/task/${taskId}/results/`).then(r => r.json());
     agLog(`terms ← ${d.status}${d.value ? ' ' + d.value + '%' : ''}${d.prepareId ? ' → prepareId:' + d.prepareId : ''}`);
     if (d.status === 'FAILURE') throw new Error('get-terms task failed');
     if (d.prepareId) return d;
@@ -826,11 +847,12 @@ async function agPollTerms(taskId, stepIdx) {
 }
 
 async function agPollReport(taskId, stepIdx) {
+  const base = hasPop ? POP_API_PROXY : POP_API_DIRECT;
   for (let i = 1; i <= 40; i++) {
     await new Promise(r => setTimeout(r, 4000));
     agSetStep(stepIdx, 'active', `attempt ${i}/40`);
     agLog(`Polling report attempt ${i}`);
-    const d = await fetch(`${POP_API}/task/${taskId}/results/`).then(r => r.json());
+    const d = await fetch(`${base}/task/${taskId}/results/`).then(r => r.json());
     agLog(`report ← ${d.status}${d.value ? ' ' + d.value + '%' : ''}${d.report && d.report.id ? ' → id:' + d.report.id : ''}`);
     if (d.status === 'FAILURE') throw new Error('create-report task failed');
     if (d.report && d.report.id) return d;
@@ -873,7 +895,7 @@ function agRenderScore(score) {
 }
 
 async function agStartFlow() {
-  const popKey  = document.getElementById('ag-popKey').value.trim();
+  const popKey  = hasPop ? '' : document.getElementById('ag-popKey').value.trim();
   const keyword = document.getElementById('ag-keyword').value.trim();
   const targetUrl    = document.getElementById('ag-targetUrl').value.trim() || 'https://example.com';
   const pageNotBuilt = document.getElementById('ag-pageNotBuilt').checked ? 1 : 0;
@@ -881,7 +903,7 @@ async function agStartFlow() {
   const targLang = document.getElementById('ag-targetLanguage').value;
   const compRaw  = document.getElementById('ag-competitors').value.trim();
 
-  if (!popKey)  { alert('Enter your POP API key.'); return; }
+  if (!hasPop && !popKey) { alert('Enter your POP API key.'); return; }
   if (!keyword) { alert('Enter a keyword.');         return; }
   if (keyword.length > 200) { alert('Keyword too long (max 200 characters).'); return; }
   if (!hasServerKey) {
@@ -889,7 +911,7 @@ async function agStartFlow() {
     if (!k) { alert('Enter your OpenAI API key in Settings first.'); return; }
   }
 
-  await Store.set('seomanager_pop_key', popKey);
+  if (!hasPop && popKey) await Store.set('seomanager_pop_key', popKey);
 
   const btn = document.getElementById('ag-genBtn');
   btn.disabled = true;
