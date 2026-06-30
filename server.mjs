@@ -268,7 +268,7 @@ app.use((req, res, next) => {
 
 /* Auth guard — everything except /login requires a valid session */
 app.use((req, res, next) => {
-  if (req.path === '/login') return next();
+  if (req.path === '/login' || req.path === '/logo.jpg') return next();
   if (isValidSession(parseCookies(req).sm_auth)) return next();
   if (req.path.startsWith('/api/')) {
     return res.status(401).json({ error: { message: 'Session expired — please reload the page and sign in again.' } });
