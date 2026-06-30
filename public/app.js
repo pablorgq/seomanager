@@ -1290,23 +1290,24 @@ async function rtLoadCampaigns(preselectId) {
         asset: 'campaign',
         operation: 'read',
         fields: ['id', 'company', 'url'],
-        sort: [{ id: 'asc' }],
         limit: 200,
         offset: 0,
       }),
     });
     const data = await r.json();
-    if (!r.ok) throw new Error(
-      data?.error?.message ||
+    // AA returns HTTP 200 but puts errors in data.status / data.results.messages
+    const aaErr = !r.ok || data?.status === 'error' || (data?.code >= 400);
+    if (aaErr) throw new Error(
       (data?.results?.messages || []).join('; ') ||
-      `AA error ${r.status}`
+      data?.error?.message ||
+      `AA error ${data?.code || r.status}`
     );
     const list = Array.isArray(data?.data)    ? data.data
                : Array.isArray(data?.results) ? data.results
                : Array.isArray(data)          ? data
                : [];
     if (!list.length) throw new Error(
-      `No campaigns returned — response keys: ${Object.keys(data).join(', ')}`
+      `No campaigns returned — keys: ${Object.keys(data).join(', ')}`
     );
     sel.innerHTML = '<option value="">— select a campaign —</option>' +
       list.map(c =>
@@ -1506,11 +1507,13 @@ async function rtRefreshAll() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider: 'agency-analytics-v2', ...body }),
       });
-      if (!r.ok) {
-        const e = await r.json().catch(() => ({}));
-        throw new Error(e.error?.message || e.message || `AA error ${r.status}`);
-      }
       const d = await r.json();
+      const aaErr = !r.ok || d?.status === 'error' || (d?.code >= 400);
+      if (aaErr) throw new Error(
+        (d?.results?.messages || []).join('; ') ||
+        d?.error?.message ||
+        `AA error ${d?.code || r.status}`
+      );
       return Array.isArray(d?.data) ? d.data : Array.isArray(d) ? d : [];
     }
 
