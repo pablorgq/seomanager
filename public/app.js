@@ -1537,11 +1537,11 @@ async function rtRefreshAll() {
     const kwById = {};
     for (const k of kwRows) kwById[k.id] = k.keyword_phrase;
 
-    // Step 2: get latest rankings for this campaign (today)
+    // Step 2: get latest rankings (only fields valid for keyword-rankings asset)
     const rkRows = await aaQuery({
       asset: 'keyword-rankings',
       operation: 'read',
-      fields: ['keyword_id', 'keyword_phrase', 'date', 'google_ranking', 'google_mobile_ranking', 'volume'],
+      fields: ['date', 'google_ranking', 'google_mobile_ranking', 'volume'],
       filters: [
         { campaign_id: { '$equals_comparison': campId } },
         { end_date:    { '$lessthanorequal_comparison': today } },
@@ -1552,24 +1552,22 @@ async function rtRefreshAll() {
       offset: 0,
     });
 
-    // Build lookup: keyword_id → most-recent ranking row
-    const rkByKwId = {};
-    for (const r of rkRows) {
-      if (r.keyword_id != null && !rkByKwId[r.keyword_id]) rkByKwId[r.keyword_id] = r;
-    }
+    // Debug: show what keys AA actually returns per row
+    const firstRowKeys = rkRows[0] ? Object.keys(rkRows[0]).join(', ') : 'no rows';
 
-    // Also build lookup by phrase if AA returns keyword_phrase directly in ranking rows
+    // Build lookups — AA may auto-include keyword_id / keyword_phrase even without requesting them
+    const rkByKwId  = {};
     const rkByPhrase = {};
     for (const r of rkRows) {
+      if (r.keyword_id   != null && !rkByKwId[r.keyword_id])              rkByKwId[r.keyword_id]  = r;
       const p = (r.keyword_phrase || '').toLowerCase();
       if (p && !rkByPhrase[p]) rkByPhrase[p] = r;
     }
 
-    // Match stored keywords by phrase (via direct match or keyword_id join)
+    // Match stored keywords: direct phrase → or via keyword_id join from step 1
     let updated = 0;
     for (const kw of c.keywords) {
       const kwLower = (kw.keyword || '').toLowerCase();
-      // Try direct phrase match first, then join via keyword_id
       let rk = rkByPhrase[kwLower];
       if (!rk) {
         const aaKw = kwRows.find(k => (k.keyword_phrase || '').toLowerCase() === kwLower);
@@ -1585,7 +1583,7 @@ async function rtRefreshAll() {
 
     rtSave();
     document.getElementById('rt-lastRefresh').textContent =
-      `Updated ${updated}/${c.keywords.length} keywords · ${new Date().toLocaleTimeString()}`;
+      `Updated ${updated}/${c.keywords.length} keywords · ${new Date().toLocaleTimeString()} [row keys: ${firstRowKeys}]`;
     rtRender();
   } catch (e) {
     alert('Refresh failed: ' + e.message);
