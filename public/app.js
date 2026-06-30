@@ -1302,10 +1302,9 @@ async function rtLoadCampaigns(preselectId) {
       data?.error?.message ||
       `AA error ${data?.code || r.status}`
     );
-    const list = Array.isArray(data?.data)            ? data.data
-               : Array.isArray(data?.results?.data)   ? data.results.data
-               : Array.isArray(data?.results)          ? data.results
-               : Array.isArray(data)                   ? data
+    const list = Array.isArray(data?.results?.rows) ? data.results.rows
+               : Array.isArray(data?.data)           ? data.data
+               : Array.isArray(data)                 ? data
                : [];
     if (!list.length) throw new Error(
       `No campaigns returned — top keys: ${Object.keys(data).join(', ')}` +
@@ -1516,10 +1515,9 @@ async function rtRefreshAll() {
         d?.error?.message ||
         `AA error ${d?.code || r.status}`
       );
-      return Array.isArray(d?.data)           ? d.data
-           : Array.isArray(d?.results?.data)  ? d.results.data
-           : Array.isArray(d?.results)         ? d.results
-           : Array.isArray(d)                  ? d
+      return Array.isArray(d?.results?.rows) ? d.results.rows
+           : Array.isArray(d?.data)          ? d.data
+           : Array.isArray(d)               ? d
            : [];
     }
 
