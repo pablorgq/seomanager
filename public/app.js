@@ -1442,11 +1442,9 @@ async function rtRefreshAll() {
 
   try {
     const queryBody = {
-      provider: 'agency-analytics-v2',
       asset: 'keyword-rankings',
       operation: 'read',
-      fields: ['keywordId', 'keywordPhrase', 'googleRanking', 'googleRankingChange', 'searchVolume'],
-      filters: [{ field: 'campaign_id', operator: 'eq', value: Number(c.aaCampaignId) }],
+      campaign_id: Number(c.aaCampaignId),
       limit: 500,
       offset: 0,
     };
@@ -1461,24 +1459,29 @@ async function rtRefreshAll() {
     }
     const data = await res.json();
 
-    // AA v2 returns { data: [...] }
-    const rows = Array.isArray(data?.data) ? data.data
-               : Array.isArray(data)       ? data
+    // AA v2 returns { data: [...] } or similar
+    const rows = Array.isArray(data?.data)     ? data.data
+               : Array.isArray(data?.results)  ? data.results
+               : Array.isArray(data?.keywords) ? data.keywords
+               : Array.isArray(data)           ? data
                : [];
 
-    if (!rows.length) throw new Error('No ranking rows returned — check the campaign ID.');
+    if (!rows.length) throw new Error(
+      `No ranking rows returned (response keys: ${Object.keys(data || {}).join(', ') || 'none'}). Check the campaign ID.`
+    );
 
-    // Match by keyword phrase (case-insensitive)
+    // Match by keyword phrase — try every common field name AA might use
+    const kwPhrase = r =>
+      r.keywordPhrase ?? r.keyword_phrase ?? r.keyword?.keyword ?? r.keyword ?? r.phrase ?? '';
+
     let updated = 0;
     for (const kw of c.keywords) {
       const kwLower = (kw.keyword || '').toLowerCase();
-      const match = rows.find(r =>
-        (r.keywordPhrase || r.keyword?.keyword || r.keyword || '').toLowerCase() === kwLower
-      );
+      const match = rows.find(r => kwPhrase(r).toLowerCase() === kwLower);
       if (match) {
         kw.prevRank  = kw.rank;
-        kw.rank      = match.googleRanking ?? match.rank ?? null;
-        kw.volume    = match.searchVolume  ?? match.volume ?? kw.volume;
+        kw.rank      = match.googleRanking ?? match.google_ranking ?? match.rank ?? match.position ?? null;
+        kw.volume    = match.searchVolume  ?? match.search_volume  ?? match.volume ?? kw.volume;
         kw.lastCheck = new Date().toISOString().slice(0, 10);
         updated++;
       }
