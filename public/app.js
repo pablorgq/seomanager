@@ -1537,15 +1537,18 @@ async function rtRefreshAll() {
     const kwById = {};
     for (const k of kwRows) kwById[k.id] = k.keyword_phrase;
 
-    // Step 2: get latest rankings via campaign-rankings (keyword-rankings requires connector type)
+    // Step 2: get per-keyword rankings — group_by keyword_id gives one row per keyword
     const rkRows = await aaQuery({
       asset: 'campaign-rankings',
       operation: 'read',
-      fields: ['date', 'google_ranking', 'google_mobile_ranking', 'volume'],
+      fields: ['google_ranking', 'google_mobile_ranking', 'volume', 'competition'],
       filters: [
+        { end_date:    { '$lessthanorequal_comparison': today } },
+        { start_date:  { '$greaterthanorequal_comparison': today } },
         { campaign_id: { '$equals_comparison': campId } },
       ],
-      sort: [{ date: 'desc' }],
+      group_by: ['keyword_id'],
+      sort: [{ date: 'asc' }],
       limit: 500,
       offset: 0,
     });
