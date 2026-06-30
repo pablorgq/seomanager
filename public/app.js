@@ -1478,7 +1478,7 @@ async function rtRefreshAll() {
     const rkRows = await aaQuery({
       asset: 'keyword-rankings',
       operation: 'read',
-      fields: ['keyword_id', 'date', 'google_ranking', 'google_mobile_ranking', 'volume'],
+      fields: ['keyword_id', 'keyword_phrase', 'date', 'google_ranking', 'google_mobile_ranking', 'volume'],
       filters: [
         { campaign_id: { '$equals_comparison': campId } },
         { end_date:    { '$lessthanorequal_comparison': today } },
@@ -1489,19 +1489,29 @@ async function rtRefreshAll() {
       offset: 0,
     });
 
-    // keyword_id → most-recent ranking row
+    // Build lookup: keyword_id → most-recent ranking row
     const rkByKwId = {};
     for (const r of rkRows) {
-      if (r.keyword_id && !rkByKwId[r.keyword_id]) rkByKwId[r.keyword_id] = r;
+      if (r.keyword_id != null && !rkByKwId[r.keyword_id]) rkByKwId[r.keyword_id] = r;
     }
 
-    // Match stored keywords by phrase → keyword_id → ranking
+    // Also build lookup by phrase if AA returns keyword_phrase directly in ranking rows
+    const rkByPhrase = {};
+    for (const r of rkRows) {
+      const p = (r.keyword_phrase || '').toLowerCase();
+      if (p && !rkByPhrase[p]) rkByPhrase[p] = r;
+    }
+
+    // Match stored keywords by phrase (via direct match or keyword_id join)
     let updated = 0;
     for (const kw of c.keywords) {
       const kwLower = (kw.keyword || '').toLowerCase();
-      const aaKw = kwRows.find(k => (k.keyword_phrase || '').toLowerCase() === kwLower);
-      if (!aaKw) continue;
-      const rk = rkByKwId[aaKw.id];
+      // Try direct phrase match first, then join via keyword_id
+      let rk = rkByPhrase[kwLower];
+      if (!rk) {
+        const aaKw = kwRows.find(k => (k.keyword_phrase || '').toLowerCase() === kwLower);
+        if (aaKw) rk = rkByKwId[aaKw.id];
+      }
       if (!rk) continue;
       kw.prevRank  = kw.rank;
       kw.rank      = rk.google_ranking ?? null;
