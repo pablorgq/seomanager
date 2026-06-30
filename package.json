@@ -1,7 +1,7 @@
 {
-  "name": "seomanager",
+  "name": "llamaseo",
   "version": "1.0.0",
-  "description": "SEO Manager — SEO branding asset generator web app",
+  "description": "LLAMASEO — SEO branding asset generator web app",
   "type": "module",
   "main": "server.mjs",
   "scripts": {

@@ -189,7 +189,7 @@ function loginPage(opts = {}) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SEO Manager — Sign In</title>
+<title>LLAMASEO — Sign In</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -213,9 +213,8 @@ button:disabled{opacity:.45;cursor:not-allowed}
 </head>
 <body>
 <div class="card">
-  <div class="brand">
-    <div class="lm">⚡</div>
-    <div><div class="bn">SEO Manager</div><div class="bs">Sign in to continue</div></div>
+  <div class="brand" style="justify-content:center">
+    <img src="/logo.jpg" alt="LLAMASEO" style="height:64px;width:auto">
   </div>
   <h2>Welcome back</h2>
   <p class="hint">Enter your credentials to access the dashboard.</p>
@@ -464,5 +463,5 @@ app.get('*', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`SEO Manager :${PORT} | key=${OPENAI_KEY ? 'server' : 'client'} | auth=${AUTH_PASS ? 'enabled' : 'DISABLED'}`);
+  console.log(`LLAMASEO :${PORT} | key=${OPENAI_KEY ? 'server' : 'client'} | auth=${AUTH_PASS ? 'enabled' : 'DISABLED'}`);
 });

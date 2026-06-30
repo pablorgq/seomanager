@@ -1,4 +1,4 @@
-# SEO Manager
+# LLAMASEO
 
 SEO branding asset generator that creates unique, independent-looking blog identities for off-page SEO campaigns and link building.
 
