@@ -1541,7 +1541,7 @@ async function rtRefreshAll() {
     const rkRows = await aaQuery({
       asset: 'campaign-rankings',
       operation: 'read',
-      fields: ['google_ranking', 'google_mobile_ranking', 'volume', 'competition'],
+      fields: ['keyword_id', 'keyword_phrase', 'google_ranking', 'google_mobile_ranking', 'volume', 'competition'],
       filters: [
         { end_date:    { '$lessthanorequal_comparison': today } },
         { start_date:  { '$greaterthanorequal_comparison': today } },
