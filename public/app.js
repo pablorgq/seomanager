@@ -1015,39 +1015,70 @@ async function agContinueWithSelected() {
     agSetStep(5, 'done', `exact:${(recs.exactKeyword||[]).length} lsi:${(recs.lsi||[]).length} vars:${(recs.variations||[]).length}`);
 
     agSetStep(6, 'active');
-    const bodyTerms = cbTerms.filter(t => t.contentBrief && t.contentBrief.target > 0).slice(0, 25);
-    const termLines = bodyTerms.length > 0
-      ? bodyTerms.map(t => `"${t.term.phrase}" (${t.term.type}) → ~${t.contentBrief.target} times`).join('\n')
-      : selectedLsi.slice(0, 15).map(p => `"${p}" → ~1 time`).join('\n');
-    const titleTerms = ((rd.report.cleanedContentBrief && rd.report.cleanedContentBrief.pageTitle) || [])
+    const cb = rd.report.cleanedContentBrief || {};
+
+    // Page title (H1) terms
+    const titleTerms = (cb.pageTitle || [])
       .filter(t => t.contentBrief && t.contentBrief.target > 0).map(t => t.term.phrase);
-    const h2Terms = ((rd.report.cleanedContentBrief && rd.report.cleanedContentBrief.subHeadings) || [])
+
+    // Meta/SEO title terms
+    const metaTitleTerms = (cb.metaTitle || cb.searchEngineTitle || [])
       .filter(t => t.contentBrief && t.contentBrief.target > 0).map(t => t.term.phrase);
+
+    // H2 subheading terms with targets
+    const h2Items = (cb.subHeadings || []).filter(t => t.contentBrief);
+    const h2Lines = h2Items.length
+      ? h2Items.map(t => {
+          const min = t.contentBrief.min ?? 0;
+          const max = t.contentBrief.max ?? t.contentBrief.target ?? 0;
+          return `  "${t.term.phrase}" → ${min}-${max} times in H2s`;
+        }).join('\n')
+      : '';
+
+    // Body paragraph terms with targets
+    const bodyTerms = (cb.p || cbTerms || []).filter(t => t.contentBrief && t.contentBrief.target > 0).slice(0, 30);
+    const bodyLines = bodyTerms.length > 0
+      ? bodyTerms.map(t => {
+          const min = t.contentBrief.min ?? 0;
+          const max = t.contentBrief.max ?? t.contentBrief.target ?? 0;
+          const nlp = t.term.type === 'nlp' ? ' [NLP]' : '';
+          return `  "${t.term.phrase}"${nlp} → ${min}-${max} times`;
+        }).join('\n')
+      : selectedLsi.slice(0, 15).map(p => `  "${p}" → ~1 time`).join('\n');
+
     const nlpEntityNames = nlpEntities.map(e => e.name).filter(Boolean);
 
-    const prompt = `You are an expert SEO content writer. Write a high-quality, fully optimised article following these exact specifications:
+    const prompt = `You are an expert SEO content writer. Write a fully optimised article following these POP content brief specifications exactly:
 
-KEYWORD: "${keyword}"
+FOCUS KEYWORD: "${keyword}"
 TARGET WORD COUNT: ~${wcTarget} words
 LANGUAGE: ${targLang}
 TONE: ${tone}
-H2 SUBHEADINGS: ${h2Target}
 
-TITLE MUST INCLUDE: ${titleTerms.length ? titleTerms.join(', ') : keyword}
-H2 SUBHEADINGS SHOULD INCLUDE: ${h2Terms.length ? h2Terms.join(', ') : 'relevant variations'}
+── PLACEMENT RULES ──────────────────────────────────────
 
-BODY TERM TARGETS (incorporate naturally at these frequencies):
-${termLines}
-${nlpEntityNames.length ? '\nGOOGLE NLP ENTITIES (weave in naturally):\n' + nlpEntityNames.join(', ') : ''}
+SEO/META TITLE (write a meta title including these terms):
+${metaTitleTerms.length ? metaTitleTerms.map(t => `  "${t}"`).join('\n') : `  "${keyword}"`}
 
-VARIATIONS TO USE NATURALLY: ${selectedVars.join(', ')}
+H1 PAGE TITLE (the article H1 must include these terms):
+${titleTerms.length ? titleTerms.map(t => `  "${t}"`).join('\n') : `  "${keyword}"`}
 
-RULES:
-- Write one H1 title, ${h2Target} H2 sections, and a brief conclusion
-- Every term must appear naturally — never forced or keyword-stuffed
-- Write fluent, human-sounding prose a real expert would write
-- Do NOT mention SEO, term counts, word counts, or this prompt
-- Do NOT use bullet lists — use flowing paragraphs only`;
+H2 SUBHEADINGS — write exactly ${h2Target} H2s, distribute these terms across them:
+${h2Lines || `  use: ${selectedVars.slice(0, 4).join(', ')}`}
+
+MAIN CONTENT — use each term at the indicated frequency in body paragraphs:
+${bodyLines}
+${nlpEntityNames.length ? '\nGOOGLE NLP ENTITIES — weave these in naturally in body text:\n' + nlpEntityNames.map(t => `  "${t}"`).join('\n') : ''}
+
+KEYWORD VARIATIONS — use naturally throughout (not all in one place):
+${selectedVars.join(', ')}
+
+── FORMAT ───────────────────────────────────────────────
+- Output: one ## H1 title, ${h2Target} ## H2 sections, one conclusion paragraph
+- Use flowing paragraphs — NO bullet lists
+- Every term must read naturally — never forced or stuffed
+- Do NOT include the meta title in the article body
+- Do NOT mention SEO, word counts, or these instructions`;
 
     agLog(`Calling OpenAI (${model})…`);
     const chatHeaders = { 'Content-Type': 'application/json' };
