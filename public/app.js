@@ -58,13 +58,16 @@ let igImages = [];
 async function init() {
   const cfg = await fetch('/api/config').then(r => r.json()).catch(() => ({}));
   hasServerKey = !!cfg.hasServerKey;
-  hasGcs = !!cfg.hasGcs;
+  hasGcs       = !!cfg.hasGcs;
+  hasAA        = !!cfg.hasAA;
   if (hasServerKey) {
     document.getElementById('settingsToggle').style.display = 'none';
   } else {
     apiKey = await Store.get('seomanager_api_key');
     if (apiKey) document.getElementById('apiKeyInput').value = apiKey;
   }
+  rtInit();
+
   const popKey = await Store.get('seomanager_pop_key');
   if (popKey) {
     const el = document.getElementById('ag-popKey');
@@ -1101,6 +1104,382 @@ function agCopyHtml() {
     setTimeout(() => b.textContent = orig, 1500);
   }).catch(() => {});
 }
+
+/* ═══════════════════════════════════════════════
+   RANK TRACKER
+════════════════════════════════════════════════ */
+
+const RT_KEY = 'seomanager_ranktracker';
+
+let rtData   = { clients: [], activeClientId: null };
+let hasAA    = false;
+
+/* ── persistence ── */
+function rtLoad() {
+  try { return JSON.parse(localStorage.getItem(RT_KEY)) || { clients: [], activeClientId: null }; }
+  catch { return { clients: [], activeClientId: null }; }
+}
+function rtSave() { localStorage.setItem(RT_KEY, JSON.stringify(rtData)); }
+
+/* ── helpers ── */
+function rtUid() { return '_' + Math.random().toString(36).slice(2, 10); }
+
+function rtActiveClient() {
+  return rtData.clients.find(c => c.id === rtData.activeClientId) || null;
+}
+
+function rtRankBadge(rank, prev) {
+  if (!rank && rank !== 0) return `<span class="rt-badge rt-na">—</span>`;
+  const cls = rank <= 5 ? 'rt-green' : rank <= 10 ? 'rt-orange' : 'rt-red';
+  let delta = '';
+  if (prev && prev !== rank) {
+    const diff = prev - rank; // positive = improved
+    delta = diff > 0
+      ? `<span class="rt-delta rt-up">↑${diff}</span>`
+      : `<span class="rt-delta rt-down">↓${Math.abs(diff)}</span>`;
+  }
+  return `<span class="rt-badge ${cls}">${rank}</span>${delta}`;
+}
+
+function rtFormatDate(iso) {
+  if (!iso) return '';
+  return iso.slice(0, 10);
+}
+
+/* ── render ── */
+function rtRender() {
+  const client = rtActiveClient();
+
+  // Update client selector
+  const sel = document.getElementById('rt-clientSelect');
+  sel.innerHTML = rtData.clients.map(c =>
+    `<option value="${escHtml(c.id)}"${c.id === rtData.activeClientId ? ' selected' : ''}>${escHtml(c.name)}</option>`
+  ).join('');
+
+  const noClient  = document.getElementById('rt-noClient');
+  const tableWrap = document.getElementById('rt-tableWrap');
+
+  if (!client) {
+    noClient.classList.remove('hidden');
+    tableWrap.classList.add('hidden');
+    return;
+  }
+  noClient.classList.add('hidden');
+  tableWrap.classList.remove('hidden');
+
+  const tbody = document.getElementById('rt-tbody');
+  tbody.innerHTML = '';
+  (client.keywords || []).forEach(kw => {
+    const tr = document.createElement('tr');
+    tr.dataset.id = kw.id;
+    tr.innerHTML = `
+      <td class="rt-td-rank">${rtRankBadge(kw.rank, kw.prevRank)}</td>
+      <td class="rt-td-url"><a href="${escHtml(kw.url || '')}" target="_blank" rel="noopener" class="rt-url-link" title="${escHtml(kw.url || '')}">${escHtml(rtShortUrl(kw.url || ''))}</a></td>
+      <td class="rt-td-kw rt-editable" data-field="keyword">${escHtml(kw.keyword || '')}</td>
+      <td class="rt-td-vol">${kw.volume ? escHtml(String(kw.volume)) : '<span class="rt-na">—</span>'}</td>
+      <td class="rt-td-delta">${rtDeltaCell(kw.rank, kw.prevRank)}</td>
+      <td class="rt-td-pop rt-editable" data-field="popStatus">${rtPopCell(kw)}</td>
+      <td class="rt-td-note rt-editable" data-field="note">${escHtml(kw.note || '')}</td>
+      <td class="rt-td-check">${escHtml(rtFormatDate(kw.lastCheck) || '')}</td>
+      <td class="rt-td-del"><button class="rt-del-btn" title="Delete row">✕</button></td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+function rtShortUrl(url) {
+  try { return new URL(url).pathname || '/'; } catch { return url; }
+}
+
+function rtDeltaCell(rank, prev) {
+  if (!rank || !prev || rank === prev) return '';
+  const diff = prev - rank;
+  return diff > 0
+    ? `<span class="rt-delta rt-up">↑${diff}</span>`
+    : `<span class="rt-delta rt-down">↓${Math.abs(diff)}</span>`;
+}
+
+function rtPopCell(kw) {
+  if (!kw.popStatus) return '<span class="rt-na">—</span>';
+  const date = kw.popDate ? ` <span class="rt-pop-date">${escHtml(kw.popDate)}</span>` : '';
+  return `<span class="rt-pop-badge">POP ✓</span>${date}<br><span style="font-size:10px;color:var(--text-muted)">${escHtml(kw.popStatus)}</span>`;
+}
+
+/* ── init rank tracker ── */
+function rtInit() {
+  rtData = rtLoad();
+
+  // Events
+  document.getElementById('rt-clientSelect').addEventListener('change', e => {
+    rtData.activeClientId = e.target.value;
+    rtSave();
+    rtRender();
+  });
+  document.getElementById('rt-addClientBtn').addEventListener('click', () => rtShowAddClient());
+  document.getElementById('rt-editClientBtn').addEventListener('click', () => rtShowEditClient());
+  document.getElementById('rt-refreshBtn').addEventListener('click', rtRefreshAll);
+  document.getElementById('rt-importBtn').addEventListener('click', () => {
+    document.getElementById('rt-importText').value = '';
+    rtOpenModal('rt-importModal');
+  });
+  document.getElementById('rt-importConfirmBtn').addEventListener('click', rtImport);
+  document.getElementById('rt-addRowBtn').addEventListener('click', rtAddRow);
+  document.getElementById('rt-saveClientBtn').addEventListener('click', rtSaveClient);
+  document.getElementById('rt-deleteClientBtn').addEventListener('click', rtDeleteClient);
+
+  // Table delegation: edit + delete
+  document.getElementById('rt-tbody').addEventListener('click', e => {
+    const delBtn = e.target.closest('.rt-del-btn');
+    if (delBtn) { rtDeleteRow(delBtn.closest('tr').dataset.id); return; }
+    const editCell = e.target.closest('.rt-editable');
+    if (editCell) {
+      const tr  = editCell.closest('tr');
+      const id  = tr.dataset.id;
+      const fld = editCell.dataset.field;
+      rtOpenEditModal(id, fld);
+    }
+  });
+
+  // Edit modal save
+  document.getElementById('rt-editSaveBtn').addEventListener('click', rtEditSave);
+
+  rtRender();
+}
+
+/* ── client management ── */
+function rtShowAddClient() {
+  document.getElementById('rt-modalTitle').textContent    = 'Add Client';
+  document.getElementById('rt-clientName').value          = '';
+  document.getElementById('rt-campaignId').value          = '';
+  document.getElementById('rt-deleteClientBtn').classList.add('hidden');
+  document.getElementById('rt-saveClientBtn').dataset.mode = 'add';
+  rtOpenModal('rt-clientModal');
+}
+
+function rtShowEditClient() {
+  const c = rtActiveClient();
+  if (!c) return;
+  document.getElementById('rt-modalTitle').textContent    = 'Edit Client';
+  document.getElementById('rt-clientName').value          = c.name;
+  document.getElementById('rt-campaignId').value          = c.aaCampaignId || '';
+  document.getElementById('rt-deleteClientBtn').classList.remove('hidden');
+  document.getElementById('rt-saveClientBtn').dataset.mode = 'edit';
+  rtOpenModal('rt-clientModal');
+}
+
+function rtSaveClient() {
+  const name  = document.getElementById('rt-clientName').value.trim();
+  const cid   = document.getElementById('rt-campaignId').value.trim();
+  const mode  = document.getElementById('rt-saveClientBtn').dataset.mode;
+  if (!name) return;
+  if (mode === 'add') {
+    const client = { id: rtUid(), name, aaCampaignId: cid, keywords: [] };
+    rtData.clients.push(client);
+    rtData.activeClientId = client.id;
+  } else {
+    const c = rtActiveClient();
+    if (c) { c.name = name; c.aaCampaignId = cid; }
+  }
+  rtSave();
+  rtRender();
+  rtCloseModal('rt-clientModal');
+}
+
+function rtDeleteClient() {
+  const c = rtActiveClient();
+  if (!c || !confirm(`Delete "${c.name}" and all its keywords?`)) return;
+  rtData.clients = rtData.clients.filter(x => x.id !== c.id);
+  rtData.activeClientId = rtData.clients[0]?.id || null;
+  rtSave();
+  rtRender();
+  rtCloseModal('rt-clientModal');
+}
+
+/* ── row management ── */
+function rtAddRow() {
+  const c = rtActiveClient();
+  if (!c) return;
+  c.keywords.push({ id: rtUid(), url: '', keyword: '', volume: null, note: '', popStatus: '', popDate: '', rank: null, prevRank: null, lastCheck: null });
+  rtSave();
+  rtRender();
+}
+
+function rtDeleteRow(id) {
+  const c = rtActiveClient();
+  if (!c) return;
+  c.keywords = c.keywords.filter(k => k.id !== id);
+  rtSave();
+  rtRender();
+}
+
+/* ── inline edit modal ── */
+let _rtEditCtx = null;
+
+function rtOpenEditModal(kwId, field) {
+  const c   = rtActiveClient();
+  const kw  = c?.keywords.find(k => k.id === kwId);
+  if (!kw) return;
+
+  const labels = {
+    keyword:   'Keyword',
+    popStatus: 'POP Status',
+    note:      'Note',
+  };
+  _rtEditCtx = { kwId, field };
+
+  const isLong = field === 'note' || field === 'popStatus';
+  const val    = field === 'popStatus'
+    ? (kw.popStatus + (kw.popDate ? '\n' + kw.popDate : ''))
+    : (kw[field] || '');
+
+  document.getElementById('rt-editModalTitle').textContent = `Edit ${labels[field] || field}`;
+  document.getElementById('rt-editInput').style.display    = isLong ? 'none' : 'block';
+  document.getElementById('rt-editTextarea').style.display = isLong ? 'block' : 'none';
+
+  if (isLong) {
+    document.getElementById('rt-editTextarea').value = val;
+  } else {
+    document.getElementById('rt-editInput').value = val;
+  }
+  rtOpenModal('rt-editModal');
+
+  setTimeout(() => {
+    const el = isLong
+      ? document.getElementById('rt-editTextarea')
+      : document.getElementById('rt-editInput');
+    el.focus(); el.select();
+  }, 50);
+}
+
+function rtEditSave() {
+  if (!_rtEditCtx) return;
+  const { kwId, field } = _rtEditCtx;
+  const c  = rtActiveClient();
+  const kw = c?.keywords.find(k => k.id === kwId);
+  if (!kw) return;
+
+  const isLong = field === 'note' || field === 'popStatus';
+  const raw    = isLong
+    ? document.getElementById('rt-editTextarea').value.trim()
+    : document.getElementById('rt-editInput').value.trim();
+
+  if (field === 'popStatus') {
+    const lines    = raw.split('\n');
+    kw.popStatus   = lines[0].trim();
+    kw.popDate     = lines[1]?.trim() || new Date().toISOString().slice(0, 10);
+  } else {
+    kw[field] = raw;
+  }
+
+  rtSave();
+  rtRender();
+  rtCloseModal('rt-editModal');
+}
+
+/* ── import ── */
+function rtImport() {
+  const c = rtActiveClient();
+  if (!c) return;
+  const text = document.getElementById('rt-importText').value.trim();
+  if (!text) return;
+  const lines = text.split('\n').filter(l => l.trim());
+
+  for (const line of lines) {
+    const cols = line.split('\t').map(s => s.trim());
+    const [url = '', keyword = '', volume = '', note = '', lastCheck = ''] = cols;
+    if (!keyword && !url) continue;
+    // skip header row
+    if (keyword.toLowerCase() === 'emq' || keyword.toLowerCase() === 'keyword') continue;
+    c.keywords.push({
+      id: rtUid(),
+      url: url || '',
+      keyword: keyword || '',
+      volume: volume ? parseInt(volume) || null : null,
+      note: note || '',
+      popStatus: note?.startsWith('POP') ? note : '',
+      popDate:   note?.startsWith('POP') && lastCheck ? lastCheck : '',
+      rank: null,
+      prevRank: null,
+      lastCheck: lastCheck && !note?.startsWith('POP') ? lastCheck : null,
+    });
+  }
+  rtSave();
+  rtRender();
+  rtCloseModal('rt-importModal');
+}
+
+/* ── AA ranking refresh ── */
+async function rtRefreshAll() {
+  const c = rtActiveClient();
+  if (!c) return;
+  if (!hasAA) { alert('AgencyAnalytics API key is not configured on the server.'); return; }
+  if (!c.aaCampaignId) { alert('Set the AgencyAnalytics Campaign ID for this client (click ✎ edit).'); return; }
+
+  const btn = document.getElementById('rt-refreshBtn');
+  btn.disabled   = true;
+  btn.textContent = 'Refreshing…';
+
+  try {
+    const res = await fetch(`/api/aa/campaigns/${encodeURIComponent(c.aaCampaignId)}/rankings/`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || `AA error ${res.status}`);
+    }
+    const data = await res.json();
+
+    // Normalise response — AA can nest data differently
+    const rankings = data?.data?.rankings
+      || data?.rankings
+      || data?.data
+      || [];
+
+    if (!Array.isArray(rankings)) throw new Error('Unexpected AA response format.');
+
+    // Match by keyword string (case-insensitive)
+    let updated = 0;
+    for (const kw of c.keywords) {
+      const match = rankings.find(r => {
+        const rk = (r.keyword?.keyword || r.keyword || '').toLowerCase();
+        return rk === (kw.keyword || '').toLowerCase();
+      });
+      if (match) {
+        kw.prevRank   = kw.rank;
+        kw.rank       = match.rank ?? match.rankings?.[0]?.rank ?? null;
+        kw.volume     = match.search_volume ?? match.volume ?? kw.volume;
+        kw.lastCheck  = new Date().toISOString().slice(0, 10);
+        updated++;
+      }
+    }
+
+    rtSave();
+    document.getElementById('rt-lastRefresh').textContent =
+      `Updated ${updated}/${c.keywords.length} keywords · ${new Date().toLocaleTimeString()}`;
+    rtRender();
+  } catch (e) {
+    alert('Refresh failed: ' + e.message);
+  } finally {
+    btn.disabled   = false;
+    btn.innerHTML  = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> Refresh Rankings`;
+  }
+}
+
+/* ── modal helpers ── */
+function rtOpenModal(id)  { document.getElementById(id).classList.remove('hidden'); }
+function rtCloseModal(id) { document.getElementById(id).classList.add('hidden'); }
+
+// Close modals on overlay click
+document.addEventListener('click', e => {
+  ['rt-clientModal', 'rt-importModal', 'rt-editModal'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el && !el.classList.contains('hidden') && e.target === el) rtCloseModal(id);
+  });
+});
+
+// Close modals on Escape
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    ['rt-clientModal', 'rt-importModal', 'rt-editModal'].forEach(id => rtCloseModal(id));
+  }
+});
 
 /* ── START ── */
 init();

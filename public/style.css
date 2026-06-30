@@ -735,6 +735,117 @@ details[open] .card-prompts-toggle::before { transform: rotate(90deg); }
   background: var(--accent-dim); color: var(--accent); font-weight: 500;
 }
 
+/* ── RANK TRACKER ── */
+.rt-topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 12px; margin-bottom: 20px;
+}
+.rt-client-row  { display: flex; align-items: center; gap: 8px; }
+.rt-actions-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rt-client-select { min-width: 200px; max-width: 300px; }
+.rt-last-refresh { font-size: 11px; color: var(--text-muted); }
+
+.rt-empty-state {
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 14px; min-height: 260px;
+  color: var(--text-secondary); font-size: 14px; text-align: center;
+}
+
+.rt-table-wrap { overflow-x: auto; }
+.rt-table {
+  width: 100%; border-collapse: collapse;
+  font-size: 13px; color: var(--text-primary);
+}
+.rt-table th {
+  background: var(--surface-2); color: var(--text-muted);
+  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .07em; padding: 9px 10px; text-align: left;
+  border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.rt-table td {
+  padding: 9px 10px; border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.rt-table tr:hover td { background: var(--surface-2); }
+
+/* Column widths */
+.rt-th-rank  { width: 80px; }
+.rt-th-url   { width: 180px; }
+.rt-th-kw    { min-width: 160px; }
+.rt-th-vol   { width: 60px; text-align: right; }
+.rt-th-delta { width: 56px; text-align: center; }
+.rt-th-pop   { min-width: 140px; }
+.rt-th-note  { min-width: 120px; }
+.rt-th-check { width: 96px; white-space: nowrap; }
+.rt-th-del   { width: 32px; }
+.rt-td-vol, .rt-td-delta { text-align: center; }
+
+/* Rank badges */
+.rt-badge {
+  display: inline-block; font-size: 12px; font-weight: 700;
+  padding: 3px 9px; border-radius: 20px; line-height: 1.3;
+}
+.rt-green  { background: rgba(45,158,107,.12); color: var(--green); }
+.rt-orange { background: rgba(245,158,11,.12);  color: #92400e; }
+.rt-red    { background: rgba(229,56,59,.1);    color: var(--red); }
+.rt-na     { background: var(--surface-2);       color: var(--text-muted); font-weight: 400; }
+
+/* Delta arrows */
+.rt-delta { font-size: 11px; font-weight: 700; margin-left: 5px; }
+.rt-up    { color: var(--green); }
+.rt-down  { color: var(--red); }
+
+/* Editable cells */
+.rt-editable { cursor: pointer; }
+.rt-editable:hover { background: var(--accent-dim) !important; }
+
+/* URL link */
+.rt-url-link {
+  color: var(--accent); text-decoration: none; font-size: 12px;
+  display: block; max-width: 160px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.rt-url-link:hover { text-decoration: underline; }
+
+/* POP badge */
+.rt-pop-badge {
+  display: inline-block; font-size: 10px; font-weight: 700;
+  padding: 1px 7px; border-radius: 20px;
+  background: rgba(67,97,238,.1); color: var(--accent);
+}
+.rt-pop-date { font-size: 10px; color: var(--text-muted); margin-left: 5px; }
+
+/* Delete button */
+.rt-del-btn {
+  background: none; border: none; cursor: pointer;
+  color: var(--text-muted); font-size: 13px; padding: 2px 6px;
+  border-radius: 4px;
+}
+.rt-del-btn:hover { background: rgba(229,56,59,.1); color: var(--red); }
+
+/* Add row button */
+.rt-add-row-btn {
+  margin-top: 10px; font-size: 12px; color: var(--text-secondary);
+  border: 1px dashed var(--border); border-radius: var(--radius-sm);
+  width: 100%; padding: 8px;
+}
+.rt-add-row-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+
+/* Modals */
+.rt-modal-overlay {
+  position: fixed; inset: 0; background: rgba(26,29,46,.4);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 200; backdrop-filter: blur(2px);
+}
+.rt-modal {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 14px; padding: 28px 28px 24px;
+  width: 400px; max-width: calc(100vw - 32px);
+  box-shadow: 0 12px 48px rgba(67,97,238,.18);
+}
+.rt-modal-title { font-size: 16px; font-weight: 700; color: var(--text-primary); margin-bottom: 18px; }
+.rt-modal-actions { display: flex; gap: 8px; align-items: center; }
+
 /* ── RESPONSIVE ── */
 @media (max-width: 700px) {
   .header-inner { padding: 10px 16px; }

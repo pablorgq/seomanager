@@ -61,6 +61,10 @@
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
       SEO Article
     </button>
+    <button class="tab-btn" data-tab="ranks">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      Rank Tracker
+    </button>
   </nav>
 
   <!-- ── MAIN ── -->
@@ -367,6 +371,108 @@
       </div>
 
     </div><!-- /article tab -->
+
+    <!-- ── RANK TRACKER TAB ── -->
+    <div class="tab-panel" id="tab-ranks">
+
+      <!-- Top bar -->
+      <div class="rt-topbar">
+        <div class="rt-client-row">
+          <select id="rt-clientSelect" class="form-select rt-client-select"></select>
+          <button class="btn btn-secondary btn-sm" id="rt-addClientBtn">+ Client</button>
+          <button class="btn btn-ghost btn-sm" id="rt-editClientBtn" title="Edit client">✎</button>
+        </div>
+        <div class="rt-actions-row">
+          <button class="btn btn-primary" id="rt-refreshBtn">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            Refresh Rankings
+          </button>
+          <button class="btn btn-secondary" id="rt-importBtn">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
+            Import / Paste
+          </button>
+          <span class="rt-last-refresh" id="rt-lastRefresh"></span>
+        </div>
+      </div>
+
+      <!-- No client state -->
+      <div id="rt-noClient" class="rt-empty-state">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity=".3"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        <div>Add a client to start tracking rankings</div>
+        <button class="btn btn-primary" onclick="rtShowAddClient()">+ Add First Client</button>
+      </div>
+
+      <!-- Table -->
+      <div id="rt-tableWrap" class="rt-table-wrap hidden">
+        <table class="rt-table" id="rt-table">
+          <thead>
+            <tr>
+              <th class="rt-th-rank">Rank</th>
+              <th class="rt-th-url">URL</th>
+              <th class="rt-th-kw">Keyword</th>
+              <th class="rt-th-vol">Vol</th>
+              <th class="rt-th-delta">Δ</th>
+              <th class="rt-th-pop">POP Status</th>
+              <th class="rt-th-note">Note</th>
+              <th class="rt-th-check">Last Check</th>
+              <th class="rt-th-del"></th>
+            </tr>
+          </thead>
+          <tbody id="rt-tbody"></tbody>
+        </table>
+        <button class="btn btn-ghost rt-add-row-btn" id="rt-addRowBtn">+ Add Row</button>
+      </div>
+
+      <!-- Add/Edit Client modal -->
+      <div class="rt-modal-overlay hidden" id="rt-clientModal">
+        <div class="rt-modal">
+          <div class="rt-modal-title" id="rt-modalTitle">Add Client</div>
+          <div class="form-group" style="margin-bottom:14px">
+            <label class="form-label">Client Name</label>
+            <input type="text" id="rt-clientName" class="form-input" placeholder="e.g. Seven Oaks Dental">
+          </div>
+          <div class="form-group" style="margin-bottom:14px">
+            <label class="form-label">Agency Analytics Campaign ID</label>
+            <input type="text" id="rt-campaignId" class="form-input" placeholder="e.g. 12345">
+          </div>
+          <div class="rt-modal-actions">
+            <button class="btn btn-primary" id="rt-saveClientBtn">Save</button>
+            <button class="btn btn-ghost" onclick="rtCloseModal('rt-clientModal')">Cancel</button>
+            <button class="btn btn-ghost rt-delete-client-btn hidden" id="rt-deleteClientBtn" style="margin-left:auto;color:var(--red)">Delete Client</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Import modal -->
+      <div class="rt-modal-overlay hidden" id="rt-importModal">
+        <div class="rt-modal" style="width:580px">
+          <div class="rt-modal-title">Import Keywords</div>
+          <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">
+            Paste tab-separated data from your spreadsheet. Expected columns:<br>
+            <code style="font-size:11px">URL &nbsp; Keyword &nbsp; Volume &nbsp; Note &nbsp; Last Check</code>
+          </p>
+          <textarea id="rt-importText" class="form-textarea" rows="10" style="font-family:monospace;font-size:12px" placeholder="Paste rows here…"></textarea>
+          <div class="rt-modal-actions" style="margin-top:12px">
+            <button class="btn btn-primary" id="rt-importConfirmBtn">Import</button>
+            <button class="btn btn-ghost" onclick="rtCloseModal('rt-importModal')">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Edit cell modal -->
+      <div class="rt-modal-overlay hidden" id="rt-editModal">
+        <div class="rt-modal" style="width:440px">
+          <div class="rt-modal-title" id="rt-editModalTitle">Edit</div>
+          <input type="text" id="rt-editInput" class="form-input" style="margin-bottom:4px">
+          <textarea id="rt-editTextarea" class="form-textarea" rows="3" style="display:none;margin-bottom:4px"></textarea>
+          <div class="rt-modal-actions" style="margin-top:12px">
+            <button class="btn btn-primary" id="rt-editSaveBtn">Save</button>
+            <button class="btn btn-ghost" onclick="rtCloseModal('rt-editModal')">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /rank tracker tab -->
 
   </main>
 

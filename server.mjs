@@ -16,6 +16,12 @@ const AUTH_USER  = process.env.AUTH_USER || 'pablo';
 const AUTH_PASS  = process.env.AUTH_PASS  || null;
 
 /* ─────────────────────────────────────────────
+   AGENCY ANALYTICS
+───────────────────────────────────────────── */
+const AA_KEY  = process.env.AA_API_KEY || null;
+const AA_BASE = 'https://app.agencyanalytics.com/api/v2';
+
+/* ─────────────────────────────────────────────
    GOOGLE CLOUD STORAGE
 ───────────────────────────────────────────── */
 const GCS_BUCKET = process.env.GCS_BUCKET_NAME || null;
@@ -343,7 +349,27 @@ async function proxyOpenAI(url, req, res) {
   }
 }
 
-app.get('/api/config', (req, res) => res.json({ hasServerKey: !!OPENAI_KEY, hasGcs: !!(gcs && GCS_BUCKET) }));
+app.get('/api/config', (req, res) => res.json({
+  hasServerKey: !!OPENAI_KEY,
+  hasGcs: !!(gcs && GCS_BUCKET),
+  hasAA: !!AA_KEY,
+}));
+
+/* ─────────────────────────────────────────────
+   AGENCY ANALYTICS PROXY
+───────────────────────────────────────────── */
+app.get('/api/aa/*', apiGuard, async (req, res) => {
+  if (!AA_KEY) return res.status(503).json({ error: { message: 'AA_API_KEY not configured on this server.' } });
+  const path = req.params[0];
+  const qs   = new URLSearchParams(req.query).toString();
+  const url  = qs ? `${AA_BASE}/${path}?${qs}` : `${AA_BASE}/${path}`;
+  try {
+    const r = await fetch(url, { headers: { Authorization: AA_KEY } });
+    res.status(r.status).json(await r.json());
+  } catch (e) {
+    res.status(502).json({ error: { message: e.message } });
+  }
+});
 
 app.post('/api/openai/text',   apiGuard, (req, res) => proxyOpenAI('https://api.openai.com/v1/responses', req, res));
 app.post('/api/openai/images', apiGuard, (req, res) => proxyOpenAI('https://api.openai.com/v1/images/generations', req, res));
