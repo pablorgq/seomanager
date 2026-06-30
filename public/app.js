@@ -1302,12 +1302,14 @@ async function rtLoadCampaigns(preselectId) {
       data?.error?.message ||
       `AA error ${data?.code || r.status}`
     );
-    const list = Array.isArray(data?.data)    ? data.data
-               : Array.isArray(data?.results) ? data.results
-               : Array.isArray(data)          ? data
+    const list = Array.isArray(data?.data)            ? data.data
+               : Array.isArray(data?.results?.data)   ? data.results.data
+               : Array.isArray(data?.results)          ? data.results
+               : Array.isArray(data)                   ? data
                : [];
     if (!list.length) throw new Error(
-      `No campaigns returned — keys: ${Object.keys(data).join(', ')}`
+      `No campaigns returned — top keys: ${Object.keys(data).join(', ')}` +
+      (data?.results ? ` / results keys: ${Object.keys(data.results).join(', ')}` : '')
     );
     sel.innerHTML = '<option value="">— select a campaign —</option>' +
       list.map(c =>
@@ -1514,7 +1516,11 @@ async function rtRefreshAll() {
         d?.error?.message ||
         `AA error ${d?.code || r.status}`
       );
-      return Array.isArray(d?.data) ? d.data : Array.isArray(d) ? d : [];
+      return Array.isArray(d?.data)           ? d.data
+           : Array.isArray(d?.results?.data)  ? d.results.data
+           : Array.isArray(d?.results)         ? d.results
+           : Array.isArray(d)                  ? d
+           : [];
     }
 
     // Step 1: get keyword phrases + ids for this campaign (no date fields — they're date-dependent)
