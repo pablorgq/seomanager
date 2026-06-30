@@ -1289,14 +1289,25 @@ async function rtLoadCampaigns(preselectId) {
         provider: 'agency-analytics-v2',
         asset: 'campaign',
         operation: 'read',
-        fields: ['id', 'company', 'url', 'status'],
+        fields: ['id', 'company', 'url'],
         sort: [{ id: 'asc' }],
         limit: 200,
         offset: 0,
       }),
     });
     const data = await r.json();
-    const list = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
+    if (!r.ok) throw new Error(
+      data?.error?.message ||
+      (data?.results?.messages || []).join('; ') ||
+      `AA error ${r.status}`
+    );
+    const list = Array.isArray(data?.data)    ? data.data
+               : Array.isArray(data?.results) ? data.results
+               : Array.isArray(data)          ? data
+               : [];
+    if (!list.length) throw new Error(
+      `No campaigns returned — response keys: ${Object.keys(data).join(', ')}`
+    );
     sel.innerHTML = '<option value="">— select a campaign —</option>' +
       list.map(c =>
         `<option value="${escHtml(String(c.id))}" data-name="${escHtml(c.company || '')}">`+
@@ -1304,7 +1315,7 @@ async function rtLoadCampaigns(preselectId) {
       ).join('');
     if (preselectId) sel.value = String(preselectId);
   } catch (e) {
-    sel.innerHTML = `<option value="">— failed to load (${escHtml(e.message)}) —</option>`;
+    sel.innerHTML = `<option value="">Error: ${escHtml(e.message)}</option>`;
   }
   sel.disabled = false;
 }
