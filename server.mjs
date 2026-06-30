@@ -17,9 +17,11 @@ const AUTH_PASS  = process.env.AUTH_PASS  || null;
 
 /* ─────────────────────────────────────────────
    AGENCY ANALYTICS
+   API: POST https://apirequest.app/query
+   Auth: Basic base64(:<api_key>)
 ───────────────────────────────────────────── */
 const AA_KEY  = process.env.AA_API_KEY || null;
-const AA_BASE = 'https://app.agencyanalytics.com/api/v2';
+const AA_BASE = 'https://apirequest.app/query';
 
 /* ─────────────────────────────────────────────
    PAGE OPTIMIZER PRO
@@ -390,15 +392,24 @@ app.use('/api/pop', apiGuard, async (req, res) => {
 
 /* ─────────────────────────────────────────────
    AGENCY ANALYTICS PROXY
+   Forwards the client's POST body to apirequest.app/query
+   with Basic auth (base64(:<key>)).
 ───────────────────────────────────────────── */
-app.use('/api/aa', apiGuard, async (req, res) => {
+app.post('/api/aa', apiGuard, async (req, res) => {
   if (!AA_KEY) return res.status(503).json({ error: { message: 'AA_API_KEY not configured on this server.' } });
-  const aaPath = req.path.replace(/^\//, '');  // strip leading slash
-  const qs     = new URLSearchParams(req.query).toString();
-  const url    = `${AA_BASE}/${aaPath}${qs ? '?' + qs : ''}`;
+  const b64 = Buffer.from(`:${AA_KEY}`).toString('base64');
   try {
-    const r = await fetch(url, { headers: { Authorization: AA_KEY } });
-    res.status(r.status).json(await r.json());
+    const r = await fetch(AA_BASE, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Basic ${b64}` },
+      body: JSON.stringify(req.body),
+    });
+    const text = await r.text();
+    try {
+      res.status(r.status).json(JSON.parse(text));
+    } catch {
+      res.status(502).json({ error: { message: `AA returned HTTP ${r.status} (non-JSON). Check your API key.` } });
+    }
   } catch (e) {
     res.status(502).json({ error: { message: e.message } });
   }

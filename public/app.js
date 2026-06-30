@@ -1441,33 +1441,45 @@ async function rtRefreshAll() {
   btn.textContent = 'Refreshing…';
 
   try {
-    const res = await fetch(`/api/aa/campaigns/${encodeURIComponent(c.aaCampaignId)}/rankings/`);
+    const queryBody = {
+      provider: 'agency-analytics-v2',
+      asset: 'keyword-rankings',
+      operation: 'read',
+      fields: ['keywordId', 'keywordPhrase', 'googleRanking', 'googleRankingChange', 'searchVolume'],
+      filters: [{ field: 'campaign_id', operator: 'eq', value: Number(c.aaCampaignId) }],
+      limit: 500,
+      offset: 0,
+    };
+    const res = await fetch('/api/aa', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(queryBody),
+    });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.error?.message || `AA error ${res.status}`);
+      throw new Error(err.error?.message || err.message || `AA error ${res.status}`);
     }
     const data = await res.json();
 
-    // Normalise response — AA can nest data differently
-    const rankings = data?.data?.rankings
-      || data?.rankings
-      || data?.data
-      || [];
+    // AA v2 returns { data: [...] }
+    const rows = Array.isArray(data?.data) ? data.data
+               : Array.isArray(data)       ? data
+               : [];
 
-    if (!Array.isArray(rankings)) throw new Error('Unexpected AA response format.');
+    if (!rows.length) throw new Error('No ranking rows returned — check the campaign ID.');
 
-    // Match by keyword string (case-insensitive)
+    // Match by keyword phrase (case-insensitive)
     let updated = 0;
     for (const kw of c.keywords) {
-      const match = rankings.find(r => {
-        const rk = (r.keyword?.keyword || r.keyword || '').toLowerCase();
-        return rk === (kw.keyword || '').toLowerCase();
-      });
+      const kwLower = (kw.keyword || '').toLowerCase();
+      const match = rows.find(r =>
+        (r.keywordPhrase || r.keyword?.keyword || r.keyword || '').toLowerCase() === kwLower
+      );
       if (match) {
-        kw.prevRank   = kw.rank;
-        kw.rank       = match.rank ?? match.rankings?.[0]?.rank ?? null;
-        kw.volume     = match.search_volume ?? match.volume ?? kw.volume;
-        kw.lastCheck  = new Date().toISOString().slice(0, 10);
+        kw.prevRank  = kw.rank;
+        kw.rank      = match.googleRanking ?? match.rank ?? null;
+        kw.volume    = match.searchVolume  ?? match.volume ?? kw.volume;
+        kw.lastCheck = new Date().toISOString().slice(0, 10);
         updated++;
       }
     }
