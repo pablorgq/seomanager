@@ -1959,8 +1959,16 @@ function coraParseLSI(wb) {
   if (!ws) return { items: [], sheetNames: wb.SheetNames };
 
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-  // Debug snapshot: first 6 rows (helps diagnose header detection issues)
-  const debugRows = rows.slice(0, 6).map((r, i) => `[${i}] ${r.slice(0, 8).map(c => String(c).slice(0, 20)).join(' | ')}`);
+  const debugRows = rows.slice(0, 8).map((r, i) => `[${i}] ${r.slice(0, 10).map(c => String(c).slice(0, 25)).join(' | ')}`);
+
+  // Extract Cora's statistical significance thresholds from preamble rows 3-4
+  let spearmanCrit = null, pearsonCrit = null;
+  for (let r = 0; r < Math.min(10, rows.length); r++) {
+    const c0 = String(rows[r][0] || '').toLowerCase();
+    const c1 = parseFloat(rows[r][1]);
+    if (/spearman/i.test(c0) && !isNaN(c1)) spearmanCrit = c1;
+    if (/pearson/i.test(c0)  && !isNaN(c1)) pearsonCrit  = c1;
+  }
 
   // Header scan: broad keyword list, scan up to 100 rows (Cora has long preambles)
   const { map, rowIdx } = coraHeaderMap(
@@ -2033,7 +2041,7 @@ function coraParseLSI(wb) {
     if (a.hasCorrData !== b.hasCorrData) return a.hasCorrData ? -1 : 1;
     return b.priority - a.priority;
   });
-  return { items, sheetNames: wb.SheetNames, debugRows: [] };
+  return { items, sheetNames: wb.SheetNames, debugRows: [], spearmanCrit, pearsonCrit };
 }
 
 // ── Variations parser (wide format: terms = columns, results = rows) ─
@@ -2206,8 +2214,10 @@ async function coraHandleFile(file) {
       variations: varResult.items,
       grades:     coraParseGrades(wb),
       sheets:     wb.SheetNames,
-      lsiSheets:  lsiResult.sheetNames,
-      lsiDebug:   lsiResult.debugRows,
+      lsiSheets:      lsiResult.sheetNames,
+      lsiDebug:       lsiResult.debugRows,
+      lsiCritSpearman: lsiResult.spearmanCrit,
+      lsiCritPearson:  lsiResult.pearsonCrit,
     };
     coraRender();
   } catch (err) {
@@ -2426,9 +2436,19 @@ function coraRenderLSI() {
     });
     const wordGroups = Object.entries(byWords).sort((a, b) => a[0].localeCompare(b[0]));
 
+    const sCrit = coraReport?.lsiCritSpearman;
+    const pCrit = coraReport?.lsiCritPearson;
+    const critNote = (sCrit || pCrit)
+      ? `<div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">
+           Cora significance threshold: Spearman |r| ≥ <strong>${sCrit ?? '—'}</strong> · Pearson |r| ≥ <strong>${pCrit ?? '—'}</strong>.
+           Terms below threshold are weak signals — add them where they fit naturally, don't force them.
+         </div>`
+      : '';
+
     analysisEl.innerHTML = `
       <div class="cora-lsi-analysis-box">
         <h4 style="margin:0 0 8px;font-size:13px;color:var(--text)">📊 LSI Analysis Summary</h4>
+        ${critNote}
         <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px">
           <span class="cora-stat-pill" style="background:rgba(255,100,0,.12);color:#ff6400">🔥 ${strongCount} strong signals</span>
           <span class="cora-stat-pill" style="background:rgba(67,97,238,.12);color:#4361ee">⚡ ${moderateCount} moderate signals</span>
