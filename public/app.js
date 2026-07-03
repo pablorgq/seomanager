@@ -1249,7 +1249,7 @@ function rtRender() {
     th.dataset.sortDir = isSorted ? rtSort.dir : '';
   });
 
-  // Sort keywords
+  // Sort keywords — MK rows always float to top, then apply column sort within each group
   let keywords = [...(client.keywords || [])];
   if (rtSort.col) {
     keywords.sort((a, b) => {
@@ -1269,6 +1269,9 @@ function rtRender() {
     });
   }
 
+  // MK always on top regardless of sort
+  keywords.sort((a, b) => (b.mainKeyword ? 1 : 0) - (a.mainKeyword ? 1 : 0));
+
   const tbody = document.getElementById('rt-tbody');
   tbody.innerHTML = '';
   keywords.forEach(kw => {
@@ -1278,8 +1281,9 @@ function rtRender() {
       <td class="rt-td-rank">${rtRankBadge(kw.rank, kw.prevRank)}</td>
       <td class="rt-td-local">${rtLocalBadge(kw.localRank)}</td>
       <td class="rt-td-url"><a href="${escHtml(kw.url || '')}" target="_blank" rel="noopener" class="rt-url-link" title="${escHtml(kw.url || '')}">${escHtml(rtShortUrl(kw.url || ''))}</a></td>
-      <td class="rt-td-kw rt-editable" data-field="keyword">${escHtml(kw.keyword || '')}</td>
-      <td class="rt-td-mk"><button class="rt-mk-btn${kw.mainKeyword ? ' rt-mk-active' : ''}" data-id="${escHtml(kw.id)}" title="Toggle Main Keyword">MK</button></td>
+      <td class="rt-td-kw rt-editable" data-field="keyword">
+        <button class="rt-mk-btn${kw.mainKeyword ? ' rt-mk-active' : ''}" data-id="${escHtml(kw.id)}" title="Toggle Main Keyword">MK</button>
+        ${escHtml(kw.keyword || '')}</td>
       <td class="rt-td-target rt-editable" data-field="targetUrl">${kw.targetUrl ? `<a href="${escHtml(kw.targetUrl)}" target="_blank" rel="noopener" class="rt-url-link" title="${escHtml(kw.targetUrl)}">${escHtml(rtShortUrl(kw.targetUrl))}</a>` : '<span class="rt-na">—</span>'}</td>
       <td class="rt-td-vol">${kw.volume ? escHtml(String(kw.volume)) : '<span class="rt-na">—</span>'}</td>
       <td class="rt-td-delta">${rtDeltaCell(kw.rank, kw.prevRank)}</td>

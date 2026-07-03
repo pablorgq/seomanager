@@ -784,8 +784,6 @@ details[open] .card-prompts-toggle::before { transform: rotate(90deg); }
 .rt-td-local { text-align: center; }
 .rt-th-url    { width: 180px; }
 .rt-th-kw     { min-width: 160px; }
-.rt-th-mk     { width: 44px; text-align: center; }
-.rt-td-mk     { text-align: center; }
 .rt-th-target { min-width: 140px; }
 .rt-th-vol    { width: 60px; text-align: right; }
 .rt-th-delta { width: 56px; text-align: center; }
@@ -822,11 +820,12 @@ details[open] .card-prompts-toggle::before { transform: rotate(90deg); }
 }
 .rt-url-link:hover { text-decoration: underline; }
 
-/* MK (Main Keyword) toggle button */
+/* MK (Main Keyword) toggle button — inline next to keyword text */
 .rt-mk-btn {
-  font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+  font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 4px;
   border: 1px solid var(--border); color: var(--text-muted); background: transparent;
   cursor: pointer; transition: all .15s; letter-spacing: .03em;
+  vertical-align: middle; margin-right: 6px; white-space: nowrap; flex-shrink: 0;
 }
 .rt-mk-btn:hover { border-color: var(--accent); color: var(--accent); }
 .rt-mk-btn.rt-mk-active {
