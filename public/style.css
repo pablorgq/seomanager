@@ -1027,6 +1027,18 @@ details[open] .card-prompts-toggle::before { transform: rotate(90deg); }
 .cora-phase-tag-green { background: rgba(0,176,80,.12); color: #00B050; }
 .cora-phase-tag-easy  { background: rgba(67,97,238,.1); color: var(--accent); }
 
+/* Factor type badges */
+.cora-ft-badge  { display: inline-block; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+.cora-ft-var    { background: rgba(67,97,238,.12);  color: #4361ee; }
+.cora-ft-lsi    { background: rgba(0,176,80,.12);   color: #00B050; }
+.cora-ft-ent    { background: rgba(255,140,0,.12);  color: #e07000; }
+.cora-ft-tag    { background: rgba(128,90,213,.12); color: #805ad5; }
+.cora-ft-word   { background: rgba(14,165,233,.12); color: #0ea5e9; }
+.cora-ft-link   { background: rgba(192,0,0,.10);    color: #c00000; }
+.cora-ft-other  { background: rgba(128,128,128,.1); color: var(--text-muted); }
+.cora-top200    { color: var(--accent); font-size: 11px; margin-left: 3px; }
+.cora-row-done  { opacity: .45; }
+
 /* LSI priority badges */
 .cora-pri { display: inline-block; font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 4px; margin-right: 2px; white-space: nowrap; vertical-align: middle; }
 .cora-pri-strong { background: rgba(255,140,0,.15); color: #e05c00; }

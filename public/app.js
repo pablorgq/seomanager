@@ -1873,64 +1873,83 @@ function coraColorType(rgb) {
 
 // ── metadata ─────────────────────────────────────────────────
 function coraParseMeta(wb) {
-  const ws   = coraFindSheet(wb, ['road.?map', 'metadata', 'info', 'summary']);
+  const ws = coraFindSheet(wb, ['road.?map', 'roadmap']);
   if (!ws) return {};
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
   const meta = {};
-  for (let r = 0; r < Math.min(15, rows.length); r++) {
+  for (let r = 0; r < Math.min(20, rows.length); r++) {
     const row   = rows[r];
-    const label = String(row[0] || '').toLowerCase().trim();
-    const val   = String(row[1] || row[2] || '').trim();
-    if (!meta.keyword  && label.includes('keyword'))                                       meta.keyword  = val;
-    if (!meta.domain   && (label.includes('domain') || label.includes('website') || label.includes('url'))) meta.domain = val;
-    if (!meta.date     && (label.includes('date')   || label.includes('time')))            meta.date     = val;
-    if (!meta.position && label.includes('position'))                                      meta.position = val;
+    const c0    = String(row[0] || '').trim();
+    const c1    = String(row[1] || '').trim();
+    // Row 0: URL of tracked page
+    if (r === 0 && /^https?:\/\//i.test(c0)) { meta.url = c0; meta.domain = c0.replace(/^https?:\/\//i,'').replace(/\/.*$/,''); }
+    // "SEO Tuning Roadmap [domain]"
+    if (/seo tuning roadmap/i.test(c0) && c1) meta.domain = meta.domain || c1;
+    // Settings rows
+    if (/localize near/i.test(c0) && c1) meta.location = c1;
+    if (/google country/i.test(c0) && c1) meta.country  = c1;
+    if (/keyword strategy/i.test(c0) && c1) meta.kwStrategy = c1;
   }
   return meta;
 }
 
 // ── Road Map parser ──────────────────────────────────────────
+// Cora Roadmap structure (no column header row):
+//   Col 0: Factor name  |  Col 1: "Add X more. ( Type )"
+//   Col 2: Easy/Difficult  |  Col 3: On Page / Off Page / Web Development / Academic / Configuration
+//   Col 4: "Top 200 Factor" or ""  |  Col 5: "High Usage Rate" or ""  |  Col 6: NOT DONE / DONE
+// Phase rows: Col 0 = "Phase 1: Title & Headings" (other cols empty)
+// corrType detected from cell fill color: green / red / black (default)
 function coraParseRoadMap(wb) {
   const ws = coraFindSheet(wb, ['road.?map', 'roadmap']);
   if (!ws) return [];
 
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-  const { map, rowIdx } = coraHeaderMap(rows, ['factor', 'deficit', 'road map'], 40);
-  if (rowIdx === -1) return [];
 
-  const fCol    = Math.max(0, coraCol(map, 'factor', 'road map'));
-  const catCol  = coraCol(map, 'stories', 'category', 'story', 'group', 'section');
-  const yrCol   = coraCol(map, 'your count', 'you', 'your', 'count');
-  const goalCol = coraCol(map, 'practical maximum', 'goal', 'target', 'max');
-  const defCol  = coraCol(map, 'deficit');
-
-  const items = [];
-  for (let r = rowIdx + 1; r < rows.length; r++) {
-    const row    = rows[r];
-    const factor = String(row[fCol] ?? '').trim();
-    if (!factor || /^(factor|road map|stories|n\/a)$/i.test(factor)) continue;
-
-    // Detect correlation type from row cell colors
-    let corrType = 'black'; // default = competitor-specific
-    let easy     = false;
-
-    for (let c = 0; c < Math.min(10, (row.length || 10)); c++) {
-      const rgb = coraCellFill(ws, r, c);
-      const t   = coraColorType(rgb);
-      if (t === 'green')  { corrType = 'green'; }
-      if (t === 'red'  )  { corrType = 'red';   }
-      if (t === 'yellow') { easy     = true;     }
-    }
-
-    const yourVal = yrCol   >= 0 ? (parseFloat(String(row[yrCol]   ?? '')) || 0) : 0;
-    const goal    = goalCol >= 0 ? (parseFloat(String(row[goalCol] ?? '')) || 0) : 0;
-    const deficit = defCol  >= 0 ? (parseFloat(String(row[defCol]  ?? '')) || 0) : Math.max(0, goal - yourVal);
-    const cat     = catCol  >= 0 ? String(row[catCol] ?? '').trim() : '';
-
-    items.push({ factor, category: cat, corrType, easy, yourVal, goal, deficit });
+  // Find where phases start
+  let dataStart = 0;
+  for (let r = 0; r < Math.min(40, rows.length); r++) {
+    if (/^Phase\s+[\dX]+/i.test(String(rows[r][0] || '').trim())) { dataStart = r; break; }
   }
 
-  return items.sort((a, b) => b.deficit - a.deficit);
+  const items = [];
+  let currentPhase = 'Other';
+
+  for (let r = dataStart; r < rows.length; r++) {
+    const row  = rows[r];
+    const c0   = String(row[0] ?? '').trim();
+    if (!c0) continue;
+
+    // Phase header row: "Phase 1: Title & Headings"
+    if (/^Phase\s+[\dX]+/i.test(c0)) { currentPhase = c0; continue; }
+
+    // Data row: col 1 must have "Add X more. ( Type )"
+    const action = String(row[1] ?? '').trim();
+    if (!/^Add\s+/i.test(action)) continue;
+
+    const countM   = action.match(/Add\s+([\d,]+)\s+more/i);
+    const deficit  = countM ? parseInt(countM[1].replace(/,/g,'')) : 0;
+    const typeM    = action.match(/\(\s*([^)]+?)\s*\)/);
+    const factorType = typeM ? typeM[1].trim() : '';
+
+    const easy      = /^easy$/i.test(String(row[2] ?? '').trim());
+    const category  = String(row[3] ?? '').trim();  // On Page / Off Page / Web Development / Academic / Configuration
+    const top200    = /top 200/i.test(String(row[4] ?? ''));
+    const highUsage = /high usage/i.test(String(row[5] ?? ''));
+    const done      = /^done$/i.test(String(row[6] ?? '').trim());
+
+    // Correlation type from cell color
+    let corrType = 'black';
+    for (let c = 0; c < 8; c++) {
+      const t = coraColorType(coraCellFill(ws, r, c));
+      if (t === 'green') { corrType = 'green'; break; }
+      if (t === 'red')   { corrType = 'red';   break; }
+    }
+
+    items.push({ factor: c0, phase: currentPhase, factorType, category, easy, deficit, top200, highUsage, done, corrType });
+  }
+
+  return items;
 }
 
 // ── LSI parser ───────────────────────────────────────────────
@@ -2255,17 +2274,20 @@ function coraFilteredRoadMap() {
 }
 
 function coraRMRow(item) {
-  const LABEL = { green: '🟢 Universal', black: '⚫ Competitor', red: '🔴 Opportunity' };
-  const CLS   = { green: 'cora-badge-green', black: 'cora-badge-black', red: 'cora-badge-red' };
+  const LABEL    = { green: '🟢 Universal', black: '⚫ Competitor', red: '🔴 Opportunity' };
+  const CLS      = { green: 'cora-badge-green', black: 'cora-badge-black', red: 'cora-badge-red' };
+  const CAT_SHORT = { 'On Page':'On Page', 'Off Page':'Off Page', 'Web Development':'Web Dev', 'Academic':'Academic', 'Configuration':'Config' };
+  const TYPE_CLS  = { Variations:'cora-ft-var', LSI:'cora-ft-lsi', Entities:'cora-ft-ent', Tags:'cora-ft-tag', Words:'cora-ft-word', Links:'cora-ft-link', Backlinks:'cora-ft-link', Other:'cora-ft-other' };
+  const catShort  = CAT_SHORT[item.category] || item.category;
+  const typeCls   = TYPE_CLS[item.factorType] || 'cora-ft-other';
   return `
-    <tr class="cora-rm-row ${item.corrType === 'green' ? 'cora-row-green' : item.corrType === 'red' ? 'cora-row-red' : ''}">
+    <tr class="cora-rm-row ${item.corrType === 'green' ? 'cora-row-green' : item.corrType === 'red' ? 'cora-row-red' : ''}${item.done ? ' cora-row-done' : ''}">
       <td><span class="cora-type-badge ${CLS[item.corrType] || ''}">${LABEL[item.corrType] || item.corrType}</span></td>
-      <td class="cora-factor-cell">${escHtml(item.factor)}</td>
-      <td class="cora-cat-cell">${escHtml(item.category)}</td>
+      <td class="cora-factor-cell">${escHtml(item.factor)}${item.top200 ? ' <span class="cora-top200">★</span>' : ''}</td>
+      <td><span class="cora-ft-badge ${typeCls}">${escHtml(item.factorType)}</span></td>
+      <td style="font-size:11px;color:var(--text-muted)">${escHtml(catShort)}</td>
       <td>${item.easy ? '<span class="cora-easy-badge">⚡ Easy</span>' : '<span class="cora-hard-badge">🔧 Hard</span>'}</td>
-      <td style="text-align:right;font-variant-numeric:tabular-nums">${item.yourVal !== 0 ? item.yourVal : '—'}</td>
-      <td style="text-align:right;font-variant-numeric:tabular-nums">${item.goal    !== 0 ? item.goal    : '—'}</td>
-      <td style="text-align:right"><strong class="cora-gap-val">${item.deficit > 0 ? '+' + item.deficit : item.deficit}</strong></td>
+      <td style="text-align:right"><strong class="cora-gap-val">+${item.deficit}</strong></td>
     </tr>`;
 }
 
@@ -2287,7 +2309,7 @@ function coraRenderRoadMap() {
 
   const tbody = document.getElementById('cora-rm-tbody');
   if (!items.length) {
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:24px">No factors match the current filters.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:24px">No factors match the current filters.</td></tr>';
     return;
   }
 
@@ -2296,18 +2318,18 @@ function coraRenderRoadMap() {
     return;
   }
 
-  // Group by phase (Stories column = item.category)
+  // Group by phase (item.phase = "Phase 1: Title & Headings")
   const grouped = {};
   items.forEach(item => {
-    const ph = item.category || 'Other';
+    const ph = item.phase || 'Other';
     if (!grouped[ph]) grouped[ph] = [];
     grouped[ph].push(item);
   });
 
   const sortedPhases = Object.keys(grouped).sort((a, b) => {
-    const na = parseFloat(a), nb = parseFloat(b);
-    if (!isNaN(na) && !isNaN(nb)) return na - nb;
-    return a.localeCompare(b);
+    const na = parseInt((a.match(/\d+/) || [])[0] || '999');
+    const nb = parseInt((b.match(/\d+/) || [])[0] || '999');
+    return na - nb;
   });
 
   let html = '';
@@ -2316,8 +2338,8 @@ function coraRenderRoadMap() {
     const nE = phItems.filter(i => i.easy).length;
     const nG = phItems.filter(i => i.corrType === 'green').length;
     html += `<tr class="cora-phase-hdr">
-      <td colspan="7">
-        <span class="cora-phase-label">Phase ${escHtml(ph)}</span>
+      <td colspan="6">
+        <span class="cora-phase-label">${escHtml(ph)}</span>
         <span class="cora-phase-meta">${phItems.length} factor${phItems.length !== 1 ? 's' : ''}</span>
         ${nG ? `<span class="cora-phase-tag cora-phase-tag-green">${nG} 🟢</span>` : ''}
         ${nE ? `<span class="cora-phase-tag cora-phase-tag-easy">${nE} ⚡ easy</span>` : ''}
