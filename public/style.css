@@ -1062,8 +1062,10 @@ details[open] .card-prompts-toggle::before { transform: rotate(90deg); }
 .cora-chip-badge-mod   { color: #4361ee; }
 
 /* Grades grid */
-.cora-grades-grid  { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; margin-top: 4px; }
-.cora-grade-card   { background: var(--surface-alt); border: 1px solid var(--border); border-radius: 10px; padding: 18px 12px; text-align: center; }
-.cora-grade-letter { font-size: 40px; font-weight: 800; line-height: 1; font-family: 'Syne', sans-serif; margin-bottom: 8px; }
-.cora-grade-cat    { font-size: 12px; color: var(--text-muted); font-weight: 500; line-height: 1.3; }
+.cora-grades-grid  { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-top: 4px; }
+.cora-grade-card   { background: var(--surface-alt); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; display: flex; align-items: center; gap: 14px; }
+.cora-grade-letter { font-size: 38px; font-weight: 800; line-height: 1; font-family: 'Syne', sans-serif; flex-shrink: 0; width: 44px; text-align: center; }
+.cora-grade-info   { flex: 1; min-width: 0; }
+.cora-grade-cat    { font-size: 12px; color: var(--text-muted); font-weight: 600; line-height: 1.3; }
+.cora-grade-rec    { font-size: 11px; color: var(--text-muted); opacity: 0.7; margin-top: 3px; line-height: 1.4; }
 .cora-grades-empty { color: var(--text-muted); padding: 24px; text-align: center; grid-column: 1/-1; }

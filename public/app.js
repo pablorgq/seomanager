@@ -2570,11 +2570,48 @@ function coraRenderGrades() {
     'F' :'#A50000',
   };
 
-  grid.innerHTML = grades.map(({ category, grade }) => `
+  const GRADE_RECS = {
+    default: {
+      A: 'Maintain current level',
+      B: 'Minor improvements available',
+      C: 'Moderate gaps — worth addressing',
+      D: 'Significant gaps — prioritize',
+      F: 'Critical gap — fix first',
+    },
+    'Page Size':          { F:'Reduce page weight vs top 10',           D:'Trim scripts & images for load speed' },
+    'Meta Tags':          { F:'Fix title, description & robots meta',   D:'Optimize meta tags with keyword variants' },
+    'Title Tags':         { F:'Rewrite title tags with primary keyword', D:'Tune title length & keyword order' },
+    'Headings':           { F:'Add keyword-rich H1/H2/H3 structure',    D:'Expand headings with semantic variants' },
+    'Navigation':         { F:'Improve internal links & anchor text',   D:'Add keyword-relevant nav links' },
+    'Content Tuning':     { F:'Increase on-page keyword coverage',      D:'Add related terms & semantic variations' },
+    'Content Formatting': { F:'Add lists, bold & paragraph breaks',     D:'Improve content structure & scannability' },
+    'Images':             { F:'Add alt text & keyword file names',      D:'Optimize image context & descriptions' },
+    'Videos':             { F:'Embed relevant video content',           D:'Add video with keyword-rich titles' },
+    'Sentiment':          { F:'Match tone of top-ranking pages',        D:'Balance positive/neutral sentiment' },
+    'Keyword Frequency':  { F:'Increase keyword density in content',    D:'Add keyword variations throughout' },
+    'Trust':              { F:'Add author bio, citations & trust signals', D:'Improve credibility indicators' },
+    'Forms':              { F:'Add or optimize contact/lead forms',     D:'Improve form visibility & placement' },
+    'Ratings & Reviews':  { F:'Add review schema & user ratings',       D:'Improve review content & structured data' },
+    'Open Graph':         { F:'Add OG tags for social sharing',         D:'Complete Open Graph metadata' },
+    'Authorship':         { F:'Add author markup & credentials',        D:'Strengthen authorship signals' },
+    'Social Integration': { F:'Add social sharing & profile links',     D:'Improve social signal indicators' },
+    'Fringe':             { F:'Fix canonicals, schema & speed signals', D:'Address technical SEO gaps' },
+    'Misc':               { F:'Check remaining miscellaneous factors',  D:'Address lower-priority items' },
+  };
+
+  grid.innerHTML = grades.map(({ category, grade }) => {
+    const catTips = GRADE_RECS[category] || {};
+    const gradeKey = grade.replace(/[+-]$/, ''); // strip +/- for tip lookup
+    const rec = catTips[gradeKey] || catTips[grade] || GRADE_RECS.default[gradeKey] || GRADE_RECS.default[grade] || '';
+    return `
     <div class="cora-grade-card">
       <div class="cora-grade-letter" style="color:${gradeColor[grade] || '#888'}">${escHtml(grade)}</div>
-      <div class="cora-grade-cat">${escHtml(category)}</div>
-    </div>`).join('');
+      <div class="cora-grade-info">
+        <div class="cora-grade-cat">${escHtml(category)}</div>
+        ${rec ? `<div class="cora-grade-rec">${escHtml(rec)}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
 }
 
 function coraCopyBrief() {
