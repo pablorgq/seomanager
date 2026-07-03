@@ -2371,34 +2371,63 @@ function coraRenderLSI() {
   // Build expert analysis panel above table
   const analysisEl = document.getElementById('cora-lsi-analysis');
   if (analysisEl) {
-    const strong  = items.filter(i => i.hasCorrData && Math.abs(i.best) >= 0.5);
-    const moderate = items.filter(i => i.hasCorrData && Math.abs(i.best) >= 0.25 && Math.abs(i.best) < 0.5);
-    const addTerms = items.filter(i => i.best < -0.15 && i.deficit > 0).slice(0, 10);
-    const byWords  = {};
+    const termStrength = t => Math.abs(t.best);
+    const isStrong     = t => t.hasCorrData && termStrength(t) >= 0.5;
+    const isModerate   = t => t.hasCorrData && termStrength(t) >= 0.25 && termStrength(t) < 0.5;
+    const isWeak       = t => t.best < -0.15 && termStrength(t) < 0.25;
+
+    const strongCount   = items.filter(isStrong).length;
+    const moderateCount = items.filter(isModerate).length;
+
+    // Top terms to add: negative Best of Both (↑ add signal), must have a deficit
+    // Include strong (≥0.5), moderate (≥0.25), and weak (≥0.15) — sorted by priority already
+    const addTerms = items.filter(i => i.best < -0.15 && i.deficit > 0).slice(0, 15);
+
+    const chipStrengthClass = t => {
+      if (isStrong(t))   return 'cora-term-chip cora-chip-strong';
+      if (isModerate(t)) return 'cora-term-chip cora-chip-mod';
+      return 'cora-term-chip cora-chip-weak';
+    };
+    const chipBadge = t => {
+      if (isStrong(t))   return '<span class="cora-chip-badge cora-chip-badge-strong">🔥</span>';
+      if (isModerate(t)) return '<span class="cora-chip-badge cora-chip-badge-mod">⚡</span>';
+      return '';
+    };
+
+    // Group by word count, within each group strong→moderate→weak order is preserved
+    // (items are already sorted by priority = |best| × log1p(deficit))
+    const byWords = {};
     addTerms.forEach(t => {
-      const wc = Math.min(t.words || t.term.split(/\s+/).length, 4);
+      const wc  = Math.min(t.words || t.term.split(/\s+/).length, 4);
       const key = wc >= 4 ? '4+' : String(wc);
       (byWords[key] = byWords[key] || []).push(t);
     });
     const wordGroups = Object.entries(byWords).sort((a, b) => a[0].localeCompare(b[0]));
+
     analysisEl.innerHTML = `
       <div class="cora-lsi-analysis-box">
         <h4 style="margin:0 0 8px;font-size:13px;color:var(--text)">📊 LSI Analysis Summary</h4>
         <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px">
-          <span class="cora-stat-pill" style="background:rgba(255,100,0,.12);color:#ff6400">🔥 ${strong.length} strong signals</span>
-          <span class="cora-stat-pill" style="background:rgba(67,97,238,.12);color:#4361ee">⚡ ${moderate.length} moderate signals</span>
-          <span class="cora-stat-pill" style="background:rgba(0,176,80,.12);color:#00B050">↑ ${addTerms.length} top terms to add</span>
+          <span class="cora-stat-pill" style="background:rgba(255,100,0,.12);color:#ff6400">🔥 ${strongCount} strong signals</span>
+          <span class="cora-stat-pill" style="background:rgba(67,97,238,.12);color:#4361ee">⚡ ${moderateCount} moderate signals</span>
+          <span class="cora-stat-pill" style="background:rgba(0,176,80,.12);color:#00B050">↑ ${addTerms.length} terms to add</span>
         </div>
         ${addTerms.length ? `
-        <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">Top priority terms to add (sorted by correlation strength × gap):</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">
+          Top terms to add — negative Best of Both = more usage → better rank.
+          <span style="margin-left:8px">🔥 strong (|r|≥0.5) &nbsp;⚡ moderate (|r|≥0.25) &nbsp;· weak</span>
+        </div>
         ${wordGroups.map(([wc, terms]) => `
-          <div style="margin-bottom:6px">
+          <div style="margin-bottom:8px">
             <span style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">${wc === '1' ? '1-word' : wc === '4+' ? '4+ word' : wc+'-word'} terms</span>
             <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px">
-              ${terms.map(t => `<span class="cora-term-chip" title="Add ~${Math.ceil(t.deficit)} more mentions; correlation: ${t.best.toFixed(3)}">${escHtml(t.term)} <em>+${Math.ceil(t.deficit)}</em></span>`).join('')}
+              ${terms.map(t => `
+                <span class="${chipStrengthClass(t)}" title="Best of Both: ${t.best.toFixed(3)} | Spearman: ${t.spearman.toFixed(3)} | Pearson: ${t.pearson.toFixed(3)} | Add ~${Math.ceil(t.deficit)} more mentions">
+                  ${chipBadge(t)}${escHtml(t.term)} <em>+${Math.ceil(t.deficit)}</em>
+                </span>`).join('')}
             </div>
           </div>`).join('')}
-        ` : '<div style="font-size:12px;color:var(--text-muted)">No strong add-signals detected — review correlation data manually.</div>'}
+        ` : '<div style="font-size:12px;color:var(--text-muted)">No negative-correlation terms found — review the full table below.</div>'}
       </div>`;
   }
 

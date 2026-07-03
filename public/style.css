@@ -1036,8 +1036,14 @@ details[open] .card-prompts-toggle::before { transform: rotate(90deg); }
 /* LSI analysis panel */
 .cora-lsi-analysis-box { background: var(--surface-alt); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
 .cora-stat-pill  { display: inline-block; font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 20px; }
-.cora-term-chip  { display: inline-block; font-size: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; }
-.cora-term-chip em { font-style: normal; font-weight: 700; color: #00B050; margin-left: 4px; }
+.cora-term-chip        { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; cursor: default; }
+.cora-term-chip em     { font-style: normal; font-weight: 700; color: #00B050; margin-left: 2px; }
+.cora-chip-strong      { border-color: rgba(255,100,0,.4); background: rgba(255,100,0,.07); }
+.cora-chip-mod         { border-color: rgba(67,97,238,.35); background: rgba(67,97,238,.07); }
+.cora-chip-weak        { opacity: .8; }
+.cora-chip-badge       { font-size: 11px; }
+.cora-chip-badge-strong { color: #e05c00; }
+.cora-chip-badge-mod   { color: #4361ee; }
 
 /* Grades grid */
 .cora-grades-grid  { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; margin-top: 4px; }
