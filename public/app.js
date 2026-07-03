@@ -1809,8 +1809,9 @@ document.addEventListener('keydown', e => {
    CORA SEO REPORT ANALYZER
    ═══════════════════════════════════════════════════════════ */
 
-let coraReport  = null;
-let coraFilters = { effort: 'all', corr: 'all' };
+let coraReport       = null;
+let coraFilters      = { effort: 'all', corr: 'all' };
+let coraGroupByPhase = false;
 
 // ── sheet helpers ────────────────────────────────────────────
 function coraFindSheet(wb, patterns) {
@@ -1934,14 +1935,16 @@ function coraParseLSI(wb) {
   const { map, rowIdx } = coraHeaderMap(rows, ['term', 'phrase', 'word', 'deficit'], 20);
   if (rowIdx === -1) return [];
 
-  const termCol  = Math.max(0, coraCol(map, 'term', 'phrase', 'word'));
-  const pagesCol = coraCol(map, 'pages');
-  const maxCol   = coraCol(map, 'max');
-  const avgCol   = coraCol(map, 'avg', 'average');
-  const totalCol = coraCol(map, 'total');
-  const yrCol    = coraCol(map, 'your count', 'you', 'your', 'count');
-  const defCol   = coraCol(map, 'deficit');
-  const corrCol  = coraCol(map, 'best of both', 'best', 'spearman', 'pearson', 'corr');
+  const termCol     = Math.max(0, coraCol(map, 'term', 'phrase', 'word'));
+  const pagesCol    = coraCol(map, 'pages');
+  const maxCol      = coraCol(map, 'max');
+  const avgCol      = coraCol(map, 'avg', 'average');
+  const totalCol    = coraCol(map, 'total');
+  const yrCol       = coraCol(map, 'your count', 'you', 'your', 'count');
+  const defCol      = coraCol(map, 'deficit');
+  const spearmanCol = coraCol(map, 'spearman');
+  const pearsonCol  = coraCol(map, 'pearson');
+  const bestCol     = coraCol(map, 'best of both', 'best');
 
   const items = [];
   for (let r = rowIdx + 1; r < rows.length; r++) {
@@ -1954,15 +1957,65 @@ function coraParseLSI(wb) {
     const deficit = defCol >= 0 ? (parseFloat(row[defCol])  || 0) : Math.max(0, avgVal - yours);
     if (deficit <= 0) continue;
 
+    const spearman = spearmanCol >= 0 ? (parseFloat(row[spearmanCol]) || 0) : 0;
+    const pearson  = pearsonCol  >= 0 ? (parseFloat(row[pearsonCol])  || 0) : 0;
+    const best     = bestCol >= 0
+      ? (parseFloat(row[bestCol]) || 0)
+      : (Math.abs(spearman) >= Math.abs(pearson) ? spearman : pearson);
+
+    // Priority = signal strength × gap magnitude (log-scaled)
+    // Negative correlation means more usage = better rank, so |best| drives priority
+    const priority = Math.abs(best) * Math.log1p(deficit);
+
     items.push({
       term,
       pages:   pagesCol >= 0 ? (parseInt(row[pagesCol])   || 0) : 0,
       max:     maxCol   >= 0 ? (parseFloat(row[maxCol])   || 0) : 0,
       avg:     avgVal,
       total:   totalCol >= 0 ? (parseInt(row[totalCol])   || 0) : 0,
+      yours, deficit, spearman, pearson, best, priority,
+    });
+  }
+
+  // Sort by priority (signal × gap), not just raw gap
+  return items.sort((a, b) => b.priority - a.priority);
+}
+
+// ── Variations parser ────────────────────────────────────────
+function coraParseVariations(wb) {
+  const ws = coraFindSheet(wb, ['variation', 'variations', 'content.*var', 'var.*report', 'var']);
+  if (!ws) return [];
+
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+  const { map, rowIdx } = coraHeaderMap(rows, ['variation', 'keyword', 'term', 'phrase', 'deficit'], 20);
+  if (rowIdx === -1) return [];
+
+  const termCol  = Math.max(0, coraCol(map, 'variation', 'keyword', 'term', 'phrase', 'word'));
+  const pagesCol = coraCol(map, 'pages');
+  const maxCol   = coraCol(map, 'max');
+  const avgCol   = coraCol(map, 'avg', 'average');
+  const yrCol    = coraCol(map, 'your count', 'you', 'your', 'count');
+  const defCol   = coraCol(map, 'deficit');
+  const corrCol  = coraCol(map, 'best of both', 'best', 'spearman', 'pearson', 'corr');
+
+  const items = [];
+  for (let r = rowIdx + 1; r < rows.length; r++) {
+    const row  = rows[r];
+    const term = String(row[termCol] ?? '').trim();
+    if (!term) continue;
+
+    const avgVal  = avgCol >= 0 ? (parseFloat(row[avgCol]) || 0) : 0;
+    const yours   = yrCol  >= 0 ? (parseFloat(row[yrCol])  || 0) : 0;
+    const deficit = defCol >= 0 ? (parseFloat(row[defCol]) || 0) : Math.max(0, avgVal - yours);
+
+    items.push({
+      term,
+      pages:  pagesCol >= 0 ? (parseInt(row[pagesCol])   || 0) : 0,
+      max:    maxCol   >= 0 ? (parseFloat(row[maxCol])   || 0) : 0,
+      avg:    avgVal,
       yours,
       deficit,
-      corr:    corrCol  >= 0 ? (parseFloat(row[corrCol])  || 0) : 0,
+      corr:   corrCol >= 0 ? (parseFloat(row[corrCol]) || 0) : 0,
     });
   }
 
@@ -2028,12 +2081,13 @@ async function coraHandleFile(file) {
     const wb   = XLSX.read(buf, { type: 'array', cellStyles: true });
 
     coraReport = {
-      fileName: file.name,
-      meta:     coraParseMeta(wb),
-      roadMap:  coraParseRoadMap(wb),
-      lsi:      coraParseLSI(wb),
-      grades:   coraParseGrades(wb),
-      sheets:   wb.SheetNames,
+      fileName:   file.name,
+      meta:       coraParseMeta(wb),
+      roadMap:    coraParseRoadMap(wb),
+      lsi:        coraParseLSI(wb),
+      variations: coraParseVariations(wb),
+      grades:     coraParseGrades(wb),
+      sheets:     wb.SheetNames,
     };
     coraRender();
   } catch (err) {
@@ -2085,6 +2139,7 @@ function coraRender() {
   });
 
   coraRenderRoadMap();
+  coraRenderVariations();
   coraRenderLSI();
   coraRenderGrades();
 }
@@ -2098,6 +2153,21 @@ function coraFilteredRoadMap() {
   });
 }
 
+function coraRMRow(item) {
+  const LABEL = { green: '🟢 Universal', black: '⚫ Competitor', red: '🔴 Opportunity' };
+  const CLS   = { green: 'cora-badge-green', black: 'cora-badge-black', red: 'cora-badge-red' };
+  return `
+    <tr class="cora-rm-row ${item.corrType === 'green' ? 'cora-row-green' : item.corrType === 'red' ? 'cora-row-red' : ''}">
+      <td><span class="cora-type-badge ${CLS[item.corrType] || ''}">${LABEL[item.corrType] || item.corrType}</span></td>
+      <td class="cora-factor-cell">${escHtml(item.factor)}</td>
+      <td class="cora-cat-cell">${escHtml(item.category)}</td>
+      <td>${item.easy ? '<span class="cora-easy-badge">⚡ Easy</span>' : '<span class="cora-hard-badge">🔧 Hard</span>'}</td>
+      <td style="text-align:right;font-variant-numeric:tabular-nums">${item.yourVal !== 0 ? item.yourVal : '—'}</td>
+      <td style="text-align:right;font-variant-numeric:tabular-nums">${item.goal    !== 0 ? item.goal    : '—'}</td>
+      <td style="text-align:right"><strong class="cora-gap-val">${item.deficit > 0 ? '+' + item.deficit : item.deficit}</strong></td>
+    </tr>`;
+}
+
 function coraRenderRoadMap() {
   const all    = coraReport?.roadMap ?? [];
   const items  = coraFilteredRoadMap();
@@ -2106,12 +2176,13 @@ function coraRenderRoadMap() {
 
   document.getElementById('cora-rm-stats').innerHTML =
     `<span>${all.length} deficient factors</span>`
-    + `<span class="cora-sep">·</span><span style="color:#00B050;font-weight:600">${nGreen} universal correlations</span>`
+    + `<span class="cora-sep">·</span><span style="color:#00B050;font-weight:600">${nGreen} universal</span>`
     + `<span class="cora-sep">·</span><span style="color:var(--accent);font-weight:600">${nEasy} easy wins</span>`
     + `<span class="cora-sep">·</span><span>${items.length} shown</span>`;
 
-  const LABEL = { green: '🟢 Universal', black: '⚫ Competitor', red: '🔴 Opportunity' };
-  const CLS   = { green: 'cora-badge-green', black: 'cora-badge-black', red: 'cora-badge-red' };
+  // Update phase toggle button label
+  const phBtn = document.getElementById('cora-phase-toggle');
+  if (phBtn) phBtn.classList.toggle('active', coraGroupByPhase);
 
   const tbody = document.getElementById('cora-rm-tbody');
   if (!items.length) {
@@ -2119,17 +2190,61 @@ function coraRenderRoadMap() {
     return;
   }
 
+  if (!coraGroupByPhase) {
+    tbody.innerHTML = items.map(coraRMRow).join('');
+    return;
+  }
+
+  // Group by phase (Stories column = item.category)
+  const grouped = {};
+  items.forEach(item => {
+    const ph = item.category || 'Other';
+    if (!grouped[ph]) grouped[ph] = [];
+    grouped[ph].push(item);
+  });
+
+  const sortedPhases = Object.keys(grouped).sort((a, b) => {
+    const na = parseFloat(a), nb = parseFloat(b);
+    if (!isNaN(na) && !isNaN(nb)) return na - nb;
+    return a.localeCompare(b);
+  });
+
+  let html = '';
+  sortedPhases.forEach(ph => {
+    const phItems = grouped[ph];
+    const nE = phItems.filter(i => i.easy).length;
+    const nG = phItems.filter(i => i.corrType === 'green').length;
+    html += `<tr class="cora-phase-hdr">
+      <td colspan="7">
+        <span class="cora-phase-label">Phase ${escHtml(ph)}</span>
+        <span class="cora-phase-meta">${phItems.length} factor${phItems.length !== 1 ? 's' : ''}</span>
+        ${nG ? `<span class="cora-phase-tag cora-phase-tag-green">${nG} 🟢</span>` : ''}
+        ${nE ? `<span class="cora-phase-tag cora-phase-tag-easy">${nE} ⚡ easy</span>` : ''}
+      </td>
+    </tr>`;
+    html += phItems.map(coraRMRow).join('');
+  });
+
+  tbody.innerHTML = html;
+}
+
+function coraRenderVariations() {
+  const items = coraReport?.variations ?? [];
+  const tbody = document.getElementById('cora-var-tbody');
+  if (!tbody) return;
+
+  if (!items.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:24px">No Variations sheet found in this report.</td></tr>';
+    return;
+  }
+
   tbody.innerHTML = items.map(item => `
-    <tr class="cora-rm-row ${item.corrType === 'green' ? 'cora-row-green' : item.corrType === 'red' ? 'cora-row-red' : ''}">
-      <td><span class="cora-type-badge ${CLS[item.corrType] || ''}">${LABEL[item.corrType] || item.corrType}</span></td>
-      <td class="cora-factor-cell">${escHtml(item.factor)}</td>
-      <td class="cora-cat-cell">${escHtml(item.category)}</td>
-      <td>${item.easy
-        ? '<span class="cora-easy-badge">⚡ Easy</span>'
-        : '<span class="cora-hard-badge">🔧 Hard</span>'}</td>
-      <td style="text-align:right;font-variant-numeric:tabular-nums">${item.yourVal !== 0 ? item.yourVal : '—'}</td>
-      <td style="text-align:right;font-variant-numeric:tabular-nums">${item.goal    !== 0 ? item.goal    : '—'}</td>
-      <td style="text-align:right"><strong class="cora-gap-val">${item.deficit > 0 ? '+' + item.deficit : item.deficit}</strong></td>
+    <tr>
+      <td class="cora-term-cell"><strong>${escHtml(item.term)}</strong></td>
+      <td style="text-align:right;color:var(--text-muted);font-size:12px">${item.pages || '—'}</td>
+      <td style="text-align:right;font-variant-numeric:tabular-nums">${item.avg ? item.avg.toFixed(1) : '—'}</td>
+      <td style="text-align:right;font-variant-numeric:tabular-nums">${item.yours}</td>
+      <td style="text-align:right"><strong class="cora-gap-val">${item.deficit > 0 ? '+' + Math.ceil(item.deficit) : '—'}</strong></td>
     </tr>`).join('');
 }
 
@@ -2138,29 +2253,50 @@ function coraRenderLSI() {
   const tbody = document.getElementById('cora-lsi-tbody');
 
   if (!items.length) {
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:24px">No LSI data found. Make sure the report contains an "LSI" sheet.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:24px">No LSI data found. Make sure the report contains an "LSI" sheet.</td></tr>';
     return;
   }
 
-  const corrBar = v => {
-    const pct = Math.min(Math.abs(v) * 100, 100).toFixed(0);
-    const color = v < 0 ? '#4361ee' : '#aaa';
-    return `<div style="display:inline-flex;align-items:center;gap:6px">
-      <div style="width:48px;height:5px;background:var(--border);border-radius:3px;overflow:hidden">
-        <div style="width:${pct}%;height:100%;background:${color};border-radius:3px"></div>
-      </div>
-      <span style="font-size:12px;font-variant-numeric:tabular-nums">${v.toFixed(3)}</span>
-    </div>`;
+  const miniBar = (v, label) => {
+    if (v === 0 && label === undefined) return '<span style="color:var(--text-muted);font-size:11px">—</span>';
+    const pct   = Math.min(Math.abs(v) * 100, 100).toFixed(0);
+    const color = v < 0 ? '#4361ee' : v > 0 ? '#e05c5c' : '#888';
+    const val   = label ?? v.toFixed(3);
+    return `<span style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap">
+      <span style="display:inline-block;width:36px;height:4px;background:var(--border);border-radius:2px;overflow:hidden;flex-shrink:0">
+        <span style="display:block;width:${pct}%;height:100%;background:${color};border-radius:2px"></span>
+      </span>
+      <span style="font-size:11px;font-variant-numeric:tabular-nums;color:${color}">${val}</span>
+    </span>`;
+  };
+
+  const priorityBadge = item => {
+    const abs = Math.abs(item.best);
+    if (abs >= 0.5) return '<span class="cora-pri cora-pri-strong">🔥 Strong</span>';
+    if (abs >= 0.25) return '<span class="cora-pri cora-pri-med">⚡ Moderate</span>';
+    return '<span class="cora-pri cora-pri-weak">· Weak</span>';
+  };
+
+  const dirLabel = v => {
+    if (v < -0.15) return '<span title="More usage → better rank — add this term" style="color:#00B050;font-size:11px">↑ add</span>';
+    if (v >  0.15) return '<span title="Possible over-optimization signal" style="color:#e05c5c;font-size:11px">⚠ check</span>';
+    return '<span style="color:var(--text-muted);font-size:11px">~</span>';
   };
 
   tbody.innerHTML = items.slice(0, 300).map(item => `
     <tr>
-      <td class="cora-term-cell"><strong>${escHtml(item.term)}</strong></td>
+      <td class="cora-term-cell">
+        ${priorityBadge(item)}
+        <strong style="margin-left:6px">${escHtml(item.term)}</strong>
+        ${dirLabel(item.best)}
+      </td>
       <td style="text-align:right;color:var(--text-muted);font-size:12px">${item.pages || '—'}</td>
       <td style="text-align:right;font-variant-numeric:tabular-nums">${item.avg ? item.avg.toFixed(1) : '—'}</td>
       <td style="text-align:right;font-variant-numeric:tabular-nums">${item.yours}</td>
       <td style="text-align:right"><strong class="cora-gap-val">+${Math.ceil(item.deficit)}</strong></td>
-      <td style="text-align:right">${corrBar(item.corr)}</td>
+      <td style="text-align:right">${miniBar(item.spearman)}</td>
+      <td style="text-align:right">${miniBar(item.pearson)}</td>
+      <td style="text-align:right">${miniBar(item.best)}</td>
     </tr>`).join('');
 }
 
@@ -2270,6 +2406,12 @@ function coraInit() {
       coraFilters[key] = btn.dataset.fv;
       coraRenderRoadMap();
     });
+  });
+
+  document.getElementById('cora-phase-toggle').addEventListener('click', btn => {
+    coraGroupByPhase = !coraGroupByPhase;
+    document.getElementById('cora-phase-toggle').classList.toggle('active', coraGroupByPhase);
+    coraRenderRoadMap();
   });
 
   document.getElementById('cora-copy-btn').addEventListener('click', coraCopyBrief);
