@@ -1186,6 +1186,7 @@ function agCopyHtml() {
 const RT_KEY = 'seomanager_ranktracker';
 
 let rtData   = { clients: [], activeClientId: null };
+let rtSort   = { col: null, dir: 'asc' };
 let hasAA    = false;
 
 /* ── persistence ── */
@@ -1241,9 +1242,35 @@ function rtRender() {
   noClient.classList.add('hidden');
   tableWrap.classList.remove('hidden');
 
+  // Update sort indicators on headers
+  document.querySelectorAll('.rt-sortable').forEach(th => {
+    const isSorted = th.dataset.sort === rtSort.col;
+    th.dataset.sortDir = isSorted ? rtSort.dir : '';
+  });
+
+  // Sort keywords
+  let keywords = [...(client.keywords || [])];
+  if (rtSort.col) {
+    keywords.sort((a, b) => {
+      let av, bv;
+      if (rtSort.col === 'delta') {
+        av = (a.prevRank && a.rank) ? a.prevRank - a.rank : -Infinity;
+        bv = (b.prevRank && b.rank) ? b.prevRank - b.rank : -Infinity;
+      } else if (rtSort.col === 'keyword') {
+        av = (a.keyword || '').toLowerCase();
+        bv = (b.keyword || '').toLowerCase();
+        return rtSort.dir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+      } else {
+        av = a[rtSort.col] ?? (rtSort.dir === 'asc' ? Infinity : -Infinity);
+        bv = b[rtSort.col] ?? (rtSort.dir === 'asc' ? Infinity : -Infinity);
+      }
+      return rtSort.dir === 'asc' ? av - bv : bv - av;
+    });
+  }
+
   const tbody = document.getElementById('rt-tbody');
   tbody.innerHTML = '';
-  (client.keywords || []).forEach(kw => {
+  keywords.forEach(kw => {
     const tr = document.createElement('tr');
     tr.dataset.id = kw.id;
     tr.innerHTML = `
@@ -1350,6 +1377,20 @@ function rtInit() {
 
   // Edit modal save
   document.getElementById('rt-editSaveBtn').addEventListener('click', rtEditSave);
+
+  // Sortable column headers
+  document.getElementById('rt-table').querySelector('thead').addEventListener('click', e => {
+    const th = e.target.closest('.rt-sortable');
+    if (!th) return;
+    const col = th.dataset.sort;
+    if (rtSort.col === col) {
+      rtSort.dir = rtSort.dir === 'asc' ? 'desc' : 'asc';
+    } else {
+      rtSort.col = col;
+      rtSort.dir = col === 'keyword' || col === 'lastCheck' ? 'asc' : 'desc';
+    }
+    rtRender();
+  });
 
   rtRender();
 }
