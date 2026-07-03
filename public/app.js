@@ -1274,9 +1274,13 @@ function rtRender() {
 
   const tbody = document.getElementById('rt-tbody');
   tbody.innerHTML = '';
+  const hasCora = !!(client?.coraFileName);
   keywords.forEach(kw => {
     const tr = document.createElement('tr');
     tr.dataset.id = kw.id;
+    const coraCell = hasCora
+      ? `<td class="rt-td-cora"><button class="rt-cora-btn" title="View Cora report: ${escHtml(client.coraFileName)}">📊</button></td>`
+      : `<td class="rt-td-cora"><span class="rt-na">—</span></td>`;
     tr.innerHTML = `
       <td class="rt-td-rank">${rtRankBadge(kw.rank, kw.prevRank)}</td>
       <td class="rt-td-local">${rtLocalBadge(kw.localRank)}</td>
@@ -1288,6 +1292,7 @@ function rtRender() {
       <td class="rt-td-vol">${kw.volume ? escHtml(String(kw.volume)) : '<span class="rt-na">—</span>'}</td>
       <td class="rt-td-delta">${rtDeltaCell(kw.rank, kw.prevRank)}</td>
       <td class="rt-td-pop">${rtPopCell(kw)}</td>
+      ${coraCell}
       <td class="rt-td-note rt-editable" data-field="note">${escHtml(kw.note || '')}</td>
       <td class="rt-td-check">${escHtml(rtFormatDate(kw.lastCheck) || '')}</td>
       <td class="rt-td-del"><button class="rt-del-btn" title="Delete row">✕</button></td>`;
@@ -1362,6 +1367,12 @@ function rtInit() {
     if (mkBtn) {
       const kw = rtActiveClient()?.keywords?.find(k => k.id === mkBtn.dataset.id);
       if (kw) { kw.mainKeyword = !kw.mainKeyword; rtSave(); rtRender(); }
+      return;
+    }
+
+    const coraBtn = e.target.closest('.rt-cora-btn');
+    if (coraBtn) {
+      document.querySelector('.tab-btn[data-tab="cora"]')?.click();
       return;
     }
 
@@ -2219,6 +2230,14 @@ async function coraHandleFile(file) {
       lsiCritSpearman: lsiResult.spearmanCrit,
       lsiCritPearson:  lsiResult.pearsonCrit,
     };
+    // Tag the active RT client so the Cora column shows in Rank Tracker
+    const rtClient = rtActiveClient();
+    if (rtClient) {
+      rtClient.coraFileName = file.name;
+      rtClient.coraDomain   = coraReport.meta?.domain || '';
+      rtSave();
+      rtRender();
+    }
     coraRender();
   } catch (err) {
     upload.innerHTML = `

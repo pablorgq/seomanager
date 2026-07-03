@@ -788,6 +788,10 @@ details[open] .card-prompts-toggle::before { transform: rotate(90deg); }
 .rt-th-vol    { width: 60px; text-align: right; }
 .rt-th-delta { width: 56px; text-align: center; }
 .rt-th-pop   { min-width: 140px; }
+.rt-th-cora  { width: 52px; text-align: center; }
+.rt-td-cora  { text-align: center; }
+.rt-cora-btn { background: none; border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px; cursor: pointer; font-size: 14px; color: var(--text); transition: background .15s, border-color .15s; }
+.rt-cora-btn:hover { background: rgba(67,97,238,.1); border-color: var(--accent); }
 .rt-th-note  { min-width: 120px; }
 .rt-th-check { width: 96px; white-space: nowrap; }
 .rt-th-del   { width: 32px; }
