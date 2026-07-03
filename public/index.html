@@ -61,6 +61,10 @@
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
       Rank Tracker
     </button>
+    <button class="tab-btn" data-tab="cora">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+      Cora
+    </button>
   </nav>
 
   <!-- ── MAIN ── -->
@@ -483,6 +487,124 @@
       </div>
 
     </div><!-- /rank tracker tab -->
+
+    <!-- ── CORA SEO ANALYZER TAB ── -->
+    <div class="tab-panel" id="tab-cora">
+
+      <!-- Upload zone (initial state) -->
+      <div id="cora-upload" class="cora-upload-zone">
+        <div class="cora-upload-inner">
+          <div class="cora-upload-icon">📊</div>
+          <div class="cora-upload-title">Cora SEO Report Analyzer</div>
+          <div class="cora-upload-sub">Upload your Cora Excel report (.xlsx) to get an expert priority breakdown of what to fix and why</div>
+          <input type="file" id="cora-file-input" accept=".xlsx,.xls" style="display:none">
+          <button class="btn btn-primary" id="cora-browse-btn">Upload Report</button>
+          <div class="cora-upload-hint">Or drag and drop the .xlsx file anywhere in this area</div>
+        </div>
+      </div>
+
+      <!-- Report view (shown after file loaded) -->
+      <div id="cora-view" class="hidden">
+
+        <!-- Header bar -->
+        <div class="cora-bar">
+          <div class="cora-bar-meta" id="cora-meta-bar"></div>
+          <button class="btn btn-ghost btn-sm" id="cora-new-btn">↑ Load New Report</button>
+        </div>
+
+        <!-- Sub-tabs -->
+        <div class="cora-stab-nav">
+          <button class="cora-stab active" data-stab="roadmap">🗺️ Road Map</button>
+          <button class="cora-stab" data-stab="lsi">📝 LSI Gaps</button>
+          <button class="cora-stab" data-stab="grades">📊 Grades</button>
+        </div>
+
+        <!-- ── Road Map section ── -->
+        <div class="cora-section active" id="cora-sec-roadmap">
+          <div class="cora-filter-bar">
+            <div class="cora-fgroup">
+              <span class="cora-flabel">Effort:</span>
+              <button class="cora-fbtn active" data-fk="effort" data-fv="all">All</button>
+              <button class="cora-fbtn" data-fk="effort" data-fv="easy">⚡ Easy</button>
+              <button class="cora-fbtn" data-fk="effort" data-fv="hard">🔧 Hard</button>
+            </div>
+            <div class="cora-fgroup">
+              <span class="cora-flabel">Correlation:</span>
+              <button class="cora-fbtn active" data-fk="corr" data-fv="all">All</button>
+              <button class="cora-fbtn" data-fk="corr" data-fv="green">🟢 Universal</button>
+              <button class="cora-fbtn" data-fk="corr" data-fv="black">⚫ Competitor</button>
+              <button class="cora-fbtn" data-fk="corr" data-fv="red">🔴 Opportunity</button>
+            </div>
+            <button class="btn btn-ghost btn-sm" id="cora-copy-btn">📋 Copy Brief</button>
+          </div>
+          <div class="cora-tip">
+            <strong>Expert priority order:</strong>
+            🟢 Universal = proven across thousands of keywords (highest trust) ·
+            ⚡ Easy = only requires CMS content edits ·
+            Start with <strong>🟢 + ⚡ Easy</strong> for the fastest ranking gains, then 🟢 Hard, then ⚫ Easy.
+            🔴 Opportunity factors correlate elsewhere but NOT with your competitors — worth testing cautiously.
+          </div>
+          <div class="cora-rm-stats" id="cora-rm-stats"></div>
+          <div class="cora-table-wrap">
+            <table class="cora-tbl" id="cora-rm-tbl">
+              <thead>
+                <tr>
+                  <th style="width:110px">Correlation</th>
+                  <th>Factor</th>
+                  <th style="width:150px">Category</th>
+                  <th style="width:72px">Effort</th>
+                  <th style="width:72px;text-align:right">Yours</th>
+                  <th style="width:72px;text-align:right">Goal</th>
+                  <th style="width:72px;text-align:right">Gap ↓</th>
+                </tr>
+              </thead>
+              <tbody id="cora-rm-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- ── LSI Gaps section ── -->
+        <div class="cora-section hidden" id="cora-sec-lsi">
+          <div class="cora-tip">
+            <strong>Content gaps:</strong> Words and phrases top-ranking pages use more than yours.
+            Sort by Gap for the biggest opportunities. Terms with strong negative correlation (blue bar) mean <em>more usage = better rank</em>.
+            Add high-deficit, high-correlation terms to your main content, headings, and meta description.
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+            <input type="text" class="form-input" id="cora-lsi-search" placeholder="Filter terms…" style="max-width:220px;padding:6px 10px;font-size:13px">
+            <button class="btn btn-ghost btn-sm" id="cora-lsi-copy-btn">📋 Copy Top 20</button>
+          </div>
+          <div class="cora-table-wrap">
+            <table class="cora-tbl" id="cora-lsi-tbl">
+              <thead>
+                <tr>
+                  <th>Term</th>
+                  <th style="width:80px;text-align:right">Pages</th>
+                  <th style="width:80px;text-align:right">Avg Use</th>
+                  <th style="width:80px;text-align:right">Yours</th>
+                  <th style="width:80px;text-align:right">Gap ↓</th>
+                  <th style="width:130px;text-align:right">Correlation</th>
+                </tr>
+              </thead>
+              <tbody id="cora-lsi-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- ── Grades section ── -->
+        <div class="cora-section hidden" id="cora-sec-grades">
+          <div class="cora-tip">
+            <strong>Category grades:</strong> A = excellent, F = critical gaps.
+            Remember: you can rank #1 with a C if your competitors also have C's — grades show <em>improvement potential</em> vs competitors, not absolute performance.
+            Focus first on categories with the most Easy factors in the Road Map.
+          </div>
+          <div class="cora-grades-grid" id="cora-grades-grid">
+            <div class="cora-grades-empty">No grade data detected.</div>
+          </div>
+        </div>
+
+      </div><!-- /cora-view -->
+    </div><!-- /cora tab -->
 
   </main>
 

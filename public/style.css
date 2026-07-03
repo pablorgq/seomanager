@@ -904,3 +904,119 @@ details[open] .card-prompts-toggle::before { transform: rotate(90deg); }
   .ig-controls-row { grid-template-columns: 1fr; }
   .app-subtitle { display: none; }
 }
+
+/* ═══════════════════════════════════════════════
+   CORA SEO REPORT ANALYZER
+   ═══════════════════════════════════════════════ */
+
+/* Upload zone */
+.cora-upload-zone {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 65vh; border: 2px dashed var(--border); border-radius: 16px;
+  margin: 28px; cursor: default; transition: border-color .2s, background .2s;
+}
+.cora-upload-zone.cora-drag {
+  border-color: var(--accent); background: rgba(67,97,238,.06);
+}
+.cora-upload-inner { text-align: center; padding: 40px 28px; max-width: 460px; }
+.cora-upload-icon  { font-size: 52px; margin-bottom: 16px; }
+.cora-upload-title { font-size: 22px; font-weight: 700; margin-bottom: 8px; font-family: 'Syne', sans-serif; }
+.cora-upload-sub   { color: var(--text-muted); line-height: 1.6; margin-bottom: 24px; font-size: 14px; }
+.cora-upload-hint  { font-size: 12px; color: var(--text-muted); margin-top: 10px; }
+
+/* Report header bar */
+.cora-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 11px 20px; background: var(--surface-alt);
+  border-bottom: 1px solid var(--border); flex-wrap: wrap; gap: 8px;
+}
+.cora-bar-meta { font-size: 14px; }
+.cora-meta-dim { color: var(--text-muted); }
+.cora-sep      { color: var(--border); margin: 0 2px; }
+
+/* Sub-tabs */
+.cora-stab-nav {
+  display: flex; gap: 2px; padding: 12px 20px 0;
+  border-bottom: 1px solid var(--border);
+}
+.cora-stab {
+  padding: 8px 18px; border: none; background: none;
+  color: var(--text-muted); font-size: 14px; font-weight: 500;
+  cursor: pointer; border-bottom: 2px solid transparent;
+  margin-bottom: -1px; transition: color .15s, border-color .15s;
+}
+.cora-stab:hover  { color: var(--text); }
+.cora-stab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* Sections */
+.cora-section        { padding: 20px 20px 28px; }
+.cora-section.active { display: block; }
+.cora-section.hidden { display: none; }
+
+/* Expert tip */
+.cora-tip {
+  background: rgba(67,97,238,.07); border-left: 3px solid var(--accent);
+  border-radius: 0 8px 8px 0; padding: 10px 14px; font-size: 13px;
+  margin-bottom: 16px; line-height: 1.55; color: var(--text);
+}
+
+/* Filter bar */
+.cora-filter-bar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+  margin-bottom: 12px;
+}
+.cora-fgroup { display: flex; align-items: center; gap: 4px; }
+.cora-flabel { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; margin-right: 2px; }
+.cora-fbtn {
+  padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 500;
+  border: 1px solid var(--border); color: var(--text-muted);
+  background: none; cursor: pointer; transition: all .15s;
+}
+.cora-fbtn:hover       { border-color: var(--accent); color: var(--accent); }
+.cora-fbtn.active      { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* Stats row */
+.cora-rm-stats {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 13px; margin-bottom: 12px; flex-wrap: wrap;
+}
+
+/* Tables */
+.cora-table-wrap { overflow-x: auto; }
+.cora-tbl        { width: 100%; border-collapse: collapse; font-size: 13px; }
+.cora-tbl th {
+  text-align: left; font-size: 11px; font-weight: 600; color: var(--text-muted);
+  padding: 8px 10px; border-bottom: 1px solid var(--border);
+  text-transform: uppercase; letter-spacing: .04em; white-space: nowrap;
+}
+.cora-tbl td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.cora-tbl tbody tr:hover { background: var(--surface-alt); }
+
+/* Row tinting by correlation type */
+.cora-row-green             { background: rgba(0,176,80,.04); }
+.cora-row-red               { background: rgba(192,0,0,.04); }
+.cora-row-green:hover       { background: rgba(0,176,80,.08) !important; }
+.cora-row-red:hover         { background: rgba(192,0,0,.08) !important; }
+
+/* Correlation type badges */
+.cora-type-badge  { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 4px; white-space: nowrap; }
+.cora-badge-green { background: rgba(0,176,80,.14);  color: #00B050; }
+.cora-badge-black { background: rgba(128,128,128,.1); color: var(--text-muted); }
+.cora-badge-red   { background: rgba(192,0,0,.12);   color: #c00000; }
+
+/* Effort badges */
+.cora-easy-badge { color: var(--accent); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.cora-hard-badge { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+
+/* Cell styles */
+.cora-factor-cell { font-weight: 500; }
+.cora-cat-cell    { color: var(--text-muted); font-size: 12px; }
+.cora-term-cell   { max-width: 260px; word-break: break-word; }
+.cora-gap-val     { color: var(--accent); font-size: 14px; font-variant-numeric: tabular-nums; }
+
+/* Grades grid */
+.cora-grades-grid  { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; margin-top: 4px; }
+.cora-grade-card   { background: var(--surface-alt); border: 1px solid var(--border); border-radius: 10px; padding: 18px 12px; text-align: center; }
+.cora-grade-letter { font-size: 40px; font-weight: 800; line-height: 1; font-family: 'Syne', sans-serif; margin-bottom: 8px; }
+.cora-grade-cat    { font-size: 12px; color: var(--text-muted); font-weight: 500; line-height: 1.3; }
+.cora-grades-empty { color: var(--text-muted); padding: 24px; text-align: center; grid-column: 1/-1; }

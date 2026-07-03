@@ -69,6 +69,7 @@ async function init() {
     if (apiKey) document.getElementById('apiKeyInput').value = apiKey;
   }
   rtInit();
+  coraInit();
 
   // Hide POP key field when key is configured server-side
   if (hasPop) {
@@ -1799,6 +1800,496 @@ document.addEventListener('keydown', e => {
     ['rt-clientModal', 'rt-importModal', 'rt-editModal'].forEach(id => rtCloseModal(id));
   }
 });
+
+/* ═══════════════════════════════════════════════════════════
+   CORA SEO REPORT ANALYZER
+   ═══════════════════════════════════════════════════════════ */
+
+let coraReport  = null;
+let coraFilters = { effort: 'all', corr: 'all' };
+
+// ── sheet helpers ────────────────────────────────────────────
+function coraFindSheet(wb, patterns) {
+  for (const pat of patterns) {
+    const re   = new RegExp(pat, 'i');
+    const name = wb.SheetNames.find(n => re.test(n));
+    if (name) return wb.Sheets[name];
+  }
+  return null;
+}
+
+function coraHeaderMap(rows, keywords, maxScan = 30) {
+  for (let r = 0; r < Math.min(maxScan, rows.length); r++) {
+    const cells = rows[r].map(c => String(c ?? '').toLowerCase().trim());
+    if (keywords.some(kw => cells.some(c => c.includes(kw)))) {
+      const map = {};
+      cells.forEach((h, i) => { if (h) map[h] = i; });
+      return { map, rowIdx: r };
+    }
+  }
+  return { map: {}, rowIdx: -1 };
+}
+
+function coraCol(map, ...names) {
+  for (const n of names) {
+    if (map[n] !== undefined) return map[n];
+    const key = Object.keys(map).find(k => k.includes(n));
+    if (key !== undefined) return map[key];
+  }
+  return -1;
+}
+
+// Read fill RGB from an xlsx cell (SheetJS cellStyles mode)
+function coraCellFill(ws, r, c) {
+  try {
+    const addr = XLSX.utils.encode_cell({ r, c });
+    const cell = ws[addr];
+    if (!cell?.s) return null;
+    const f = cell.s.fgColor ?? cell.s.bgColor ?? cell.s.fill?.fgColor;
+    if (!f) return null;
+    return String(f.rgb ?? f.argb ?? '').replace(/^FF/i, '').toUpperCase();
+  } catch { return null; }
+}
+
+function coraColorType(rgb) {
+  if (!rgb || rgb === '000000' || rgb === 'FFFFFF' || rgb.length < 6) return 'none';
+  if (/^(00B050|70AD47|92D050|008000|22B14C|00FF00|4EA72A|375623|548235)/i.test(rgb)) return 'green';
+  if (/^(FF0000|C00000|FF3333|C0504D|FF4444|CC0000|A50000|9C0006)/i.test(rgb))        return 'red';
+  if (/^(FFFF00|FFEB9C|FFE699|FFFFCC|FFF2CC|FFFF99|FFFFC0|FFFD75)/i.test(rgb))       return 'yellow';
+  return 'none';
+}
+
+// ── metadata ─────────────────────────────────────────────────
+function coraParseMeta(wb) {
+  const ws   = coraFindSheet(wb, ['road.?map', 'metadata', 'info', 'summary']);
+  if (!ws) return {};
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+  const meta = {};
+  for (let r = 0; r < Math.min(15, rows.length); r++) {
+    const row   = rows[r];
+    const label = String(row[0] || '').toLowerCase().trim();
+    const val   = String(row[1] || row[2] || '').trim();
+    if (!meta.keyword  && label.includes('keyword'))                                       meta.keyword  = val;
+    if (!meta.domain   && (label.includes('domain') || label.includes('website') || label.includes('url'))) meta.domain = val;
+    if (!meta.date     && (label.includes('date')   || label.includes('time')))            meta.date     = val;
+    if (!meta.position && label.includes('position'))                                      meta.position = val;
+  }
+  return meta;
+}
+
+// ── Road Map parser ──────────────────────────────────────────
+function coraParseRoadMap(wb) {
+  const ws = coraFindSheet(wb, ['road.?map', 'roadmap']);
+  if (!ws) return [];
+
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+  const { map, rowIdx } = coraHeaderMap(rows, ['factor', 'deficit', 'road map'], 40);
+  if (rowIdx === -1) return [];
+
+  const fCol    = Math.max(0, coraCol(map, 'factor', 'road map'));
+  const catCol  = coraCol(map, 'stories', 'category', 'story', 'group', 'section');
+  const yrCol   = coraCol(map, 'your count', 'you', 'your', 'count');
+  const goalCol = coraCol(map, 'practical maximum', 'goal', 'target', 'max');
+  const defCol  = coraCol(map, 'deficit');
+
+  const items = [];
+  for (let r = rowIdx + 1; r < rows.length; r++) {
+    const row    = rows[r];
+    const factor = String(row[fCol] ?? '').trim();
+    if (!factor || /^(factor|road map|stories|n\/a)$/i.test(factor)) continue;
+
+    // Detect correlation type from row cell colors
+    let corrType = 'black'; // default = competitor-specific
+    let easy     = false;
+
+    for (let c = 0; c < Math.min(10, (row.length || 10)); c++) {
+      const rgb = coraCellFill(ws, r, c);
+      const t   = coraColorType(rgb);
+      if (t === 'green')  { corrType = 'green'; }
+      if (t === 'red'  )  { corrType = 'red';   }
+      if (t === 'yellow') { easy     = true;     }
+    }
+
+    const yourVal = yrCol   >= 0 ? (parseFloat(String(row[yrCol]   ?? '')) || 0) : 0;
+    const goal    = goalCol >= 0 ? (parseFloat(String(row[goalCol] ?? '')) || 0) : 0;
+    const deficit = defCol  >= 0 ? (parseFloat(String(row[defCol]  ?? '')) || 0) : Math.max(0, goal - yourVal);
+    const cat     = catCol  >= 0 ? String(row[catCol] ?? '').trim() : '';
+
+    items.push({ factor, category: cat, corrType, easy, yourVal, goal, deficit });
+  }
+
+  return items.sort((a, b) => b.deficit - a.deficit);
+}
+
+// ── LSI parser ───────────────────────────────────────────────
+function coraParseLSI(wb) {
+  const ws = coraFindSheet(wb, ['^lsi$', 'lsi report', 'lsi']);
+  if (!ws) return [];
+
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+  const { map, rowIdx } = coraHeaderMap(rows, ['term', 'phrase', 'word', 'deficit'], 20);
+  if (rowIdx === -1) return [];
+
+  const termCol  = Math.max(0, coraCol(map, 'term', 'phrase', 'word'));
+  const pagesCol = coraCol(map, 'pages');
+  const maxCol   = coraCol(map, 'max');
+  const avgCol   = coraCol(map, 'avg', 'average');
+  const totalCol = coraCol(map, 'total');
+  const yrCol    = coraCol(map, 'your count', 'you', 'your', 'count');
+  const defCol   = coraCol(map, 'deficit');
+  const corrCol  = coraCol(map, 'best of both', 'best', 'spearman', 'pearson', 'corr');
+
+  const items = [];
+  for (let r = rowIdx + 1; r < rows.length; r++) {
+    const row  = rows[r];
+    const term = String(row[termCol] ?? '').trim();
+    if (!term) continue;
+
+    const avgVal  = avgCol >= 0 ? (parseFloat(row[avgCol])  || 0) : 0;
+    const yours   = yrCol  >= 0 ? (parseFloat(row[yrCol])   || 0) : 0;
+    const deficit = defCol >= 0 ? (parseFloat(row[defCol])  || 0) : Math.max(0, avgVal - yours);
+    if (deficit <= 0) continue;
+
+    items.push({
+      term,
+      pages:   pagesCol >= 0 ? (parseInt(row[pagesCol])   || 0) : 0,
+      max:     maxCol   >= 0 ? (parseFloat(row[maxCol])   || 0) : 0,
+      avg:     avgVal,
+      total:   totalCol >= 0 ? (parseInt(row[totalCol])   || 0) : 0,
+      yours,
+      deficit,
+      corr:    corrCol  >= 0 ? (parseFloat(row[corrCol])  || 0) : 0,
+    });
+  }
+
+  return items.sort((a, b) => b.deficit - a.deficit);
+}
+
+// ── Grades parser ────────────────────────────────────────────
+function coraParseGrades(wb) {
+  const KNOWN_CATS = [
+    'Page Size','Meta Tags','Title Tags','Headings','Navigation',
+    'Content Tuning','Content Formatting','Images','Videos',
+    'Sentiment','Keyword Frequency','Trust','Forms','Ratings & Reviews',
+    'Open Graph','Authorship','Social Integration','Google Presentation',
+    'Links on Page','Fringe','Misc',
+  ];
+  const GRADE_RE = /^[A-F][+-]?$/;
+  const grades   = [];
+  const seen     = new Set();
+
+  for (const pat of [/basic.?tuning/i, /intermediate.?tuning/i]) {
+    const wsName = wb.SheetNames.find(n => pat.test(n));
+    if (!wsName) continue;
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wsName], { header: 1, defval: '' });
+    let curCat = null, curGrade = null;
+
+    for (const row of rows) {
+      const texts  = row.map(c => String(c ?? '').trim());
+      const joined = texts.join(' ');
+      const cat    = KNOWN_CATS.find(c => joined.toLowerCase().includes(c.toLowerCase()));
+
+      if (cat) {
+        if (curCat && curGrade && !seen.has(curCat)) { grades.push({ category: curCat, grade: curGrade }); seen.add(curCat); }
+        curCat   = cat;
+        curGrade = texts.find(t => GRADE_RE.test(t)) ?? null;
+      } else if (curCat) {
+        const g = texts.find(t => GRADE_RE.test(t));
+        if (g && !curGrade) curGrade = g;
+      }
+    }
+    if (curCat && curGrade && !seen.has(curCat)) { grades.push({ category: curCat, grade: curGrade }); seen.add(curCat); }
+  }
+
+  return grades;
+}
+
+// ── SheetJS dynamic loader ───────────────────────────────────
+async function coraLoadXLSX() {
+  if (window.XLSX) return;
+  await new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js';
+    s.onload = res; s.onerror = () => rej(new Error('Failed to load SheetJS. Check your internet connection.'));
+    document.head.appendChild(s);
+  });
+}
+
+async function coraHandleFile(file) {
+  const upload = document.getElementById('cora-upload');
+  upload.innerHTML = '<div style="text-align:center;padding:60px;color:var(--text-muted);font-size:15px">⏳ Parsing report…</div>';
+  try {
+    await coraLoadXLSX();
+    const buf  = await file.arrayBuffer();
+    const wb   = XLSX.read(buf, { type: 'array', cellStyles: true });
+
+    coraReport = {
+      fileName: file.name,
+      meta:     coraParseMeta(wb),
+      roadMap:  coraParseRoadMap(wb),
+      lsi:      coraParseLSI(wb),
+      grades:   coraParseGrades(wb),
+      sheets:   wb.SheetNames,
+    };
+    coraRender();
+  } catch (err) {
+    upload.innerHTML = `
+      <div class="cora-upload-inner" style="text-align:center">
+        <div style="color:var(--danger);margin-bottom:12px;font-size:14px">❌ ${escHtml(err.message)}</div>
+        <button class="btn btn-ghost" id="cora-retry-btn">Try Again</button>
+      </div>`;
+    document.getElementById('cora-retry-btn').addEventListener('click', coraReset);
+  }
+}
+
+// ── render ───────────────────────────────────────────────────
+function coraReset() {
+  coraReport  = null;
+  coraFilters = { effort: 'all', corr: 'all' };
+  document.getElementById('cora-view').classList.add('hidden');
+  const upload = document.getElementById('cora-upload');
+  upload.innerHTML = `
+    <div class="cora-upload-inner">
+      <div class="cora-upload-icon">📊</div>
+      <div class="cora-upload-title">Cora SEO Report Analyzer</div>
+      <div class="cora-upload-sub">Upload your Cora Excel report (.xlsx) to get an expert priority breakdown of what to fix and why</div>
+      <input type="file" id="cora-file-input" accept=".xlsx,.xls" style="display:none">
+      <button class="btn btn-primary" id="cora-browse-btn">Upload Report</button>
+      <div class="cora-upload-hint">Or drag and drop the .xlsx file anywhere in this area</div>
+    </div>`;
+  upload.classList.remove('hidden');
+  coraBindUpload();
+}
+
+function coraRender() {
+  document.getElementById('cora-upload').classList.add('hidden');
+  document.getElementById('cora-view').classList.remove('hidden');
+
+  const m     = coraReport.meta;
+  const parts = [];
+  if (m.keyword)  parts.push(`<strong>${escHtml(m.keyword)}</strong>`);
+  if (m.domain)   parts.push(`<span class="cora-meta-dim">${escHtml(m.domain)}</span>`);
+  if (m.date)     parts.push(`<span class="cora-meta-dim">${escHtml(m.date)}</span>`);
+  parts.push(`<span class="cora-meta-dim">${escHtml(coraReport.fileName)}</span>`);
+  document.getElementById('cora-meta-bar').innerHTML = parts.join(' <span class="cora-sep">·</span> ');
+
+  // Reset sub-tabs to Road Map
+  document.querySelectorAll('.cora-stab').forEach((b, i) => b.classList.toggle('active', i === 0));
+  document.querySelectorAll('.cora-section').forEach((s, i) => {
+    s.classList.toggle('active', i === 0);
+    s.classList.toggle('hidden', i !== 0);
+  });
+
+  coraRenderRoadMap();
+  coraRenderLSI();
+  coraRenderGrades();
+}
+
+function coraFilteredRoadMap() {
+  return (coraReport?.roadMap ?? []).filter(item => {
+    if (coraFilters.effort === 'easy' && !item.easy)              return false;
+    if (coraFilters.effort === 'hard' &&  item.easy)              return false;
+    if (coraFilters.corr   !== 'all'  && item.corrType !== coraFilters.corr) return false;
+    return true;
+  });
+}
+
+function coraRenderRoadMap() {
+  const all    = coraReport?.roadMap ?? [];
+  const items  = coraFilteredRoadMap();
+  const nGreen = all.filter(i => i.corrType === 'green').length;
+  const nEasy  = all.filter(i => i.easy).length;
+
+  document.getElementById('cora-rm-stats').innerHTML =
+    `<span>${all.length} deficient factors</span>`
+    + `<span class="cora-sep">·</span><span style="color:#00B050;font-weight:600">${nGreen} universal correlations</span>`
+    + `<span class="cora-sep">·</span><span style="color:var(--accent);font-weight:600">${nEasy} easy wins</span>`
+    + `<span class="cora-sep">·</span><span>${items.length} shown</span>`;
+
+  const LABEL = { green: '🟢 Universal', black: '⚫ Competitor', red: '🔴 Opportunity' };
+  const CLS   = { green: 'cora-badge-green', black: 'cora-badge-black', red: 'cora-badge-red' };
+
+  const tbody = document.getElementById('cora-rm-tbody');
+  if (!items.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:24px">No factors match the current filters.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = items.map(item => `
+    <tr class="cora-rm-row ${item.corrType === 'green' ? 'cora-row-green' : item.corrType === 'red' ? 'cora-row-red' : ''}">
+      <td><span class="cora-type-badge ${CLS[item.corrType] || ''}">${LABEL[item.corrType] || item.corrType}</span></td>
+      <td class="cora-factor-cell">${escHtml(item.factor)}</td>
+      <td class="cora-cat-cell">${escHtml(item.category)}</td>
+      <td>${item.easy
+        ? '<span class="cora-easy-badge">⚡ Easy</span>'
+        : '<span class="cora-hard-badge">🔧 Hard</span>'}</td>
+      <td style="text-align:right;font-variant-numeric:tabular-nums">${item.yourVal !== 0 ? item.yourVal : '—'}</td>
+      <td style="text-align:right;font-variant-numeric:tabular-nums">${item.goal    !== 0 ? item.goal    : '—'}</td>
+      <td style="text-align:right"><strong class="cora-gap-val">${item.deficit > 0 ? '+' + item.deficit : item.deficit}</strong></td>
+    </tr>`).join('');
+}
+
+function coraRenderLSI() {
+  const items = coraReport?.lsi ?? [];
+  const tbody = document.getElementById('cora-lsi-tbody');
+
+  if (!items.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:24px">No LSI data found. Make sure the report contains an "LSI" sheet.</td></tr>';
+    return;
+  }
+
+  const corrBar = v => {
+    const pct = Math.min(Math.abs(v) * 100, 100).toFixed(0);
+    const color = v < 0 ? '#4361ee' : '#aaa';
+    return `<div style="display:inline-flex;align-items:center;gap:6px">
+      <div style="width:48px;height:5px;background:var(--border);border-radius:3px;overflow:hidden">
+        <div style="width:${pct}%;height:100%;background:${color};border-radius:3px"></div>
+      </div>
+      <span style="font-size:12px;font-variant-numeric:tabular-nums">${v.toFixed(3)}</span>
+    </div>`;
+  };
+
+  tbody.innerHTML = items.slice(0, 300).map(item => `
+    <tr>
+      <td class="cora-term-cell"><strong>${escHtml(item.term)}</strong></td>
+      <td style="text-align:right;color:var(--text-muted);font-size:12px">${item.pages || '—'}</td>
+      <td style="text-align:right;font-variant-numeric:tabular-nums">${item.avg ? item.avg.toFixed(1) : '—'}</td>
+      <td style="text-align:right;font-variant-numeric:tabular-nums">${item.yours}</td>
+      <td style="text-align:right"><strong class="cora-gap-val">+${Math.ceil(item.deficit)}</strong></td>
+      <td style="text-align:right">${corrBar(item.corr)}</td>
+    </tr>`).join('');
+}
+
+function coraRenderGrades() {
+  const grades = coraReport?.grades ?? [];
+  const grid   = document.getElementById('cora-grades-grid');
+
+  if (!grades.length) {
+    grid.innerHTML = '<div class="cora-grades-empty">No grade data detected. Check that the report has Basic Tunings or Intermediate Tunings sheets.</div>';
+    return;
+  }
+
+  const gradeColor = {
+    'A+':'#00B050','A':'#00B050','A-':'#4EA72A',
+    'B+':'#4EA72A','B':'#92D050','B-':'#BFBF00',
+    'C+':'#FFC000','C':'#FFC000','C-':'#FF7300',
+    'D+':'#FF7300','D':'#C00000','D-':'#C00000',
+    'F' :'#A50000',
+  };
+
+  grid.innerHTML = grades.map(({ category, grade }) => `
+    <div class="cora-grade-card">
+      <div class="cora-grade-letter" style="color:${gradeColor[grade] || '#888'}">${escHtml(grade)}</div>
+      <div class="cora-grade-cat">${escHtml(category)}</div>
+    </div>`).join('');
+}
+
+function coraCopyBrief() {
+  if (!coraReport) return;
+  const kw   = coraReport.meta?.keyword || '(keyword)';
+  const rm   = coraReport.roadMap ?? [];
+  const lsi  = coraReport.lsi ?? [];
+
+  const section = (title, rows) =>
+    rows.length ? [`\n━━ ${title} ━━`, ...rows].join('\n') : '';
+
+  const text = [
+    `SEO ACTION BRIEF — ${kw}`,
+    `Source: ${coraReport.fileName} · LLAMASEO · ${new Date().toLocaleDateString()}`,
+    section('QUICK WINS (🟢 Universal + ⚡ Easy)',
+      rm.filter(i => i.corrType === 'green' && i.easy)
+        .map(i => `• ${i.factor}: need +${i.deficit} (yours ${i.yourVal} → target ${i.goal})`)),
+    section('🟢 Universal — Hard (dev / off-page)',
+      rm.filter(i => i.corrType === 'green' && !i.easy)
+        .map(i => `• ${i.factor}: need +${i.deficit}`)),
+    section('⚫ Competitor-specific — Easy',
+      rm.filter(i => i.corrType === 'black' && i.easy)
+        .map(i => `• ${i.factor}: need +${i.deficit}`)),
+    section('⚫ Competitor-specific — Hard',
+      rm.filter(i => i.corrType === 'black' && !i.easy)
+        .map(i => `• ${i.factor}: need +${i.deficit}`)),
+    section('🔴 Opportunity factors (test carefully)',
+      rm.filter(i => i.corrType === 'red')
+        .map(i => `• ${i.factor}: need +${i.deficit}`)),
+    section('TOP LSI CONTENT GAPS (add to content)',
+      lsi.slice(0, 20)
+        .map(t => `• "${t.term}" — add ${Math.ceil(t.deficit)} (yours: ${t.yours}, competitor avg: ${t.avg.toFixed(1)})`)),
+  ].filter(Boolean).join('\n');
+
+  navigator.clipboard.writeText(text).then(() => {
+    const btn  = document.getElementById('cora-copy-btn');
+    const orig = btn.textContent;
+    btn.textContent = '✓ Copied!';
+    setTimeout(() => { btn.textContent = orig; }, 2000);
+  });
+}
+
+// ── bind upload events ───────────────────────────────────────
+function coraBindUpload() {
+  const zone  = document.getElementById('cora-upload');
+  const btn   = document.getElementById('cora-browse-btn');
+  const input = document.getElementById('cora-file-input');
+
+  if (btn)   btn.addEventListener('click',  () => input.click());
+  if (input) input.addEventListener('change', e => { if (e.target.files[0]) coraHandleFile(e.target.files[0]); });
+
+  zone.addEventListener('dragover',  e => { e.preventDefault(); zone.classList.add('cora-drag'); });
+  zone.addEventListener('dragleave', ()  => zone.classList.remove('cora-drag'));
+  zone.addEventListener('drop', e => {
+    e.preventDefault(); zone.classList.remove('cora-drag');
+    const f = e.dataTransfer.files[0];
+    if (f) coraHandleFile(f);
+  });
+}
+
+function coraInit() {
+  coraBindUpload();
+
+  document.getElementById('cora-new-btn').addEventListener('click', coraReset);
+
+  document.querySelectorAll('.cora-stab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const stab = btn.dataset.stab;
+      document.querySelectorAll('.cora-stab').forEach(b => b.classList.toggle('active', b === btn));
+      document.querySelectorAll('.cora-section').forEach(s => {
+        s.classList.toggle('active', s.id === `cora-sec-${stab}`);
+        s.classList.toggle('hidden', s.id !== `cora-sec-${stab}`);
+      });
+    });
+  });
+
+  document.querySelectorAll('.cora-fbtn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.fk;
+      document.querySelectorAll(`.cora-fbtn[data-fk="${key}"]`).forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      coraFilters[key] = btn.dataset.fv;
+      coraRenderRoadMap();
+    });
+  });
+
+  document.getElementById('cora-copy-btn').addEventListener('click', coraCopyBrief);
+
+  document.getElementById('cora-lsi-copy-btn').addEventListener('click', () => {
+    const top = (coraReport?.lsi ?? []).slice(0, 20);
+    if (!top.length) return;
+    const text = 'TOP LSI GAPS:\n' + top.map(t =>
+      `"${t.term}" — add ${Math.ceil(t.deficit)} (yours: ${t.yours}, avg: ${t.avg.toFixed(1)})`).join('\n');
+    navigator.clipboard.writeText(text).then(() => {
+      const btn  = document.getElementById('cora-lsi-copy-btn');
+      const orig = btn.textContent;
+      btn.textContent = '✓ Copied!';
+      setTimeout(() => { btn.textContent = orig; }, 2000);
+    });
+  });
+
+  document.getElementById('cora-lsi-search').addEventListener('input', e => {
+    const q = e.target.value.toLowerCase();
+    document.querySelectorAll('#cora-lsi-tbody tr').forEach(tr => {
+      tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+  });
+}
 
 /* ── START ── */
 init();
