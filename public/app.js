@@ -2230,11 +2230,35 @@ async function coraHandleFile(file) {
       lsiCritSpearman: lsiResult.spearmanCrit,
       lsiCritPearson:  lsiResult.pearsonCrit,
     };
-    // Tag the active RT client so the Cora column shows in Rank Tracker
+    // Validate domain matches active RT client, then tag it
     const rtClient = rtActiveClient();
     if (rtClient) {
+      const normalize = d => String(d || '').toLowerCase().replace(/^www\./, '').replace(/\/.*$/, '').trim();
+      const coraDomain = normalize(coraReport.meta?.domain);
+
+      if (coraDomain) {
+        // Collect unique domains from all client keyword URLs
+        const clientDomains = new Set();
+        (rtClient.keywords || []).forEach(kw => {
+          [kw.url, kw.targetUrl].forEach(u => {
+            try { clientDomains.add(normalize(new URL(u).hostname)); } catch {}
+          });
+        });
+
+        const matched = clientDomains.size === 0
+          || [...clientDomains].some(d => d === coraDomain || d.includes(coraDomain) || coraDomain.includes(d));
+
+        if (!matched) {
+          const clientList = [...clientDomains].join(', ') || '(no URLs set on this client)';
+          const proceed = confirm(
+            `⚠️ Domain mismatch\n\nThis Cora report is for:  ${coraDomain}\nCurrent client URLs:       ${clientList}\n\nAssociate this report with "${rtClient.name}" anyway?`
+          );
+          if (!proceed) return;
+        }
+      }
+
       rtClient.coraFileName = file.name;
-      rtClient.coraDomain   = coraReport.meta?.domain || '';
+      rtClient.coraDomain   = coraDomain;
       rtSave();
       rtRender();
     }
