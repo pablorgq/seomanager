@@ -1733,18 +1733,19 @@ async function rtImportFromAA() {
       operation: 'read',
       fields: ['id', 'keyword_phrase', 'primary_keyword'],
       filters: [
-        { campaign_id:    { '$equals_comparison': campId } },
-        { primary_keyword: { '$equals_comparison': true  } },
+        { campaign_id: { '$equals_comparison': campId } },
       ],
       sort: [{ id: 'asc' }],
       limit: 500,
       offset: 0,
     });
-    if (!kwRows.length) throw new Error(`No primary keywords found for campaign ID ${campId}. Mark keywords as primary in AgencyAnalytics first.`);
+    // Filter client-side — AA API doesn't reliably support primary_keyword filter
+    const primaryRows = kwRows.filter(r => r.primary_keyword === true || r.primary_keyword === 1 || r.primary_keyword === '1');
+    if (!primaryRows.length) throw new Error(`No primary (starred) keywords found for campaign ID ${campId}. Mark keywords as primary in AgencyAnalytics first.`);
 
     const existing = new Set(c.keywords.map(k => (k.keyword || '').toLowerCase()));
     let added = 0, skipped = 0;
-    for (const row of kwRows) {
+    for (const row of primaryRows) {
       const phrase = (row.keyword_phrase || '').trim();
       if (!phrase) continue;
       if (existing.has(phrase.toLowerCase())) { skipped++; continue; }
