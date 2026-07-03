@@ -2013,8 +2013,8 @@ async function coraLoadXLSX() {
   if (window.XLSX) return;
   await new Promise((res, rej) => {
     const s = document.createElement('script');
-    s.src = 'https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js';
-    s.onload = res; s.onerror = () => rej(new Error('Failed to load SheetJS. Check your internet connection.'));
+    s.src = '/xlsx.min.js';
+    s.onload = res; s.onerror = () => rej(new Error('Failed to load xlsx.min.js'));
     document.head.appendChild(s);
   });
 }
