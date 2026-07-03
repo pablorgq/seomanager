@@ -1278,6 +1278,8 @@ function rtRender() {
       <td class="rt-td-local">${rtLocalBadge(kw.localRank)}</td>
       <td class="rt-td-url"><a href="${escHtml(kw.url || '')}" target="_blank" rel="noopener" class="rt-url-link" title="${escHtml(kw.url || '')}">${escHtml(rtShortUrl(kw.url || ''))}</a></td>
       <td class="rt-td-kw rt-editable" data-field="keyword">${escHtml(kw.keyword || '')}</td>
+      <td class="rt-td-mk"><button class="rt-mk-btn${kw.mainKeyword ? ' rt-mk-active' : ''}" data-id="${escHtml(kw.id)}" title="Toggle Main Keyword">MK</button></td>
+      <td class="rt-td-target rt-editable" data-field="targetUrl">${kw.targetUrl ? `<a href="${escHtml(kw.targetUrl)}" target="_blank" rel="noopener" class="rt-url-link" title="${escHtml(kw.targetUrl)}">${escHtml(rtShortUrl(kw.targetUrl))}</a>` : '<span class="rt-na">—</span>'}</td>
       <td class="rt-td-vol">${kw.volume ? escHtml(String(kw.volume)) : '<span class="rt-na">—</span>'}</td>
       <td class="rt-td-delta">${rtDeltaCell(kw.rank, kw.prevRank)}</td>
       <td class="rt-td-pop">${rtPopCell(kw)}</td>
@@ -1350,6 +1352,13 @@ function rtInit() {
   document.getElementById('rt-tbody').addEventListener('click', e => {
     const delBtn = e.target.closest('.rt-del-btn');
     if (delBtn) { rtDeleteRow(delBtn.closest('tr').dataset.id); return; }
+
+    const mkBtn = e.target.closest('.rt-mk-btn');
+    if (mkBtn) {
+      const kw = rtActiveClient()?.keywords?.find(k => k.id === mkBtn.dataset.id);
+      if (kw) { kw.mainKeyword = !kw.mainKeyword; rtSave(); rtRender(); }
+      return;
+    }
 
     const popBtn = e.target.closest('.rt-run-pop-btn');
     if (popBtn) {
@@ -1522,6 +1531,7 @@ function rtOpenEditModal(kwId, field) {
 
   const labels = {
     keyword:   'Keyword',
+    targetUrl: 'Target URL',
     popStatus: 'POP Status',
     note:      'Note',
   };

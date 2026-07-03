@@ -782,9 +782,12 @@ details[open] .card-prompts-toggle::before { transform: rotate(90deg); }
 .rt-th-rank  { width: 80px; }
 .rt-th-local { width: 68px; text-align: center; }
 .rt-td-local { text-align: center; }
-.rt-th-url   { width: 180px; }
-.rt-th-kw    { min-width: 160px; }
-.rt-th-vol   { width: 60px; text-align: right; }
+.rt-th-url    { width: 180px; }
+.rt-th-kw     { min-width: 160px; }
+.rt-th-mk     { width: 44px; text-align: center; }
+.rt-td-mk     { text-align: center; }
+.rt-th-target { min-width: 140px; }
+.rt-th-vol    { width: 60px; text-align: right; }
 .rt-th-delta { width: 56px; text-align: center; }
 .rt-th-pop   { min-width: 140px; }
 .rt-th-note  { min-width: 120px; }
@@ -818,6 +821,17 @@ details[open] .card-prompts-toggle::before { transform: rotate(90deg); }
   text-overflow: ellipsis; white-space: nowrap;
 }
 .rt-url-link:hover { text-decoration: underline; }
+
+/* MK (Main Keyword) toggle button */
+.rt-mk-btn {
+  font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+  border: 1px solid var(--border); color: var(--text-muted); background: transparent;
+  cursor: pointer; transition: all .15s; letter-spacing: .03em;
+}
+.rt-mk-btn:hover { border-color: var(--accent); color: var(--accent); }
+.rt-mk-btn.rt-mk-active {
+  background: var(--accent); border-color: var(--accent); color: #fff;
+}
 
 /* Run POP button */
 .rt-run-pop-btn {
