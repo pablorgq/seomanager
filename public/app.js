@@ -2196,15 +2196,9 @@ function coraParseGrades(wb) {
   return grades;
 }
 
-// ── SheetJS dynamic loader ───────────────────────────────────
+// ── SheetJS loader ───────────────────────────────────────────
 async function coraLoadXLSX() {
-  if (window.XLSX) return;
-  await new Promise((res, rej) => {
-    const s = document.createElement('script');
-    s.src = '/xlsx.min.js';
-    s.onload = res; s.onerror = () => rej(new Error('Failed to load xlsx.min.js'));
-    document.head.appendChild(s);
-  });
+  if (!window.XLSX) throw new Error('SheetJS not loaded — please refresh the page and try again.');
 }
 
 async function coraHandleFile(file) {
