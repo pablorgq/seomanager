@@ -1307,6 +1307,7 @@ function rtInit() {
     rtOpenModal('rt-importModal');
   });
   document.getElementById('rt-importConfirmBtn').addEventListener('click', rtImport);
+  document.getElementById('rt-aaImportBtn').addEventListener('click', rtImportFromAA);
   document.getElementById('rt-addRowBtn').addEventListener('click', rtAddRow);
   document.getElementById('rt-saveClientBtn').addEventListener('click', rtSaveClient);
   document.getElementById('rt-deleteClientBtn').addEventListener('click', rtDeleteClient);
@@ -1566,6 +1567,26 @@ function rtImport() {
   rtCloseModal('rt-importModal');
 }
 
+/* ── AA fetch helper (shared by refresh + import) ── */
+async function aaQuery(body) {
+  const r = await fetch('/api/aa', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider: 'agency-analytics-v2', ...body }),
+  });
+  const d = await r.json();
+  const aaErr = !r.ok || d?.status === 'error' || (d?.code >= 400);
+  if (aaErr) throw new Error(
+    (d?.results?.messages || []).join('; ') ||
+    d?.error?.message ||
+    `AA error ${d?.code || r.status}`
+  );
+  return Array.isArray(d?.results?.rows) ? d.results.rows
+       : Array.isArray(d?.data)          ? d.data
+       : Array.isArray(d)               ? d
+       : [];
+}
+
 /* ── AA ranking refresh ── */
 async function rtRefreshAll() {
   const c = rtActiveClient();
@@ -1580,25 +1601,6 @@ async function rtRefreshAll() {
   try {
     const today  = new Date().toISOString().slice(0, 10);
     const campId = String(c.aaCampaignId);
-
-    async function aaQuery(body) {
-      const r = await fetch('/api/aa', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: 'agency-analytics-v2', ...body }),
-      });
-      const d = await r.json();
-      const aaErr = !r.ok || d?.status === 'error' || (d?.code >= 400);
-      if (aaErr) throw new Error(
-        (d?.results?.messages || []).join('; ') ||
-        d?.error?.message ||
-        `AA error ${d?.code || r.status}`
-      );
-      return Array.isArray(d?.results?.rows) ? d.results.rows
-           : Array.isArray(d?.data)          ? d.data
-           : Array.isArray(d)               ? d
-           : [];
-    }
 
     // Step 1: get keyword phrases + ids for this campaign (no date fields — they're date-dependent)
     const kwRows = await aaQuery({
@@ -1668,6 +1670,53 @@ async function rtRefreshAll() {
   } finally {
     btn.disabled   = false;
     btn.innerHTML  = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> Refresh Rankings`;
+  }
+}
+
+/* ── Import keywords from AA campaign ── */
+async function rtImportFromAA() {
+  const c = rtActiveClient();
+  if (!c) return;
+  if (!hasAA) { alert('AgencyAnalytics API key is not configured on the server.'); return; }
+  if (!c.aaCampaignId) { alert('Set the AgencyAnalytics Campaign ID for this client (click ✎ edit).'); return; }
+
+  const btn = document.getElementById('rt-aaImportBtn');
+  btn.disabled    = true;
+  btn.textContent = 'Importing…';
+
+  try {
+    const kwRows = await aaQuery({
+      asset: 'keyword',
+      operation: 'read',
+      fields: ['id', 'keyword_phrase'],
+      filters: [{ campaign_id: { '$equals_comparison': String(c.aaCampaignId) } }],
+      sort: [{ id: 'asc' }],
+      limit: 500,
+      offset: 0,
+    });
+    if (!kwRows.length) throw new Error(`No keywords found for campaign ID ${c.aaCampaignId}. Verify the campaign ID in ✎ edit.`);
+
+    const existing = new Set(c.keywords.map(k => (k.keyword || '').toLowerCase()));
+    let added = 0, skipped = 0;
+    for (const row of kwRows) {
+      const phrase = (row.keyword_phrase || '').trim();
+      if (!phrase) continue;
+      if (existing.has(phrase.toLowerCase())) { skipped++; continue; }
+      c.keywords.push({ id: rtUid(), url: '', keyword: phrase, volume: null,
+        note: '', popStatus: '', popDate: '', rank: null, prevRank: null, lastCheck: null });
+      existing.add(phrase.toLowerCase());
+      added++;
+    }
+
+    rtSave();
+    document.getElementById('rt-lastRefresh').textContent =
+      `Added ${added} keyword${added !== 1 ? 's' : ''} (${skipped} already existed) · ${new Date().toLocaleTimeString()}`;
+    rtRender();
+  } catch (e) {
+    alert('Import failed: ' + e.message);
+  } finally {
+    btn.disabled  = false;
+    btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="8 17 12 21 16 17"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.88 18.09A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.29"/></svg> ↓ AA Keywords`;
   }
 }
 
