@@ -1929,7 +1929,7 @@ function coraParseRoadMap(wb) {
 // ── LSI parser ───────────────────────────────────────────────
 function coraParseLSI(wb) {
   // Try multiple sheet name patterns — Cora uses "LSI" but some versions vary
-  const ws = coraFindSheet(wb, ['^lsi$', 'lsi report', 'lsi keyword', 'lsi analysis', 'lsi']);
+  const ws = coraFindSheet(wb, ['lsi keywords', '^lsi$', 'lsi report', 'lsi keyword', 'lsi analysis', 'lsi']);
   if (!ws) return { items: [], sheetNames: wb.SheetNames };
 
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
