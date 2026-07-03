@@ -1928,34 +1928,42 @@ function coraParseRoadMap(wb) {
 
 // ── LSI parser ───────────────────────────────────────────────
 function coraParseLSI(wb) {
-  const ws = coraFindSheet(wb, ['^lsi$', 'lsi report', 'lsi']);
-  if (!ws) return [];
+  // Try multiple sheet name patterns — Cora uses "LSI" but some versions vary
+  const ws = coraFindSheet(wb, ['^lsi$', 'lsi report', 'lsi keyword', 'lsi analysis', 'lsi']);
+  if (!ws) return { items: [], sheetNames: wb.SheetNames };
 
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-  const { map, rowIdx } = coraHeaderMap(rows, ['term', 'phrase', 'word', 'deficit'], 20);
-  if (rowIdx === -1) return [];
+  // Header scan: look for rows containing known LSI column keywords
+  const { map, rowIdx } = coraHeaderMap(rows, ['term', 'phrase', 'word', 'pages', 'deficit', 'spearman', 'pearson', 'best'], 25);
+  if (rowIdx === -1) return { items: [], sheetNames: wb.SheetNames };
 
-  const termCol     = Math.max(0, coraCol(map, 'term', 'phrase', 'word'));
+  const termCol     = Math.max(0, coraCol(map, 'term', 'phrase', 'word', 'keyword'));
   const pagesCol    = coraCol(map, 'pages');
   const maxCol      = coraCol(map, 'max');
   const avgCol      = coraCol(map, 'avg', 'average');
   const totalCol    = coraCol(map, 'total');
-  const yrCol       = coraCol(map, 'your count', 'you', 'your', 'count');
   const defCol      = coraCol(map, 'deficit');
-  const spearmanCol = coraCol(map, 'spearman');
-  const pearsonCol  = coraCol(map, 'pearson');
+  const spearmanCol = coraCol(map, 'spearman', 'spearmans');
+  const pearsonCol  = coraCol(map, 'pearson',  'pearsons');
   const bestCol     = coraCol(map, 'best of both', 'best');
+
+  // "Your count" column: Cora names this column with the tracked domain, NOT "your count"
+  // Reliable heuristic: it's the column immediately before "deficit"
+  const yrCol = defCol > 0 ? defCol - 1
+    : coraCol(map, 'your count', 'you', 'your', 'count');
 
   const items = [];
   for (let r = rowIdx + 1; r < rows.length; r++) {
     const row  = rows[r];
     const term = String(row[termCol] ?? '').trim();
-    if (!term) continue;
+    if (!term || /^(term|word|phrase|keyword)$/i.test(term)) continue;
 
     const avgVal  = avgCol >= 0 ? (parseFloat(row[avgCol])  || 0) : 0;
     const yours   = yrCol  >= 0 ? (parseFloat(row[yrCol])   || 0) : 0;
-    const deficit = defCol >= 0 ? (parseFloat(row[defCol])  || 0) : Math.max(0, avgVal - yours);
-    if (deficit <= 0) continue;
+    // If deficit not in a column, compute it; also compute when deficit is 0 but avg > yours
+    const rawDef  = defCol >= 0 ? (parseFloat(row[defCol])  || 0) : 0;
+    const deficit = rawDef !== 0 ? rawDef : Math.max(0, avgVal - yours);
+    if (deficit <= 0 && avgVal <= 0) continue;
 
     const spearman = spearmanCol >= 0 ? (parseFloat(row[spearmanCol]) || 0) : 0;
     const pearson  = pearsonCol  >= 0 ? (parseFloat(row[pearsonCol])  || 0) : 0;
@@ -1963,22 +1971,34 @@ function coraParseLSI(wb) {
       ? (parseFloat(row[bestCol]) || 0)
       : (Math.abs(spearman) >= Math.abs(pearson) ? spearman : pearson);
 
-    // Priority = signal strength × gap magnitude (log-scaled)
-    // Negative correlation means more usage = better rank, so |best| drives priority
-    const priority = Math.abs(best) * Math.log1p(deficit);
+    // Priority score: |correlation| × log(deficit+1)
+    // Negative best = more usage correlates with BETTER rank = "add this"
+    // Fall back to deficit-only if no correlation data
+    const hasCorrData = spearman !== 0 || pearson !== 0 || best !== 0;
+    const priority    = hasCorrData
+      ? Math.abs(best || spearman || pearson) * Math.log1p(deficit)
+      : Math.log1p(deficit) * 0.01; // low priority when no signal
+
+    // Word count of term (1–4 words) — shorter = more general
+    const words = term.split(/\s+/).length;
 
     items.push({
-      term,
+      term, words,
       pages:   pagesCol >= 0 ? (parseInt(row[pagesCol])   || 0) : 0,
       max:     maxCol   >= 0 ? (parseFloat(row[maxCol])   || 0) : 0,
       avg:     avgVal,
       total:   totalCol >= 0 ? (parseInt(row[totalCol])   || 0) : 0,
-      yours, deficit, spearman, pearson, best, priority,
+      yours, deficit, spearman, pearson, best, priority, hasCorrData,
     });
   }
 
   // Sort by priority (signal × gap), not just raw gap
-  return items.sort((a, b) => b.priority - a.priority);
+  // Sort: items with correlation data first (by priority), then no-data items by deficit
+  items.sort((a, b) => {
+    if (a.hasCorrData !== b.hasCorrData) return a.hasCorrData ? -1 : 1;
+    return b.priority - a.priority;
+  });
+  return { items, sheetNames: wb.SheetNames };
 }
 
 // ── Variations parser (wide format: terms = columns, results = rows) ─
@@ -2141,15 +2161,17 @@ async function coraHandleFile(file) {
     const buf  = await file.arrayBuffer();
     const wb   = XLSX.read(buf, { type: 'array', cellStyles: true });
 
+    const lsiResult = coraParseLSI(wb);
     const varResult = coraParseVariations(wb);
     coraReport = {
       fileName:   file.name,
       meta:       coraParseMeta(wb),
       roadMap:    coraParseRoadMap(wb),
-      lsi:        coraParseLSI(wb),
+      lsi:        lsiResult.items,
       variations: varResult.items,
       grades:     coraParseGrades(wb),
-      sheets:     varResult.sheetNames ?? wb.SheetNames,
+      sheets:     wb.SheetNames,
+      lsiSheets:  lsiResult.sheetNames,
     };
     coraRender();
   } catch (err) {
@@ -2320,8 +2342,46 @@ function coraRenderLSI() {
   const tbody = document.getElementById('cora-lsi-tbody');
 
   if (!items.length) {
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:24px">No LSI data found. Make sure the report contains an "LSI" sheet.</td></tr>';
+    const sheets = (coraReport?.lsiSheets || coraReport?.sheets || []).join(', ') || 'none detected';
+    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:24px">
+      No LSI data found. Make sure the report contains an LSI keywords sheet.<br>
+      <span style="font-size:11px">Available sheets: <strong>${escHtml(sheets)}</strong></span>
+    </td></tr>`;
     return;
+  }
+
+  // Build expert analysis panel above table
+  const analysisEl = document.getElementById('cora-lsi-analysis');
+  if (analysisEl) {
+    const strong  = items.filter(i => i.hasCorrData && Math.abs(i.best) >= 0.5);
+    const moderate = items.filter(i => i.hasCorrData && Math.abs(i.best) >= 0.25 && Math.abs(i.best) < 0.5);
+    const addTerms = items.filter(i => i.best < -0.15 && i.deficit > 0).slice(0, 10);
+    const byWords  = {};
+    addTerms.forEach(t => {
+      const wc = Math.min(t.words || t.term.split(/\s+/).length, 4);
+      const key = wc >= 4 ? '4+' : String(wc);
+      (byWords[key] = byWords[key] || []).push(t);
+    });
+    const wordGroups = Object.entries(byWords).sort((a, b) => a[0].localeCompare(b[0]));
+    analysisEl.innerHTML = `
+      <div class="cora-lsi-analysis-box">
+        <h4 style="margin:0 0 8px;font-size:13px;color:var(--text)">📊 LSI Analysis Summary</h4>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px">
+          <span class="cora-stat-pill" style="background:rgba(255,100,0,.12);color:#ff6400">🔥 ${strong.length} strong signals</span>
+          <span class="cora-stat-pill" style="background:rgba(67,97,238,.12);color:#4361ee">⚡ ${moderate.length} moderate signals</span>
+          <span class="cora-stat-pill" style="background:rgba(0,176,80,.12);color:#00B050">↑ ${addTerms.length} top terms to add</span>
+        </div>
+        ${addTerms.length ? `
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">Top priority terms to add (sorted by correlation strength × gap):</div>
+        ${wordGroups.map(([wc, terms]) => `
+          <div style="margin-bottom:6px">
+            <span style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em">${wc === '1' ? '1-word' : wc === '4+' ? '4+ word' : wc+'-word'} terms</span>
+            <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px">
+              ${terms.map(t => `<span class="cora-term-chip" title="Add ~${Math.ceil(t.deficit)} more mentions; correlation: ${t.best.toFixed(3)}">${escHtml(t.term)} <em>+${Math.ceil(t.deficit)}</em></span>`).join('')}
+            </div>
+          </div>`).join('')}
+        ` : '<div style="font-size:12px;color:var(--text-muted)">No strong add-signals detected — review correlation data manually.</div>'}
+      </div>`;
   }
 
   const miniBar = (v, label) => {

@@ -1033,6 +1033,12 @@ details[open] .card-prompts-toggle::before { transform: rotate(90deg); }
 .cora-pri-med    { background: rgba(67,97,238,.12); color: var(--accent); }
 .cora-pri-weak   { background: transparent; color: var(--text-muted); }
 
+/* LSI analysis panel */
+.cora-lsi-analysis-box { background: var(--surface-alt); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+.cora-stat-pill  { display: inline-block; font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 20px; }
+.cora-term-chip  { display: inline-block; font-size: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; }
+.cora-term-chip em { font-style: normal; font-weight: 700; color: #00B050; margin-left: 4px; }
+
 /* Grades grid */
 .cora-grades-grid  { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; margin-top: 4px; }
 .cora-grade-card   { background: var(--surface-alt); border: 1px solid var(--border); border-radius: 10px; padding: 18px 12px; text-align: center; }
