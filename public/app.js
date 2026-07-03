@@ -1823,16 +1823,23 @@ function coraFindSheet(wb, patterns) {
   return null;
 }
 
-function coraHeaderMap(rows, keywords, maxScan = 30) {
+function coraHeaderMap(rows, keywords, maxScan = 30, minMatches = 2) {
+  let bestRow = -1, bestCount = 0, bestMap = {};
   for (let r = 0; r < Math.min(maxScan, rows.length); r++) {
     const cells = rows[r].map(c => String(c ?? '').toLowerCase().trim());
-    if (keywords.some(kw => cells.some(c => c.includes(kw)))) {
+    const hits  = keywords.filter(kw => cells.some(c => c.includes(kw))).length;
+    if (hits >= minMatches && hits > bestCount) {
+      bestCount = hits;
+      bestRow   = r;
       const map = {};
       cells.forEach((h, i) => { if (h) map[h] = i; });
-      return { map, rowIdx: r };
+      bestMap = map;
+      // Perfect match: stop early if we found many columns
+      if (hits >= 4) break;
     }
   }
-  return { map: {}, rowIdx: -1 };
+  if (bestRow === -1) return { map: {}, rowIdx: -1 };
+  return { map: bestMap, rowIdx: bestRow };
 }
 
 function coraCol(map, ...names) {
@@ -1967,13 +1974,15 @@ function coraParseLSI(wb) {
 
     const avgVal  = avgCol >= 0 ? (parseFloat(row[avgCol])  || 0) : 0;
     const yours   = yrCol  >= 0 ? (parseFloat(row[yrCol])   || 0) : 0;
-    // If deficit not in a column, compute it; also compute when deficit is 0 but avg > yours
     const rawDef  = defCol >= 0 ? (parseFloat(row[defCol])  || 0) : 0;
     const deficit = rawDef !== 0 ? rawDef : Math.max(0, avgVal - yours);
-    if (deficit <= 0 && avgVal <= 0) continue;
+    // Skip only if we have zero signal on every numeric field
+    const spearmanRaw = spearmanCol >= 0 ? (parseFloat(row[spearmanCol]) || 0) : 0;
+    const pearsonRaw  = pearsonCol  >= 0 ? (parseFloat(row[pearsonCol])  || 0) : 0;
+    if (deficit <= 0 && avgVal <= 0 && spearmanRaw === 0 && pearsonRaw === 0) continue;
 
-    const spearman = spearmanCol >= 0 ? (parseFloat(row[spearmanCol]) || 0) : 0;
-    const pearson  = pearsonCol  >= 0 ? (parseFloat(row[pearsonCol])  || 0) : 0;
+    const spearman = spearmanRaw;
+    const pearson  = pearsonRaw;
     const best     = bestCol >= 0
       ? (parseFloat(row[bestCol]) || 0)
       : (Math.abs(spearman) >= Math.abs(pearson) ? spearman : pearson);
