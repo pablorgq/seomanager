@@ -1933,9 +1933,16 @@ function coraParseLSI(wb) {
   if (!ws) return { items: [], sheetNames: wb.SheetNames };
 
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-  // Header scan: look for rows containing known LSI column keywords
-  const { map, rowIdx } = coraHeaderMap(rows, ['term', 'phrase', 'word', 'pages', 'deficit', 'spearman', 'pearson', 'best'], 25);
-  if (rowIdx === -1) return { items: [], sheetNames: wb.SheetNames };
+  // Debug snapshot: first 6 rows (helps diagnose header detection issues)
+  const debugRows = rows.slice(0, 6).map((r, i) => `[${i}] ${r.slice(0, 8).map(c => String(c).slice(0, 20)).join(' | ')}`);
+
+  // Header scan: broad keyword list, scan up to 100 rows (Cora has long preambles)
+  const { map, rowIdx } = coraHeaderMap(
+    rows,
+    ['term', 'phrase', 'word', 'pages', 'deficit', 'spearman', 'pearson', 'best', 'avg', 'average', 'count', 'total', 'max'],
+    100
+  );
+  if (rowIdx === -1) return { items: [], sheetNames: wb.SheetNames, debugRows };
 
   const termCol     = Math.max(0, coraCol(map, 'term', 'phrase', 'word', 'keyword'));
   const pagesCol    = coraCol(map, 'pages');
@@ -1998,7 +2005,7 @@ function coraParseLSI(wb) {
     if (a.hasCorrData !== b.hasCorrData) return a.hasCorrData ? -1 : 1;
     return b.priority - a.priority;
   });
-  return { items, sheetNames: wb.SheetNames };
+  return { items, sheetNames: wb.SheetNames, debugRows: [] };
 }
 
 // ── Variations parser (wide format: terms = columns, results = rows) ─
@@ -2172,6 +2179,7 @@ async function coraHandleFile(file) {
       grades:     coraParseGrades(wb),
       sheets:     wb.SheetNames,
       lsiSheets:  lsiResult.sheetNames,
+      lsiDebug:   lsiResult.debugRows,
     };
     coraRender();
   } catch (err) {
@@ -2343,9 +2351,10 @@ function coraRenderLSI() {
 
   if (!items.length) {
     const sheets = (coraReport?.lsiSheets || coraReport?.sheets || []).join(', ') || 'none detected';
-    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:24px">
-      No LSI data found. Make sure the report contains an LSI keywords sheet.<br>
-      <span style="font-size:11px">Available sheets: <strong>${escHtml(sheets)}</strong></span>
+    const debug  = (coraReport?.lsiDebug || []).map(escHtml).join('<br>');
+    tbody.innerHTML = `<tr><td colspan="8" style="text-align:left;color:var(--text-muted);padding:24px">
+      <div style="margin-bottom:8px">No LSI data parsed. Available sheets: <strong>${escHtml(sheets)}</strong></div>
+      ${debug ? `<div style="font-size:11px;font-family:monospace;line-height:1.6;color:var(--text-muted)">First rows of LSI sheet:<br>${debug}</div>` : ''}
     </td></tr>`;
     return;
   }
