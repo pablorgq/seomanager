@@ -1981,44 +1981,105 @@ function coraParseLSI(wb) {
   return items.sort((a, b) => b.priority - a.priority);
 }
 
-// ── Variations parser ────────────────────────────────────────
+// ── Variations parser (wide format: terms = columns, results = rows) ─
 function coraParseVariations(wb) {
-  const ws = coraFindSheet(wb, ['variation', 'variations', 'content.*var', 'var.*report', 'var']);
-  if (!ws) return [];
+  // Try named sheets first, then fall back to any sheet with wide variation data
+  const ws = coraFindSheet(wb, [
+    'variation', 'variations', 'keyword variation', 'content.*var', 'var.*report', 'var'
+  ]) || coraDetectVariationsSheet(wb);
+  if (!ws) return { items: [], sheetNames: wb.SheetNames };
 
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+  if (rows.length < 3) return { items: [], sheetNames: wb.SheetNames };
+
+  // Determine format: wide (terms as columns) or tall (terms as rows)
+  // Wide format: first row has many columns, several of which look like keyword phrases
+  const firstRow = rows[0] || [];
+  const isWide   = firstRow.length > 8;
+
+  if (isWide) {
+    return { items: coraParseVarWide(ws, rows), sheetNames: wb.SheetNames };
+  }
+  // Tall format fallback
+  return { items: coraParseVarTall(ws, rows), sheetNames: wb.SheetNames };
+}
+
+function coraDetectVariationsSheet(wb) {
+  // Try to find any sheet whose first row has many text columns (variation terms)
+  for (const name of wb.SheetNames) {
+    const ws   = wb.Sheets[name];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    if (!rows.length) continue;
+    const first = rows[0];
+    const textCols = first.filter(c => typeof c === 'string' && c.trim().split(' ').length >= 2);
+    if (textCols.length >= 5) return ws;
+  }
+  return null;
+}
+
+function coraParseVarWide(ws, rows) {
+  // Row 0 = column headers: [label col, url col?, "# used"?, ...variation terms...]
+  // Find data start column: first col whose header looks like a keyword phrase (≥2 words)
+  const hdrRow   = rows[0];
+  let termStart  = -1;
+  const termCols = []; // { col, term }
+
+  for (let c = 0; c < hdrRow.length; c++) {
+    const h = String(hdrRow[c] || '').trim();
+    if (h.split(' ').length >= 2 && !/^#|^result|^page|^url|^domain/i.test(h)) {
+      if (termStart === -1) termStart = c;
+      termCols.push({ col: c, term: h });
+    }
+  }
+  if (!termCols.length) return [];
+
+  // Find key rows
+  let p1MaxIdx  = -1, p1AvgIdx  = -1, yourIdx = -1;
+  for (let r = 1; r < rows.length; r++) {
+    const lbl = String(rows[r][0] || rows[r][1] || '').toLowerCase().trim();
+    if (/page\s*1\s*max/.test(lbl))                            p1MaxIdx = r;
+    if (/page\s*1\s*avg|page\s*1\s*average/.test(lbl))        p1AvgIdx = r;
+
+    // Yellow = user's tracked page
+    for (let c = 0; c < Math.min(4, hdrRow.length); c++) {
+      if (coraColorType(coraCellFill(ws, r, c)) === 'yellow') { yourIdx = r; break; }
+    }
+  }
+
+  if (p1AvgIdx === -1 && p1MaxIdx === -1) return [];
+  const benchIdx = p1AvgIdx >= 0 ? p1AvgIdx : p1MaxIdx;
+
+  return termCols.map(({ col, term }) => {
+    const avg    = parseFloat(rows[benchIdx]?.[col]) || 0;
+    const max    = p1MaxIdx >= 0 ? (parseFloat(rows[p1MaxIdx]?.[col]) || 0) : avg;
+    const yours  = yourIdx  >= 0 ? (parseFloat(rows[yourIdx]?.[col])  || 0) : 0;
+    const deficit = Math.max(0, avg - yours);
+    return { term, pages: 0, max, avg, yours, deficit, corr: 0 };
+  })
+  .filter(i => i.avg > 0 || i.deficit > 0)
+  .sort((a, b) => b.deficit - a.deficit);
+}
+
+function coraParseVarTall(ws, rows) {
+  // Tall format: term in first column, metrics in subsequent columns
   const { map, rowIdx } = coraHeaderMap(rows, ['variation', 'keyword', 'term', 'phrase', 'deficit'], 20);
   if (rowIdx === -1) return [];
 
-  const termCol  = Math.max(0, coraCol(map, 'variation', 'keyword', 'term', 'phrase', 'word'));
-  const pagesCol = coraCol(map, 'pages');
-  const maxCol   = coraCol(map, 'max');
-  const avgCol   = coraCol(map, 'avg', 'average');
-  const yrCol    = coraCol(map, 'your count', 'you', 'your', 'count');
-  const defCol   = coraCol(map, 'deficit');
-  const corrCol  = coraCol(map, 'best of both', 'best', 'spearman', 'pearson', 'corr');
+  const termCol = Math.max(0, coraCol(map, 'variation', 'keyword', 'term', 'phrase', 'word'));
+  const avgCol  = coraCol(map, 'avg', 'average');
+  const yrCol   = coraCol(map, 'your count', 'you', 'your', 'count');
+  const defCol  = coraCol(map, 'deficit');
 
   const items = [];
   for (let r = rowIdx + 1; r < rows.length; r++) {
     const row  = rows[r];
     const term = String(row[termCol] ?? '').trim();
     if (!term) continue;
-
     const avgVal  = avgCol >= 0 ? (parseFloat(row[avgCol]) || 0) : 0;
     const yours   = yrCol  >= 0 ? (parseFloat(row[yrCol])  || 0) : 0;
     const deficit = defCol >= 0 ? (parseFloat(row[defCol]) || 0) : Math.max(0, avgVal - yours);
-
-    items.push({
-      term,
-      pages:  pagesCol >= 0 ? (parseInt(row[pagesCol])   || 0) : 0,
-      max:    maxCol   >= 0 ? (parseFloat(row[maxCol])   || 0) : 0,
-      avg:    avgVal,
-      yours,
-      deficit,
-      corr:   corrCol >= 0 ? (parseFloat(row[corrCol]) || 0) : 0,
-    });
+    items.push({ term, pages: 0, max: 0, avg: avgVal, yours, deficit, corr: 0 });
   }
-
   return items.sort((a, b) => b.deficit - a.deficit);
 }
 
@@ -2080,14 +2141,15 @@ async function coraHandleFile(file) {
     const buf  = await file.arrayBuffer();
     const wb   = XLSX.read(buf, { type: 'array', cellStyles: true });
 
+    const varResult = coraParseVariations(wb);
     coraReport = {
       fileName:   file.name,
       meta:       coraParseMeta(wb),
       roadMap:    coraParseRoadMap(wb),
       lsi:        coraParseLSI(wb),
-      variations: coraParseVariations(wb),
+      variations: varResult.items,
       grades:     coraParseGrades(wb),
-      sheets:     wb.SheetNames,
+      sheets:     varResult.sheetNames ?? wb.SheetNames,
     };
     coraRender();
   } catch (err) {
@@ -2234,7 +2296,12 @@ function coraRenderVariations() {
   if (!tbody) return;
 
   if (!items.length) {
-    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:24px">No Variations sheet found in this report.</td></tr>';
+    const sheets = (coraReport.sheets || []).join(', ') || 'none detected';
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:24px;line-height:1.6">
+      No Variations data detected.<br>
+      <span style="font-size:12px">Available sheets: <strong>${escHtml(sheets)}</strong></span><br>
+      <span style="font-size:11px;color:var(--text-muted)">Cora's Variations data may be on the Overview or Measurement Data sheet.</span>
+    </td></tr>`;
     return;
   }
 
