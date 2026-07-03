@@ -1622,7 +1622,7 @@ async function rtRefreshAll() {
     const rkRows = await aaQuery({
       asset: 'campaign-rankings',
       operation: 'read',
-      fields: ['keyword_id', 'keyword_phrase', 'google_ranking', 'google_local_ranking', 'google_mobile_ranking', 'volume', 'competition'],
+      fields: ['keyword_id', 'keyword_phrase', 'google_ranking', 'google_ranking_url', 'google_local_ranking', 'google_mobile_ranking', 'volume', 'competition'],
       filters: [
         { end_date:    { '$lessthanorequal_comparison': today } },
         { start_date:  { '$greaterthanorequal_comparison': today } },
@@ -1658,6 +1658,7 @@ async function rtRefreshAll() {
       kw.localRank  = rk.google_local_ranking ?? null;
       kw.volume     = rk.volume ?? kw.volume;
       kw.lastCheck  = today;
+      if (!kw.url && rk.google_ranking_url) kw.url = rk.google_ranking_url;
       updated++;
     }
 
@@ -1673,7 +1674,7 @@ async function rtRefreshAll() {
   }
 }
 
-/* ── Import keywords from AA campaign ── */
+/* ── Import starred keywords from AA campaign ── */
 async function rtImportFromAA() {
   const c = rtActiveClient();
   if (!c) return;
@@ -1685,16 +1686,20 @@ async function rtImportFromAA() {
   btn.textContent = 'Importing…';
 
   try {
+    const campId = String(c.aaCampaignId);
     const kwRows = await aaQuery({
       asset: 'keyword',
       operation: 'read',
-      fields: ['id', 'keyword_phrase'],
-      filters: [{ campaign_id: { '$equals_comparison': String(c.aaCampaignId) } }],
+      fields: ['id', 'keyword_phrase', 'starred'],
+      filters: [
+        { campaign_id: { '$equals_comparison': campId } },
+        { starred:     { '$equals_comparison': true   } },
+      ],
       sort: [{ id: 'asc' }],
       limit: 500,
       offset: 0,
     });
-    if (!kwRows.length) throw new Error(`No keywords found for campaign ID ${c.aaCampaignId}. Verify the campaign ID in ✎ edit.`);
+    if (!kwRows.length) throw new Error(`No starred keywords found for campaign ID ${campId}. Star keywords in AgencyAnalytics first.`);
 
     const existing = new Set(c.keywords.map(k => (k.keyword || '').toLowerCase()));
     let added = 0, skipped = 0;
@@ -1709,9 +1714,13 @@ async function rtImportFromAA() {
     }
 
     rtSave();
-    document.getElementById('rt-lastRefresh').textContent =
-      `Added ${added} keyword${added !== 1 ? 's' : ''} (${skipped} already existed) · ${new Date().toLocaleTimeString()}`;
     rtRender();
+    document.getElementById('rt-lastRefresh').textContent =
+      `Added ${added} starred keyword${added !== 1 ? 's' : ''} (${skipped} already existed) — fetching ranks…`;
+
+    // Auto-refresh ranks so URL/rank/local/vol populate immediately
+    if (added > 0) await rtRefreshAll();
+
   } catch (e) {
     alert('Import failed: ' + e.message);
   } finally {
