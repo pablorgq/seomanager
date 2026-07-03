@@ -1715,7 +1715,7 @@ async function rtRefreshAll() {
   }
 }
 
-/* ── Import starred keywords from AA campaign ── */
+/* ── Import primary (starred) keywords from AA campaign ── */
 async function rtImportFromAA() {
   const c = rtActiveClient();
   if (!c) return;
@@ -1731,16 +1731,16 @@ async function rtImportFromAA() {
     const kwRows = await aaQuery({
       asset: 'keyword',
       operation: 'read',
-      fields: ['id', 'keyword_phrase', 'starred'],
+      fields: ['id', 'keyword_phrase', 'primary_keyword'],
       filters: [
-        { campaign_id: { '$equals_comparison': campId } },
-        { starred:     { '$equals_comparison': true   } },
+        { campaign_id:    { '$equals_comparison': campId } },
+        { primary_keyword: { '$equals_comparison': true  } },
       ],
       sort: [{ id: 'asc' }],
       limit: 500,
       offset: 0,
     });
-    if (!kwRows.length) throw new Error(`No starred keywords found for campaign ID ${campId}. Star keywords in AgencyAnalytics first.`);
+    if (!kwRows.length) throw new Error(`No primary keywords found for campaign ID ${campId}. Mark keywords as primary in AgencyAnalytics first.`);
 
     const existing = new Set(c.keywords.map(k => (k.keyword || '').toLowerCase()));
     let added = 0, skipped = 0;
@@ -1757,7 +1757,7 @@ async function rtImportFromAA() {
     rtSave();
     rtRender();
     document.getElementById('rt-lastRefresh').textContent =
-      `Added ${added} starred keyword${added !== 1 ? 's' : ''} (${skipped} already existed) — fetching ranks…`;
+      `Added ${added} primary keyword${added !== 1 ? 's' : ''} (${skipped} already existed) — fetching ranks…`;
 
     // Auto-refresh ranks so URL/rank/local/vol populate immediately
     if (added > 0) await rtRefreshAll();
