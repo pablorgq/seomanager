@@ -70,6 +70,7 @@ async function init() {
   }
   rtInit();
   coraInit();
+  dbRender();
 
   // Hide POP key field when key is configured server-side
   if (hasPop) {
@@ -118,6 +119,7 @@ function bindEvents() {
       document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
       btn.classList.add('active');
       document.getElementById('tab-' + tab).classList.add('active');
+      if (tab === 'dashboard') dbRender();
     });
   });
 
@@ -1195,7 +1197,7 @@ function rtLoad() {
   try { return JSON.parse(localStorage.getItem(RT_KEY)) || { clients: [], activeClientId: null }; }
   catch { return { clients: [], activeClientId: null }; }
 }
-function rtSave() { localStorage.setItem(RT_KEY, JSON.stringify(rtData)); }
+function rtSave() { localStorage.setItem(RT_KEY, JSON.stringify(rtData)); dbRender(); }
 
 /* ── helpers ── */
 function rtUid() { return '_' + Math.random().toString(36).slice(2, 10); }
@@ -1326,6 +1328,105 @@ function rtPopCell(kw) {
   }
   const date = kw.popDate ? ` <span class="rt-pop-date">${escHtml(kw.popDate)}</span>` : '';
   return `<span class="rt-pop-badge">POP ✓</span>${date}<br><span style="font-size:10px;color:var(--text-muted)">${escHtml(kw.popStatus)}</span>`;
+}
+
+/* ── Dashboard ── */
+function dbRender() {
+  const grid = document.getElementById('db-grid');
+  if (!grid) return;
+  const clients = rtData?.clients ?? [];
+
+  if (!clients.length) {
+    grid.innerHTML = '<div class="db-empty">No clients yet — add clients in Rank Tracker to see performance here.</div>';
+    return;
+  }
+
+  const scored = clients.map(c => {
+    const mkKws  = (c.keywords || []).filter(k => k.mainKeyword);
+    const ranked = mkKws.filter(k => k.rank);
+    const avgRank = ranked.length
+      ? ranked.reduce((s, k) => s + k.rank, 0) / ranked.length : null;
+    const deltaArr = ranked.filter(k => k.prevRank);
+    const avgDelta = deltaArr.length
+      ? deltaArr.reduce((s, k) => s + (k.prevRank - k.rank), 0) / deltaArr.length : null;
+    const top3  = ranked.filter(k => k.rank <= 3).length;
+    const top10 = ranked.filter(k => k.rank <= 10).length;
+    const topKws = [...ranked].sort((a, b) => a.rank - b.rank).slice(0, 4);
+    return { c, mkKws, ranked, avgRank, avgDelta, top3, top10, topKws };
+  });
+
+  scored.sort((a, b) => {
+    if (a.avgRank === null && b.avgRank === null) return 0;
+    if (a.avgRank === null) return 1;
+    if (b.avgRank === null) return -1;
+    return a.avgRank - b.avgRank;
+  });
+
+  grid.innerHTML = scored.map(({ c, mkKws, ranked, avgRank, avgDelta, top3, top10, topKws }, i) => {
+    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `<span class="db-pos-num">#${i + 1}</span>`;
+    const hasMk   = mkKws.length > 0;
+    const hasRank = ranked.length > 0;
+
+    const rankColor = !hasRank ? 'var(--text-muted)'
+      : avgRank <= 5  ? 'var(--green)'
+      : avgRank <= 15 ? '#e8a838'
+      : avgRank <= 30 ? '#FF7300'
+      : 'var(--red)';
+
+    let deltaBadge = '';
+    if (avgDelta !== null) {
+      const sign = avgDelta > 0 ? '↑' : '↓';
+      const cls  = avgDelta > 0 ? 'db-delta-up' : 'db-delta-down';
+      deltaBadge = `<span class="db-delta ${cls}">${sign}${Math.abs(avgDelta).toFixed(1)} avg</span>`;
+    }
+
+    const kwChips = topKws.map(k =>
+      `<div class="db-kw-chip"><span class="db-kw-rank">#${k.rank}</span><span class="db-kw-text">${escHtml(k.keyword)}</span></div>`
+    ).join('');
+
+    const noData = !hasMk
+      ? '<span class="db-no-data">No MK keywords set</span>'
+      : '<span class="db-no-data">No rank data yet — run a refresh</span>';
+
+    return `
+    <div class="db-card" data-client-id="${escHtml(c.id)}">
+      <div class="db-card-top">
+        <span class="db-pos">${medal}</span>
+        <span class="db-client-name">${escHtml(c.name)}</span>
+        <span class="db-mk-count">${mkKws.length} MK</span>
+      </div>
+      ${hasRank ? `
+      <div class="db-rank-row">
+        <span class="db-avg-rank" style="color:${rankColor}">${avgRank.toFixed(1)}</span>
+        <div class="db-rank-meta">
+          <span class="db-rank-label">avg position</span>
+          ${deltaBadge}
+        </div>
+      </div>
+      <div class="db-stats-row">
+        <span class="db-stat"><span class="db-stat-val">${top3}</span>&thinsp;Top 3</span>
+        <span class="db-stat-sep">·</span>
+        <span class="db-stat"><span class="db-stat-val">${top10}</span>&thinsp;Top 10</span>
+        <span class="db-stat-sep">·</span>
+        <span class="db-stat"><span class="db-stat-val">${ranked.length}</span>&thinsp;ranked</span>
+      </div>
+      <div class="db-kw-list">${kwChips}</div>
+      ` : `<div class="db-no-rank-wrap">${noData}</div>`}
+    </div>`;
+  }).join('');
+
+  grid.querySelectorAll('.db-card').forEach(card => {
+    card.addEventListener('click', () => {
+      const id = card.dataset.clientId;
+      rtData.activeClientId = id;
+      localStorage.setItem(RT_KEY, JSON.stringify(rtData));
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      document.querySelector('.tab-btn[data-tab="ranks"]').classList.add('active');
+      document.getElementById('tab-ranks').classList.add('active');
+      rtRender();
+    });
+  });
 }
 
 /* ── init rank tracker ── */

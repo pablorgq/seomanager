@@ -740,6 +740,47 @@ details[open] .card-prompts-toggle::before { transform: rotate(90deg); }
 .ag-nlp-brief  { background: rgba(59,130,246,.12); color: #3b82f6; }
 .ag-nlp-google { background: rgba(139,92,246,.12);  color: #8b5cf6; }
 
+/* ── DASHBOARD ── */
+.db-header   { margin-bottom: 24px; }
+.db-title    { font-size: 22px; font-weight: 800; font-family: var(--font-head); margin-bottom: 4px; }
+.db-sub      { font-size: 12px; color: var(--text-muted); }
+.db-grid     { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+.db-empty    { color: var(--text-muted); padding: 60px 20px; text-align: center; grid-column: 1/-1; font-size: 14px; }
+
+.db-card {
+  background: var(--surface-alt); border: 1px solid var(--border);
+  border-radius: 14px; padding: 18px 20px; cursor: pointer;
+  transition: border-color .15s, box-shadow .15s, transform .1s;
+}
+.db-card:hover { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); transform: translateY(-1px); }
+
+.db-card-top  { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+.db-pos       { font-size: 20px; flex-shrink: 0; line-height: 1; }
+.db-pos-num   { font-size: 13px; font-weight: 700; color: var(--text-muted); }
+.db-client-name { font-size: 14px; font-weight: 700; flex: 1; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.db-mk-count  { font-size: 10px; color: var(--text-muted); background: var(--surface-2); border-radius: 100px; padding: 2px 8px; white-space: nowrap; border: 1px solid var(--border); }
+
+.db-rank-row  { display: flex; align-items: flex-end; gap: 10px; margin-bottom: 10px; }
+.db-avg-rank  { font-size: 42px; font-weight: 800; line-height: 1; font-family: var(--font-head); }
+.db-rank-meta { display: flex; flex-direction: column; gap: 4px; padding-bottom: 3px; }
+.db-rank-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; }
+.db-delta     { font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 100px; display: inline-block; }
+.db-delta-up  { background: rgba(45,158,107,.14); color: var(--green); }
+.db-delta-down{ background: rgba(229,56,59,.1); color: var(--red); }
+
+.db-stats-row { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); margin-bottom: 14px; }
+.db-stat-val  { font-weight: 700; color: var(--text-primary); }
+.db-stat-sep  { color: var(--border); }
+
+.db-kw-list   { display: flex; flex-direction: column; gap: 0; border-top: 1px solid var(--border); }
+.db-kw-chip   { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.db-kw-chip:last-child { border-bottom: none; }
+.db-kw-rank   { font-size: 11px; font-weight: 700; color: var(--accent); min-width: 28px; flex-shrink: 0; }
+.db-kw-text   { font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.db-no-rank-wrap { padding: 8px 0; }
+.db-no-data   { font-size: 12px; color: var(--text-muted); font-style: italic; }
+
 /* ── RANK TRACKER ── */
 .rt-topbar {
   display: flex; align-items: center; justify-content: space-between;
