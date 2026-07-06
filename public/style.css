@@ -881,24 +881,29 @@ details[open] .card-prompts-toggle::before { transform: rotate(90deg); }
 .rt-sortable[data-sort-dir="asc"]::after  { content: ' ↑'; opacity: 1; color: var(--accent); }
 .rt-sortable[data-sort-dir="desc"]::after { content: ' ↓'; opacity: 1; color: var(--accent); }
 
-/* Column widths */
-.rt-th-rank  { width: 80px; }
-.rt-th-local { width: 68px; text-align: center; }
+/* Column widths — tuned to fit within 960px container */
+.rt-th-rank  { width: 62px; }
+.rt-th-local { width: 54px; text-align: center; }
 .rt-td-local { text-align: center; }
-.rt-th-url    { width: 180px; }
-.rt-th-kw     { min-width: 160px; }
-.rt-th-target { min-width: 140px; }
-.rt-th-vol    { width: 60px; text-align: right; }
-.rt-th-delta { width: 56px; text-align: center; }
-.rt-th-pop   { min-width: 140px; }
-.rt-th-cora  { width: 52px; text-align: center; }
+.rt-th-url   { width: 100px; }
+.rt-th-kw    { width: 140px; }
+.rt-th-target{ width: 120px; }
+.rt-th-vol   { width: 50px; text-align: right; }
+.rt-th-delta { width: 44px; text-align: center; }
+.rt-th-pop   { width: 130px; }
+.rt-th-cora  { width: 44px; text-align: center; }
 .rt-td-cora  { text-align: center; }
 .rt-cora-btn { background: none; border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px; cursor: pointer; font-size: 14px; color: var(--text); transition: background .15s, border-color .15s; }
 .rt-cora-btn:hover { background: rgba(67,97,238,.1); border-color: var(--accent); }
-.rt-th-note  { min-width: 120px; }
-.rt-th-check { width: 96px; white-space: nowrap; }
-.rt-th-del   { width: 32px; }
+.rt-th-note  { width: 90px; }
+.rt-th-check { width: 76px; white-space: nowrap; }
+.rt-th-del   { width: 28px; }
 .rt-td-vol, .rt-td-delta { text-align: center; }
+
+/* Prevent long text from blowing out columns */
+.rt-td-url, .rt-td-kw, .rt-td-target, .rt-td-note {
+  max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 /* Rank badges */
 .rt-badge {
