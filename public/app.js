@@ -1182,15 +1182,39 @@ ${selectedVars.join(', ')}
 - Do NOT include the meta title in the article body
 - Do NOT mention SEO, word counts, or these instructions`;
 
+    // Build term insertion list for the edit prompt
+    const insertTermLines = [
+      ...bodyTerms.map(t => {
+        const min = t.contentBrief.min ?? 0;
+        const max = t.contentBrief.max ?? t.contentBrief.target ?? 0;
+        return `  • "${t.term.phrase}" — ${min}–${max} times`;
+      }),
+      ...selectedVars.map(v => `  • "${v}" — weave in naturally`),
+      ...selectedLsi.slice(0, 10).map(l => `  • "${l}" — at least once`),
+      ...(nlpEntityNames.map(n => `  • "${n}" [NLP entity] — at least once`)),
+    ].join('\n');
+
     const prompt = existingContent
-      ? `You are an expert SEO content editor. Optimize the EXISTING page content below to meet the POP content brief. Do NOT invent new facts — only use information already present in the original. Rewrite naturally to hit the term targets, improve heading structure, and expand where needed to reach the word count.
+      ? `You are an SEO editor making MINIMAL edits to an existing page. Your job is to insert the missing POP terms into the current content — NOT to rewrite it.
 
-EXISTING PAGE CONTENT (optimize this — do not invent):
-"""
-${existingContent.slice(0, 5500)}
-"""
+STRICT RULES (non-negotiable):
+1. Keep at least 85% of the original sentences unchanged — word for word
+2. Only touch a sentence when a required term needs to be inserted there
+3. Never change brand names, product names, technology names, or any factual claims
+4. Never invent new sections, services, or facts that are not in the original
+5. If the page is shorter than the target word count, you may ADD 1–2 short paragraphs at the end, but do not alter the existing ones
+6. Output the full page with your edits applied — headings and all
 
-${popBriefSpecs}`
+TERMS TO INSERT (add these where they naturally fit — do not force):
+${insertTermLines}
+
+H1 should include: ${titleTerms.join(', ') || keyword}
+Aim for ${h2Target} ## H2 headings (rename existing ones only if needed to fit a term)
+
+EXISTING PAGE CONTENT — edit minimally:
+"""
+${existingContent.slice(0, 7000)}
+"""`
       : `You are an expert SEO content writer. Write a fully optimised article following these POP content brief specifications exactly:
 
 ${popBriefSpecs}`;
