@@ -469,6 +469,7 @@
               <th class="rt-th-delta rt-sortable" data-sort="delta">Δ</th>
               <th class="rt-th-pop">POP Status</th>
               <th class="rt-th-cora">Cora</th>
+              <th class="rt-th-rep">Rep</th>
               <th class="rt-th-note">Note</th>
               <th class="rt-th-check rt-sortable" data-sort="lastCheck">Last Check</th>
               <th class="rt-th-del"></th>
@@ -807,5 +808,23 @@
 
   <script src="/xlsx.min.js"></script>
   <script src="app.js"></script>
+
+  <!-- SEO Report slide-in panel -->
+  <div id="popReportModal" class="pop-report-modal">
+    <div class="pop-report-header">
+      <div style="flex:1;min-width:0">
+        <div id="rep-keyword" class="pop-report-title"></div>
+        <div id="rep-meta" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center"></div>
+      </div>
+      <div style="display:flex;gap:8px;flex-shrink:0;align-items:flex-start">
+        <button id="rep-copyBtn" class="btn btn-secondary" onclick="copyPopReport()">Copy text</button>
+        <button class="btn btn-secondary" onclick="closePopReport()">✕ Close</button>
+      </div>
+    </div>
+    <div id="rep-legend" class="ag-hl-legend" style="margin-bottom:10px"></div>
+    <div id="rep-article" class="ag-article-box"></div>
+    <div id="rep-summary" class="ag-terms-summary" style="margin-top:14px"></div>
+  </div>
+  <div id="popReportOverlay" class="pop-report-overlay" onclick="closePopReport()"></div>
 </body>
 </html>

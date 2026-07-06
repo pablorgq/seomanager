@@ -1425,6 +1425,24 @@ ${popBriefSpecs}`;
     // Cora + POP cross-reference
     agRenderCrossRef(allTerms, selectedLsi, selectedVars);
 
+    // Auto-save report so it can be viewed from Rank Tracker
+    const repClientId = rtData?.activeClientId;
+    if (repClientId) {
+      repSave({
+        savedAt:      new Date().toISOString(),
+        keyword,
+        clientId:     repClientId,
+        url:          targetUrl,
+        score:        pageScore,
+        wordCount,
+        articleHtml:  agArticleHtml,
+        articleText:  agArticleText,
+        legendHtml:   document.getElementById('ag-hlLegend')?.innerHTML || '',
+        termsSummary: document.getElementById('ag-termsSummary')?.innerHTML || '',
+      });
+      rtRender(); // refresh RT table so the 📄 icon activates
+    }
+
   } catch(e) {
     agLog('ERROR: ' + e.message);
     const ai = agSteps.findIndex(s => s.state === 'active');
@@ -1456,7 +1474,18 @@ function agCopyHtml() {
    RANK TRACKER
 ════════════════════════════════════════════════ */
 
-const RT_KEY = 'seomanager_ranktracker';
+const RT_KEY  = 'seomanager_ranktracker';
+const REP_PFX = 'pop_report::';
+
+function repKey(clientId, keyword) {
+  return REP_PFX + (clientId || 'global') + '::' + (keyword || '').toLowerCase().trim();
+}
+function repSave(data) {
+  try { localStorage.setItem(repKey(data.clientId, data.keyword), JSON.stringify(data)); } catch(_) {}
+}
+function repGet(clientId, keyword) {
+  try { return JSON.parse(localStorage.getItem(repKey(clientId, keyword)) || 'null'); } catch(_) { return null; }
+}
 
 let rtData   = { clients: [], activeClientId: null };
 let rtSort   = { col: null, dir: 'asc' };
@@ -1553,6 +1582,12 @@ function rtRender() {
     const coraCell = hasCora
       ? `<td class="rt-td-cora"><button class="rt-cora-btn" title="View Cora report: ${escHtml(client.coraFileName)}">📊</button></td>`
       : `<td class="rt-td-cora"><span class="rt-na">—</span></td>`;
+    const savedRep = repGet(client.id, kw.keyword);
+    const repDate  = savedRep?.savedAt ? new Date(savedRep.savedAt).toLocaleDateString() : '';
+    const repTip   = savedRep ? `SEO report — saved ${repDate}` : 'No report yet';
+    const repCell  = `<td class="rt-td-rep"><button class="rt-rep-btn${savedRep ? ' rt-rep-has' : ''}"
+      data-client="${escHtml(client.id)}" data-kw="${escHtml(kw.keyword || '')}"
+      title="${escHtml(repTip)}"${savedRep ? '' : ' disabled'}>📄</button></td>`;
     tr.innerHTML = `
       <td class="rt-td-rank">${rtRankBadge(kw.rank, kw.prevRank)}</td>
       <td class="rt-td-local">${rtLocalBadge(kw.localRank)}</td>
@@ -1565,6 +1600,7 @@ function rtRender() {
       <td class="rt-td-delta">${rtDeltaCell(kw.rank, kw.prevRank)}</td>
       <td class="rt-td-pop">${rtPopCell(kw)}</td>
       ${coraCell}
+      ${repCell}
       <td class="rt-td-note rt-editable" data-field="note">${escHtml(kw.note || '')}</td>
       <td class="rt-td-check">${escHtml(rtFormatDate(kw.lastCheck) || '')}</td>
       <td class="rt-td-del"><button class="rt-del-btn" title="Delete row">✕</button></td>`;
@@ -1588,6 +1624,38 @@ function rtLocalBadge(rank) {
   if (!rank) return '<span class="rt-na">—</span>';
   const cls = rank <= 3 ? 'rt-green' : rank <= 10 ? 'rt-orange' : 'rt-red';
   return `<span class="rt-rank-badge ${cls}">${rank}</span>`;
+}
+
+function showPopReport(clientId, keyword) {
+  const rep = repGet(clientId, keyword);
+  if (!rep) return;
+  const modal = document.getElementById('popReportModal');
+  document.getElementById('rep-keyword').textContent = rep.keyword || keyword;
+  document.getElementById('rep-meta').innerHTML =
+    `<span class="ag-meta-card" style="min-width:80px"><div class="ag-meta-label">POP Score</div><div class="ag-meta-value">${escHtml(String(rep.score || '—'))}</div></span>` +
+    `<span class="ag-meta-card" style="min-width:80px"><div class="ag-meta-label">Words</div><div class="ag-meta-value">${escHtml(String(rep.wordCount || '—'))}</div></span>` +
+    `<span style="font-size:11px;color:var(--text-muted);align-self:center">Saved ${rep.savedAt ? new Date(rep.savedAt).toLocaleDateString() : '—'}</span>`;
+  const leg = document.getElementById('rep-legend');
+  leg.innerHTML = rep.legendHtml || '';
+  leg.style.display = rep.legendHtml ? 'flex' : 'none';
+  document.getElementById('rep-article').innerHTML = rep.articleHtml || '';
+  document.getElementById('rep-summary').innerHTML = rep.termsSummary || '';
+  document.getElementById('rep-summary').style.display = rep.termsSummary ? 'block' : 'none';
+  modal._repText = rep.articleText || '';
+  modal.classList.add('open');
+}
+
+function closePopReport() {
+  document.getElementById('popReportModal').classList.remove('open');
+}
+
+function copyPopReport() {
+  const text = document.getElementById('popReportModal')._repText || '';
+  navigator.clipboard.writeText(text).then(() => {
+    const b = document.getElementById('rep-copyBtn');
+    const orig = b.textContent; b.textContent = 'Copied!';
+    setTimeout(() => b.textContent = orig, 1500);
+  }).catch(() => {});
 }
 
 function rtPopCell(kw) {
@@ -1745,6 +1813,12 @@ function rtInit() {
     const coraBtn = e.target.closest('.rt-cora-btn');
     if (coraBtn) {
       document.querySelector('.tab-btn[data-tab="cora"]')?.click();
+      return;
+    }
+
+    const repBtn = e.target.closest('.rt-rep-btn');
+    if (repBtn && !repBtn.disabled) {
+      showPopReport(repBtn.dataset.client, repBtn.dataset.kw);
       return;
     }
 
