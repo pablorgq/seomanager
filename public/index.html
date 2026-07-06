@@ -238,6 +238,16 @@
               <span class="toggle-track"><span class="toggle-thumb"></span></span>
               Page not built yet
             </label>
+            <div id="ag-existingContentWrap" style="display:none;margin-top:12px">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+                <label class="form-label" style="margin:0">Existing page content</label>
+                <button class="btn btn-secondary" style="padding:2px 10px;font-size:11px" onclick="agFetchPageContent()">Auto-fetch</button>
+              </div>
+              <textarea id="ag-existingContent" class="form-input" rows="6"
+                style="resize:vertical;font-size:12px;line-height:1.5"
+                placeholder="Paste the current page content here (or click Auto-fetch to scrape it from the URL above)…"></textarea>
+              <div id="ag-fetchStatus" style="font-size:11px;color:var(--text-muted);margin-top:4px"></div>
+            </div>
           </div>
           <div>
             <div class="ag-card-title">Location &amp; Language</div>

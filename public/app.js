@@ -155,12 +155,53 @@ function bindEvents() {
   document.getElementById('igGenerateBtn').addEventListener('click', handleGenerateImages);
   document.getElementById('igDownloadAllBtn').addEventListener('click', downloadAllImages);
 
+  // "Page not built yet" toggle — show/hide existing content area
+  const pnbCheck  = document.getElementById('ag-pageNotBuilt');
+  const pnbWrap   = document.getElementById('ag-existingContentWrap');
+  const urlInput  = document.getElementById('ag-targetUrl');
+  if (pnbCheck && pnbWrap) {
+    const syncWrap = () => { pnbWrap.style.display = pnbCheck.checked ? 'none' : 'block'; };
+    pnbCheck.addEventListener('change', syncWrap);
+    syncWrap();
+    // Auto-fetch when URL is set and page is marked as existing
+    urlInput?.addEventListener('blur', () => {
+      if (!pnbCheck.checked && urlInput.value.trim().startsWith('http')) {
+        const ta = document.getElementById('ag-existingContent');
+        if (!ta?.value.trim()) agFetchPageContent();
+      }
+    });
+  }
+
   // Error close buttons (delegated)
   document.addEventListener('click', (e) => {
     if (e.target.classList.contains('error-close')) {
       e.target.closest('.error-banner').classList.add('hidden');
     }
   });
+}
+
+/* ── FETCH PAGE CONTENT (manual trigger from UI) ── */
+async function agFetchPageContent() {
+  const url    = document.getElementById('ag-targetUrl').value.trim();
+  const status = document.getElementById('ag-fetchStatus');
+  const ta     = document.getElementById('ag-existingContent');
+  if (!url || !/^https?:\/\//i.test(url)) {
+    status.textContent = 'Enter a valid page URL first.';
+    return;
+  }
+  status.textContent = 'Fetching…';
+  try {
+    const r  = await fetch('/api/fetch-page', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) });
+    const d  = await r.json();
+    if (r.ok && d.text) {
+      ta.value = d.text;
+      status.textContent = `✓ ${d.words} words fetched — review and edit if needed.`;
+    } else {
+      status.textContent = `⚠ Fetch failed: ${d.error || 'unknown error'} — paste content manually.`;
+    }
+  } catch(e) {
+    status.textContent = `⚠ ${e.message} — paste content manually.`;
+  }
 }
 
 /* ── API KEY GUARD ── */
@@ -1201,26 +1242,17 @@ async function agContinueWithSelected() {
 
     const nlpEntityNames = nlpEntities.map(e => e.name).filter(Boolean);
 
-    // Fetch existing page content when page is already built
+    // Read existing page content from the textarea (user-pasted or auto-fetched)
     agOriginalContent = '';
     let existingContent = '';
-    if (!pageNotBuilt && targetUrl && !/example\.com/i.test(targetUrl)) {
-      agLog('Fetching existing page content…');
-      try {
-        const fr = await fetch('/api/fetch-page', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: targetUrl }),
-        });
-        const fd = await fr.json();
-        if (fr.ok && fd.text) {
-          existingContent = fd.text;
-          agOriginalContent = fd.text;
-          agLog(`✓ Fetched ${fd.words} words from existing page — will optimize`);
-        } else {
-          agLog(`⚠ Could not fetch page (${fd.error || '?'}) — generating from brief only`);
-        }
-      } catch(e) {
-        agLog(`⚠ Page fetch failed: ${e.message} — generating from brief only`);
+    if (!pageNotBuilt) {
+      const taCnt = (document.getElementById('ag-existingContent')?.value || '').trim();
+      if (taCnt.length > 100) {
+        existingContent = taCnt;
+        agOriginalContent = taCnt;
+        agLog(`✓ Using ${taCnt.split(/\s+/).length} words of existing page content`);
+      } else {
+        agLog('⚠ No existing content — paste it into the "Existing page content" box or click Auto-fetch');
       }
     }
 
