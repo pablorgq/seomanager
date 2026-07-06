@@ -444,7 +444,7 @@ app.post('/api/fetch-page', apiGuard, async (req, res) => {
     return res.status(400).json({ error: 'Valid http/https URL required' });
   }
 
-  // 1. Direct fetch
+  // 1. Direct fetch — only accept if meaningful text extracted (skips JS-rendered SPAs)
   try {
     const r = await fetch(String(url), {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
@@ -452,7 +452,10 @@ app.post('/api/fetch-page', apiGuard, async (req, res) => {
     });
     if (r.ok) {
       const text = htmlToText(await r.text());
-      return res.json({ text: text.slice(0, 12000), words: text.split(/\s+/).length, source: 'direct' });
+      if (text.length > 200) {
+        return res.json({ text: text.slice(0, 12000), words: text.split(/\s+/).length, source: 'direct' });
+      }
+      // Text too short → JS-rendered page, fall through to Jina
     }
   } catch(_) { /* fall through to Jina */ }
 
