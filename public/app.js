@@ -192,23 +192,26 @@ async function agFetchPageContent() {
   status.innerHTML = 'Fetching…';
   try {
     const r = await fetch('/api/fetch-page', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) });
-    const d = await r.json();
+    let d = {};
+    try { d = await r.json(); } catch(_) {}
     if (r.ok && d.text) {
       ta.value = d.text;
       status.innerHTML = `<span style="color:var(--green)">✓ ${d.words} words fetched — review and edit if needed.</span>`;
     } else {
-      agFetchShowManual(status, url, d.error || 'unknown error');
+      const reason = typeof d.error === 'string' ? d.error : (r.status ? `HTTP ${r.status}` : 'blocked');
+      agFetchShowManual(status, url, reason);
     }
   } catch(e) {
-    agFetchShowManual(status, url, e.message);
+    agFetchShowManual(status, url, String(e.message || e));
   }
 }
 
 function agFetchShowManual(status, url, reason) {
+  const safeUrl = escHtml(url);
   status.innerHTML =
-    `<span style="color:var(--text-muted)">⚠ Site blocked auto-fetch (${escHtml(reason)}).</span> ` +
-    `<a href="${escHtml(url)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline">Open page ↗</a>` +
-    ` — select all text, copy, and paste below.`;
+    `<span style="color:var(--text-muted)">⚠ Site blocked auto-fetch (${escHtml(String(reason))}).</span> ` +
+    `<a href="${safeUrl}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline;font-weight:600">Open page ↗</a>` +
+    ` &mdash; select all text, copy, and paste into the box above.`;
 }
 
 /* ── API KEY GUARD ── */
