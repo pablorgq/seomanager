@@ -186,22 +186,29 @@ async function agFetchPageContent() {
   const status = document.getElementById('ag-fetchStatus');
   const ta     = document.getElementById('ag-existingContent');
   if (!url || !/^https?:\/\//i.test(url)) {
-    status.textContent = 'Enter a valid page URL first.';
+    status.innerHTML = 'Enter a valid page URL first.';
     return;
   }
-  status.textContent = 'Fetching…';
+  status.innerHTML = 'Fetching…';
   try {
-    const r  = await fetch('/api/fetch-page', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) });
-    const d  = await r.json();
+    const r = await fetch('/api/fetch-page', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) });
+    const d = await r.json();
     if (r.ok && d.text) {
       ta.value = d.text;
-      status.textContent = `✓ ${d.words} words fetched — review and edit if needed.`;
+      status.innerHTML = `<span style="color:var(--green)">✓ ${d.words} words fetched — review and edit if needed.</span>`;
     } else {
-      status.textContent = `⚠ Fetch failed: ${d.error || 'unknown error'} — paste content manually.`;
+      agFetchShowManual(status, url, d.error || 'unknown error');
     }
   } catch(e) {
-    status.textContent = `⚠ ${e.message} — paste content manually.`;
+    agFetchShowManual(status, url, e.message);
   }
+}
+
+function agFetchShowManual(status, url, reason) {
+  status.innerHTML =
+    `<span style="color:var(--text-muted)">⚠ Site blocked auto-fetch (${escHtml(reason)}).</span> ` +
+    `<a href="${escHtml(url)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline">Open page ↗</a>` +
+    ` — select all text, copy, and paste below.`;
 }
 
 /* ── API KEY GUARD ── */
