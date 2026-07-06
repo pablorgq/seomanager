@@ -421,6 +421,39 @@ app.post('/api/openai/images', apiGuard, (req, res) => proxyOpenAI('https://api.
 app.post('/api/openai/chat',   apiGuard, (req, res) => proxyOpenAI('https://api.openai.com/v1/chat/completions', req, res));
 
 /* ─────────────────────────────────────────────
+   FETCH EXISTING PAGE CONTENT
+───────────────────────────────────────────── */
+app.post('/api/fetch-page', apiGuard, async (req, res) => {
+  const { url } = req.body || {};
+  if (!url || !/^https?:\/\//i.test(String(url))) {
+    return res.status(400).json({ error: 'Valid http/https URL required' });
+  }
+  try {
+    const r = await fetch(String(url), {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+      signal: AbortSignal.timeout(12000),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status} from target page`);
+    const html = await r.text();
+    const text = html
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+      .replace(/<nav[\s\S]*?<\/nav>/gi, ' ')
+      .replace(/<header[\s\S]*?<\/header>/gi, ' ')
+      .replace(/<footer[\s\S]*?<\/footer>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&[a-z]{2,6};/gi, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    res.json({ text: text.slice(0, 12000), words: text.split(/\s+/).length });
+  } catch(e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
+/* ─────────────────────────────────────────────
    GCS FOLDER CREATION
 ───────────────────────────────────────────── */
 app.post('/api/gcs/create-folder', apiGuard, async (req, res) => {

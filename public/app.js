@@ -918,6 +918,66 @@ function agRenderScore(score) {
     `<div class="ag-score-badge ${cls}">POP Score: ${num} / 100 — ${msg}</div>`;
 }
 
+/* ── Cora + POP cross-reference ── */
+function agRenderCrossRef(popTerms, popLsi, popVars) {
+  const box = document.getElementById('ag-crossRef');
+  if (!box) return;
+
+  const coraLsi = coraReport?.lsi ?? [];
+  if (!coraLsi.length) {
+    box.style.display = 'none';
+    return;
+  }
+
+  // Normalise a phrase to lowercase words for matching
+  const norm = s => String(s || '').toLowerCase().trim();
+  const words = s => norm(s).split(/\s+/).filter(w => w.length > 3);
+
+  function overlaps(a, b) {
+    const na = norm(a), nb = norm(b);
+    if (na === nb || na.includes(nb) || nb.includes(na)) return true;
+    const wa = new Set(words(a));
+    return words(b).some(w => wa.has(w));
+  }
+
+  // All unique POP phrases
+  const popAll = [...new Set([...popTerms, ...popLsi, ...popVars].map(norm))];
+
+  // Score each Cora LSI item
+  const rows = coraLsi.map(item => {
+    const t       = item.term || item.keyword || '';
+    const best    = Math.abs(item.best ?? item.spearman ?? 0);
+    const deficit = item.deficit ?? 0;
+    const coraPri = best * Math.log1p(Math.max(0, deficit));
+    const inPOP   = popAll.some(p => overlaps(p, t));
+    return { term: t, best, deficit, coraPri, inPOP,
+             spearman: item.spearman ?? 0, pearson: item.pearson ?? 0 };
+  }).filter(r => r.term);
+
+  // Sort: both signals first (highest coraPri), then Cora-only
+  rows.sort((a, b) => {
+    if (a.inPOP !== b.inPOP) return a.inPOP ? -1 : 1;
+    return b.coraPri - a.coraPri;
+  });
+
+  const bothCount = rows.filter(r => r.inPOP).length;
+  document.getElementById('ag-crossRefSub').textContent =
+    `${bothCount} term${bothCount !== 1 ? 's' : ''} confirmed by both POP + Cora`;
+
+  const strengthCls = v => Math.abs(v) >= 0.5 ? 'cr-strong' : Math.abs(v) >= 0.25 ? 'cr-mod' : 'cr-weak';
+
+  box.querySelector('#ag-crossRefGrid').innerHTML = rows.slice(0, 40).map(r => `
+    <div class="cr-row ${r.inPOP ? 'cr-both' : ''}">
+      <span class="cr-term">${escHtml(r.term)}</span>
+      <span class="cr-signal ${r.inPOP ? 'cr-sig-both' : 'cr-sig-cora'}">${r.inPOP ? '★ Both' : 'Cora'}</span>
+      <span class="cr-stat ${strengthCls(r.spearman)}" title="Spearman">${r.spearman >= 0 ? '+' : ''}${r.spearman.toFixed(2)}</span>
+      <span class="cr-stat ${strengthCls(r.pearson)}"  title="Pearson">${r.pearson  >= 0 ? '+' : ''}${r.pearson.toFixed(2)}</span>
+      <span class="cr-def" title="Deficit">+${r.deficit}</span>
+    </div>`).join('');
+
+  box.style.display = 'block';
+}
+
 async function agStartFlow() {
   const popKey  = hasPop ? '' : document.getElementById('ag-popKey').value.trim();
   const keyword = document.getElementById('ag-keyword').value.trim();
@@ -1071,12 +1131,31 @@ async function agContinueWithSelected() {
 
     const nlpEntityNames = nlpEntities.map(e => e.name).filter(Boolean);
 
-    const prompt = `You are an expert SEO content writer. Write a fully optimised article following these POP content brief specifications exactly:
+    // Fetch existing page content when page is already built
+    let existingContent = '';
+    if (!pageNotBuilt && targetUrl && !/example\.com/i.test(targetUrl)) {
+      agLog('Fetching existing page content…');
+      try {
+        const fr = await fetch('/api/fetch-page', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: targetUrl }),
+        });
+        const fd = await fr.json();
+        if (fr.ok && fd.text) {
+          existingContent = fd.text;
+          agLog(`✓ Fetched ${fd.words} words from existing page — will optimize`);
+        } else {
+          agLog(`⚠ Could not fetch page (${fd.error || '?'}) — generating from brief only`);
+        }
+      } catch(e) {
+        agLog(`⚠ Page fetch failed: ${e.message} — generating from brief only`);
+      }
+    }
 
-FOCUS KEYWORD: "${keyword}"
+    const popBriefSpecs = `FOCUS KEYWORD: "${keyword}"
 TARGET WORD COUNT: ~${wcTarget} words
 LANGUAGE: ${targLang}
-TONE: ${tone}
+TONE: ${existingContent ? 'match the original page tone' : tone}
 
 ── PLACEMENT RULES ──────────────────────────────────────
 
@@ -1097,11 +1176,24 @@ KEYWORD VARIATIONS — use naturally throughout (not all in one place):
 ${selectedVars.join(', ')}
 
 ── FORMAT ───────────────────────────────────────────────
-- Output: one ## H1 title, ${h2Target} ## H2 sections, one conclusion paragraph
+- Output: one # H1 title, ${h2Target} ## H2 sections, one conclusion paragraph
 - Use flowing paragraphs — NO bullet lists
 - Every term must read naturally — never forced or stuffed
 - Do NOT include the meta title in the article body
 - Do NOT mention SEO, word counts, or these instructions`;
+
+    const prompt = existingContent
+      ? `You are an expert SEO content editor. Optimize the EXISTING page content below to meet the POP content brief. Do NOT invent new facts — only use information already present in the original. Rewrite naturally to hit the term targets, improve heading structure, and expand where needed to reach the word count.
+
+EXISTING PAGE CONTENT (optimize this — do not invent):
+"""
+${existingContent.slice(0, 5500)}
+"""
+
+${popBriefSpecs}`
+      : `You are an expert SEO content writer. Write a fully optimised article following these POP content brief specifications exactly:
+
+${popBriefSpecs}`;
 
     agLog(`Calling OpenAI (${model})…`);
     const chatHeaders = { 'Content-Type': 'application/json' };
@@ -1166,6 +1258,9 @@ ${selectedVars.join(', ')}
 
     document.getElementById('ag-outputSection').style.display = 'block';
     document.getElementById('ag-outputSection').scrollIntoView({ behavior: 'smooth' });
+
+    // Cora + POP cross-reference
+    agRenderCrossRef(allTerms, selectedLsi, selectedVars);
 
   } catch(e) {
     agLog('ERROR: ' + e.message);
