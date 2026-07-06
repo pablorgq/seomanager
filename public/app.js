@@ -741,6 +741,7 @@ let agSteps = [];
 let agTermsData = null;
 let agArticleText = '';
 let agArticleHtml = '';
+let agOriginalContent = '';
 
 function agTogglePw(id, btn) {
   const el = document.getElementById(id);
@@ -945,18 +946,37 @@ function agHighlightTerms(html, termClassMap) {
   return result;
 }
 
-function agRenderArticle(text, termClassMap) {
+function paraSimScore(a, b) {
+  const sig = s => new Set((s.toLowerCase().match(/\b\w{4,}\b/g) || []));
+  const wa = sig(a), wb = sig(b);
+  if (!wa.size || !wb.size) return 0;
+  const inter = [...wa].filter(w => wb.has(w)).length;
+  return inter / new Set([...wa, ...wb]).size;
+}
+
+function agRenderArticle(text, termClassMap, originalText) {
+  const origParas = originalText
+    ? originalText.split(/\n\n+/).map(p => p.trim()).filter(p => p.length > 30)
+    : [];
+
   let html = escHtml(text);
   html = agHighlightTerms(html, termClassMap);
   html = html
     .replace(/^### (.+)$/gm, '<h3>$1</h3>')
     .replace(/^## (.+)$/gm, '<h2>$1</h2>')
     .replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
   return html.split(/\n\n+/).map(line => {
     line = line.trim();
     if (!line) return '';
     if (line.startsWith('<h')) return line;
-    return '<p>' + line.replace(/\n/g, ' ') + '</p>';
+    let diffCls = '';
+    if (origParas.length) {
+      const plain = line.replace(/<[^>]+>/g, '');
+      const best = Math.max(...origParas.map(op => paraSimScore(plain, op)));
+      diffCls = best > 0.72 ? '' : best > 0.22 ? ' diff-modified' : ' diff-added';
+    }
+    return `<p${diffCls ? ` class="${diffCls.trim()}"` : ''}>${line.replace(/\n/g, ' ')}</p>`;
   }).filter(Boolean).join('\n');
 }
 
@@ -1182,6 +1202,7 @@ async function agContinueWithSelected() {
     const nlpEntityNames = nlpEntities.map(e => e.name).filter(Boolean);
 
     // Fetch existing page content when page is already built
+    agOriginalContent = '';
     let existingContent = '';
     if (!pageNotBuilt && targetUrl && !/example\.com/i.test(targetUrl)) {
       agLog('Fetching existing page content…');
@@ -1193,6 +1214,7 @@ async function agContinueWithSelected() {
         const fd = await fr.json();
         if (fr.ok && fd.text) {
           existingContent = fd.text;
+          agOriginalContent = fd.text;
           agLog(`✓ Fetched ${fd.words} words from existing page — will optimize`);
         } else {
           agLog(`⚠ Could not fetch page (${fd.error || '?'}) — generating from brief only`);
@@ -1245,26 +1267,26 @@ ${selectedVars.join(', ')}
     ].join('\n');
 
     const prompt = existingContent
-      ? `You are an SEO editor making MINIMAL edits to an existing page. Your job is to insert the missing POP terms into the current content — NOT to rewrite it.
+      ? `You are an SEO copy-editor. Return the EXISTING PAGE below with the minimum edits needed to naturally include the listed terms. This is NOT a rewrite.
 
-STRICT RULES (non-negotiable):
-1. Keep at least 85% of the original sentences unchanged — word for word
-2. Only touch a sentence when a required term needs to be inserted there
-3. Never change brand names, product names, technology names, or any factual claims
-4. Never invent new sections, services, or facts that are not in the original
-5. If the page is shorter than the target word count, you may ADD 1–2 short paragraphs at the end, but do not alter the existing ones
-6. Output the full page with your edits applied — headings and all
+ABSOLUTE CONSTRAINTS — failure to follow = task failed:
+• Copy every sentence from the original verbatim UNLESS that exact sentence is the one receiving a term insertion
+• Preserve all brand names, product names, technology names (ICOONE®, Roboderm®, Celluma®, etc.) exactly as written
+• Preserve all section headings — only rename a heading if a required term cannot fit anywhere else in that section
+• Do NOT invent new facts, services, or claims not present in the original
+• Do NOT reorder sections or paragraphs
+• You MAY add up to 2 short new paragraphs at the very end if the original is under ${wcTarget} words
+• Return the full page — every heading and paragraph — with edits applied
 
-TERMS TO INSERT (add these where they naturally fit — do not force):
+TERMS TO WEAVE IN (insert where they fit naturally; do not force every term):
 ${insertTermLines}
 
-H1 should include: ${titleTerms.join(', ') || keyword}
-Aim for ${h2Target} ## H2 headings (rename existing ones only if needed to fit a term)
+H1 must contain: ${titleTerms.join(', ') || keyword}
 
-EXISTING PAGE CONTENT — edit minimally:
-"""
-${existingContent.slice(0, 7000)}
-"""`
+EXISTING PAGE CONTENT (return this with edits applied):
+---
+${existingContent.slice(0, 8000)}
+---`
       : `You are an expert SEO content writer. Write a fully optimised article following these POP content brief specifications exactly:
 
 ${popBriefSpecs}`;
@@ -1278,7 +1300,7 @@ ${popBriefSpecs}`;
     const oaiRes = await fetch('/api/openai/chat', {
       method: 'POST',
       headers: chatHeaders,
-      body: JSON.stringify({ model, max_tokens: 2000, messages: [{ role: 'user', content: prompt }] })
+      body: JSON.stringify({ model, max_tokens: existingContent ? 4000 : 2000, messages: [{ role: 'user', content: prompt }] })
     });
     if (!oaiRes.ok) {
       const err = await oaiRes.json();
@@ -1307,7 +1329,7 @@ ${popBriefSpecs}`;
     </div>`).join('');
 
     const termClassMap = buildTermClassMap(allTerms, coraReport?.lsi);
-    agArticleHtml = agRenderArticle(articleText, termClassMap);
+    agArticleHtml = agRenderArticle(articleText, termClassMap, agOriginalContent);
     agArticleText = articleText;
     document.getElementById('ag-articleBox').innerHTML = agArticleHtml;
 
@@ -1319,11 +1341,19 @@ ${popBriefSpecs}`;
       const coraCount = vals.filter(v => v === 'term-cora').length;
       const popCount  = vals.filter(v => v === 'term-pop').length;
       hlLegend.style.display = 'flex';
-      hlLegend.innerHTML =
-        `<span class="hl-legend-label">Highlights:</span>` +
+      let legendHtml =
+        `<span class="hl-legend-label">Terms:</span>` +
         `<span class="hl-chip term-both">&#9733; Both (${bothCount})</span>` +
-        `<span class="hl-chip term-cora">Cora-only (${coraCount})</span>` +
-        `<span class="hl-chip term-pop">POP-only (${popCount})</span>`;
+        `<span class="hl-chip term-cora">Cora (${coraCount})</span>` +
+        `<span class="hl-chip term-pop">POP (${popCount})</span>`;
+      if (agOriginalContent) {
+        legendHtml +=
+          `<span class="hl-sep">|</span>` +
+          `<span class="hl-legend-label">Edits:</span>` +
+          `<span class="hl-chip diff-modified-chip">&#9998; Modified</span>` +
+          `<span class="hl-chip diff-added-chip">+ Added</span>`;
+      }
+      hlLegend.innerHTML = legendHtml;
     }
 
     // NLP terms from content brief (blue words) — always available after step 4
