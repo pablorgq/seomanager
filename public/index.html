@@ -535,8 +535,12 @@
           <div class="cora-upload-title">Cora SEO Report Analyzer</div>
           <div class="cora-upload-sub">Upload your Cora Excel report (.xlsx) to get an expert priority breakdown of what to fix and why</div>
           <input type="file" id="cora-file-input" accept=".xlsx,.xls" style="display:none">
-          <button class="btn btn-primary" id="cora-browse-btn">Upload Report</button>
+          <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+            <button class="btn btn-primary" id="cora-browse-btn">Upload Report</button>
+            <button class="btn btn-secondary cora-watch-btn" id="cora-watch-btn">📁 Watch Folder</button>
+          </div>
           <div class="cora-upload-hint">Or drag and drop the .xlsx file anywhere in this area</div>
+          <div class="cora-watch-status" id="cora-watch-status-upload" style="display:none"></div>
         </div>
       </div>
 
@@ -546,7 +550,11 @@
         <!-- Header bar -->
         <div class="cora-bar">
           <div class="cora-bar-meta" id="cora-meta-bar"></div>
-          <button class="btn btn-ghost btn-sm" id="cora-new-btn">↑ Load New Report</button>
+          <div style="display:flex;align-items:center;gap:8px">
+            <div class="cora-watch-status" id="cora-watch-status-view" style="display:none"></div>
+            <button class="btn btn-ghost btn-sm cora-watch-btn" id="cora-watch-btn-view">📁 Watch</button>
+            <button class="btn btn-ghost btn-sm" id="cora-new-btn">↑ Load New Report</button>
+          </div>
         </div>
 
         <!-- Sub-tabs -->

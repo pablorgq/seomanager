@@ -1030,6 +1030,17 @@ details[open] .card-prompts-toggle::before { transform: rotate(90deg); }
 .cora-upload-sub   { color: var(--text-muted); line-height: 1.6; margin-bottom: 24px; font-size: 14px; }
 .cora-upload-hint  { font-size: 12px; color: var(--text-muted); margin-top: 10px; }
 
+/* Folder watcher status */
+.cora-watch-status { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 7px 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; margin-top: 12px; }
+.cw-dot    { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); flex-shrink: 0; }
+.cw-active { background: var(--green); animation: cwPulse 2s ease-in-out infinite; }
+.cw-err-dot{ background: var(--red); }
+@keyframes cwPulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+.cw-msg    { flex: 1; color: var(--text-secondary); }
+.cw-err    { color: var(--red); }
+.cw-stop   { font-size: 11px; color: var(--text-muted); background: none; border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; cursor: pointer; white-space: nowrap; }
+.cw-stop:hover { color: var(--red); border-color: var(--red); }
+
 /* Report header bar */
 .cora-bar {
   display: flex; align-items: center; justify-content: space-between;

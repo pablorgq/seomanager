@@ -2063,6 +2063,94 @@ let coraReport       = null;
 let coraFilters      = { effort: 'all', corr: 'all' };
 let coraGroupByPhase = false;
 
+/* ── Cora folder watcher ── */
+let coraWatchHandle = null;
+let coraWatchTimer  = null;
+
+function coraWatchSeenGet() {
+  try { return new Set(JSON.parse(localStorage.getItem('cora_watch_seen') || '[]')); }
+  catch { return new Set(); }
+}
+function coraWatchSeenSave(seen) {
+  localStorage.setItem('cora_watch_seen', JSON.stringify([...seen].slice(-400)));
+}
+
+async function coraWatchStart() {
+  if (!window.showDirectoryPicker) {
+    alert('Folder watching requires Chrome or Edge — not supported in Firefox or Safari.');
+    return;
+  }
+  try {
+    coraWatchHandle = await window.showDirectoryPicker({ mode: 'read' });
+    coraWatchUpdateUI();
+    await coraWatchPoll();
+    coraWatchTimer = setInterval(coraWatchPoll, 30_000);
+  } catch(e) {
+    if (e.name !== 'AbortError') coraWatchUpdateUI(`Error: ${e.message}`, true);
+  }
+}
+
+function coraWatchStop() {
+  clearInterval(coraWatchTimer);
+  coraWatchTimer  = null;
+  coraWatchHandle = null;
+  coraWatchUpdateUI();
+}
+
+async function coraWatchPoll() {
+  if (!coraWatchHandle) return;
+  const seen = coraWatchSeenGet();
+  const queue = [];
+  try {
+    for await (const [name, entry] of coraWatchHandle.entries()) {
+      if (entry.kind !== 'file') continue;
+      if (!name.toLowerCase().endsWith('.xlsx')) continue;
+      const file = await entry.getFile();
+      const key  = `${name}::${file.lastModified}`;
+      if (!seen.has(key)) queue.push({ name, file, key });
+    }
+  } catch(e) {
+    coraWatchUpdateUI(`Watch error: ${e.message}`, true);
+    return;
+  }
+  queue.sort((a, b) => a.file.lastModified - b.file.lastModified);
+  for (const { name, file, key } of queue) {
+    seen.add(key);
+    coraWatchSeenSave(seen);
+    coraWatchUpdateUI(`Loading: ${name}…`);
+    await coraHandleFile(file);
+  }
+  const t = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const folderName = coraWatchHandle?.name || '';
+  coraWatchUpdateUI(
+    queue.length
+      ? `Loaded ${queue.length} new report${queue.length > 1 ? 's' : ''} · watching ${folderName}`
+      : `Watching ${folderName} · checked ${t}`
+  );
+}
+
+function coraWatchUpdateUI(msg, isError = false) {
+  const active = !!coraWatchHandle;
+  document.querySelectorAll('.cora-watch-status').forEach(el => {
+    if (!active && !msg) { el.style.display = 'none'; return; }
+    el.style.display = 'flex';
+    el.innerHTML = `
+      <span class="cw-dot ${active ? 'cw-active' : ''} ${isError ? 'cw-err-dot' : ''}"></span>
+      <span class="cw-msg ${isError ? 'cw-err' : ''}">${escHtml(msg || '')}</span>
+      ${active ? '<button class="cw-stop">Stop</button>' : ''}`;
+    el.querySelectorAll('.cw-stop').forEach(b => b.addEventListener('click', coraWatchStop));
+  });
+  document.querySelectorAll('.cora-watch-btn').forEach(btn => {
+    if (active) {
+      btn.textContent = '⏹ Stop';
+      btn.onclick = coraWatchStop;
+    } else {
+      btn.textContent = btn.id === 'cora-watch-btn-view' ? '📁 Watch' : '📁 Watch Folder';
+      btn.onclick = coraWatchStart;
+    }
+  });
+}
+
 // ── sheet helpers ────────────────────────────────────────────
 function coraFindSheet(wb, patterns) {
   for (const pat of patterns) {
@@ -2915,6 +3003,8 @@ function coraInit() {
   coraBindUpload();
 
   document.getElementById('cora-new-btn').addEventListener('click', coraReset);
+  document.getElementById('cora-watch-btn').addEventListener('click', coraWatchStart);
+  document.getElementById('cora-watch-btn-view').addEventListener('click', coraWatchStart);
 
   document.querySelectorAll('.cora-stab').forEach(btn => {
     btn.addEventListener('click', () => {
