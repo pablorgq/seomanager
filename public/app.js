@@ -884,20 +884,70 @@ async function agPollReport(taskId, stepIdx) {
   throw new Error('create-report timed out after 40 attempts');
 }
 
-function agBoldTerms(html, terms) {
-  const sorted = [...terms].sort((a, b) => b.length - a.length);
+function buildTermClassMap(popAllTerms, coraLsi) {
+  const coraTerms = (coraLsi ?? []).map(item => item.term || item.keyword || '').filter(Boolean);
+  if (!popAllTerms.length && !coraTerms.length) return new Map();
+
+  const norm = s => String(s || '').toLowerCase().trim();
+  const words = s => norm(s).split(/\s+/).filter(w => w.length > 3);
+  function overlaps(a, b) {
+    const na = norm(a), nb = norm(b);
+    if (na === nb || na.includes(nb) || nb.includes(na)) return true;
+    const wa = new Set(words(a));
+    return words(b).some(w => wa.has(w));
+  }
+
+  const map = new Map();
+
+  for (const t of popAllTerms) {
+    if (!t || t.length < 2) continue;
+    const inCora = coraTerms.some(c => overlaps(t, c));
+    map.set(norm(t), inCora ? 'term-both' : 'term-pop');
+  }
+
+  for (const t of coraTerms) {
+    if (!t || t.length < 2) continue;
+    const n = norm(t);
+    const inPOP = [...map.keys()].some(p => overlaps(t, p));
+    if (map.has(n)) {
+      if (inPOP) map.set(n, 'term-both');
+    } else {
+      map.set(n, inPOP ? 'term-both' : 'term-cora');
+    }
+  }
+
+  return map;
+}
+
+function agHighlightTerms(html, termClassMap) {
+  if (!termClassMap || !termClassMap.size) return html;
+
+  const priority = { 'term-both': 0, 'term-cora': 1, 'term-pop': 2 };
+  const entries = [...termClassMap.entries()]
+    .filter(([t]) => t && t.length >= 3)
+    .sort((a, b) => {
+      if (b[0].length !== a[0].length) return b[0].length - a[0].length;
+      return (priority[a[1]] ?? 3) - (priority[b[1]] ?? 3);
+    });
+
   let result = html;
-  sorted.forEach(term => {
-    if (!term || term.length < 3) return;
+  entries.forEach(([term, cls]) => {
     const safeEsc = escHtml(term).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    result = result.replace(new RegExp(`\\b(${safeEsc})\\b`, 'gi'), '<strong>$1</strong>');
+    result = result.replace(new RegExp(`\\b(${safeEsc})\\b`, 'gi'), (_m, p1, offset, str) => {
+      const before = str.slice(0, offset);
+      const opens  = (before.match(/<mark /g) || []).length;
+      const closes = (before.match(/<\/mark>/g) || []).length;
+      if (opens > closes) return _m;
+      return `<mark class="${cls}">${p1}</mark>`;
+    });
   });
+
   return result;
 }
 
-function agRenderArticle(text, terms) {
-  let html = escHtml(text);          // escape before injecting any markup
-  html = agBoldTerms(html, terms);
+function agRenderArticle(text, termClassMap) {
+  let html = escHtml(text);
+  html = agHighlightTerms(html, termClassMap);
   html = html
     .replace(/^### (.+)$/gm, '<h3>$1</h3>')
     .replace(/^## (.+)$/gm, '<h2>$1</h2>')
@@ -1256,9 +1306,25 @@ ${popBriefSpecs}`;
       <div class="ag-meta-sub">${c.sub}</div>
     </div>`).join('');
 
-    agArticleHtml = agRenderArticle(articleText, allTerms);
+    const termClassMap = buildTermClassMap(allTerms, coraReport?.lsi);
+    agArticleHtml = agRenderArticle(articleText, termClassMap);
     agArticleText = articleText;
     document.getElementById('ag-articleBox').innerHTML = agArticleHtml;
+
+    // Highlight legend
+    const hlLegend = document.getElementById('ag-hlLegend');
+    if (hlLegend) {
+      const vals = [...termClassMap.values()];
+      const bothCount = vals.filter(v => v === 'term-both').length;
+      const coraCount = vals.filter(v => v === 'term-cora').length;
+      const popCount  = vals.filter(v => v === 'term-pop').length;
+      hlLegend.style.display = 'flex';
+      hlLegend.innerHTML =
+        `<span class="hl-legend-label">Highlights:</span>` +
+        `<span class="hl-chip term-both">&#9733; Both (${bothCount})</span>` +
+        `<span class="hl-chip term-cora">Cora-only (${coraCount})</span>` +
+        `<span class="hl-chip term-pop">POP-only (${popCount})</span>`;
+    }
 
     // NLP terms from content brief (blue words) — always available after step 4
     const nlpBriefTerms = bodyTerms.filter(t => t.term && t.term.type === 'nlp').map(t => t.term.phrase);
