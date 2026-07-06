@@ -111,6 +111,17 @@ function bindEvents() {
     document.getElementById('apiKeyInput').value = '';
   });
 
+  // Tools dropdown
+  const toolsBtn  = document.getElementById('toolsMenuBtn');
+  const toolsDrop = document.getElementById('toolsDropdown');
+  const TOOLS_TABS = new Set(['brands', 'images']);
+  toolsBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    toolsDrop.classList.toggle('open');
+  });
+  document.addEventListener('click', () => toolsDrop.classList.remove('open'));
+  toolsDrop.addEventListener('click', () => setTimeout(() => toolsDrop.classList.remove('open'), 80));
+
   // Tabs
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -119,6 +130,7 @@ function bindEvents() {
       document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
       btn.classList.add('active');
       document.getElementById('tab-' + tab).classList.add('active');
+      toolsBtn.classList.toggle('active', TOOLS_TABS.has(tab));
       if (tab === 'dashboard') dbRender();
     });
   });
@@ -1424,6 +1436,7 @@ function dbRender() {
       document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
       document.querySelector('.tab-btn[data-tab="ranks"]').classList.add('active');
       document.getElementById('tab-ranks').classList.add('active');
+      document.getElementById('toolsMenuBtn')?.classList.remove('active');
       rtRender();
     });
   });
@@ -1488,6 +1501,7 @@ function rtInit() {
       document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
       document.querySelector('.tab-btn[data-tab="article"]').classList.add('active');
       document.getElementById('tab-article').classList.add('active');
+      document.getElementById('toolsMenuBtn')?.classList.remove('active');
       ['ag-keyword','ag-targetUrl'].forEach(id => {
         const el = document.getElementById(id);
         el.classList.add('ag-prefill-flash');
