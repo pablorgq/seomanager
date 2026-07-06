@@ -196,7 +196,8 @@ async function agFetchPageContent() {
     try { d = await r.json(); } catch(_) {}
     if (r.ok && d.text) {
       ta.value = d.text;
-      status.innerHTML = `<span style="color:var(--green)">✓ ${d.words} words fetched — review and edit if needed.</span>`;
+      const via = d.source === 'jina' ? ' via Jina Reader' : '';
+      status.innerHTML = `<span style="color:var(--green)">✓ ${d.words} words fetched${via} — review and edit if needed.</span>`;
     } else {
       const reason = typeof d.error === 'string' ? d.error : (r.status ? `HTTP ${r.status}` : 'blocked');
       agFetchShowManual(status, url, reason);

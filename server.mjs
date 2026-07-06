@@ -423,33 +423,53 @@ app.post('/api/openai/chat',   apiGuard, (req, res) => proxyOpenAI('https://api.
 /* ─────────────────────────────────────────────
    FETCH EXISTING PAGE CONTENT
 ───────────────────────────────────────────── */
+function htmlToText(html) {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+    .replace(/<nav[\s\S]*?<\/nav>/gi, ' ')
+    .replace(/<header[\s\S]*?<\/header>/gi, ' ')
+    .replace(/<footer[\s\S]*?<\/footer>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&[a-z]{2,6};/gi, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 app.post('/api/fetch-page', apiGuard, async (req, res) => {
   const { url } = req.body || {};
   if (!url || !/^https?:\/\//i.test(String(url))) {
     return res.status(400).json({ error: 'Valid http/https URL required' });
   }
+
+  // 1. Direct fetch
   try {
     const r = await fetch(String(url), {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
-      signal: AbortSignal.timeout(12000),
+      signal: AbortSignal.timeout(10000),
     });
-    if (!r.ok) throw new Error(`HTTP ${r.status} from target page`);
-    const html = await r.text();
-    const text = html
-      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-      .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
-      .replace(/<nav[\s\S]*?<\/nav>/gi, ' ')
-      .replace(/<header[\s\S]*?<\/header>/gi, ' ')
-      .replace(/<footer[\s\S]*?<\/footer>/gi, ' ')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/&nbsp;/gi, ' ')
-      .replace(/&[a-z]{2,6};/gi, ' ')
-      .replace(/\s{2,}/g, ' ')
-      .trim();
-    res.json({ text: text.slice(0, 12000), words: text.split(/\s+/).length });
+    if (r.ok) {
+      const text = htmlToText(await r.text());
+      return res.json({ text: text.slice(0, 12000), words: text.split(/\s+/).length, source: 'direct' });
+    }
+  } catch(_) { /* fall through to Jina */ }
+
+  // 2. Jina AI Reader fallback (free, no key, handles JS + bot protection)
+  try {
+    const jinaUrl = `https://r.jina.ai/${encodeURIComponent(String(url))}`;
+    const r = await fetch(jinaUrl, {
+      headers: { 'Accept': 'text/plain', 'X-No-Cache': 'true' },
+      signal: AbortSignal.timeout(20000),
+    });
+    if (r.ok) {
+      const text = (await r.text()).replace(/\s{2,}/g, ' ').trim();
+      return res.json({ text: text.slice(0, 12000), words: text.split(/\s+/).length, source: 'jina' });
+    }
+    throw new Error(`Jina returned ${r.status}`);
   } catch(e) {
-    res.status(502).json({ error: e.message });
+    return res.status(502).json({ error: e.message });
   }
 });
 
