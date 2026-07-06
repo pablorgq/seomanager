@@ -696,6 +696,8 @@ details[open] .card-prompts-toggle::before { transform: rotate(90deg); }
 .ag-score-badge.good { background: rgba(45,158,107,.1); color: var(--green); }
 .ag-score-badge.warn { background: rgba(255,193,7,.12); color: #856404; }
 .ag-score-badge.bad  { background: rgba(229,56,59,.1); color: var(--red); }
+.ag-prefill-flash { animation: prefillPop 1.2s ease; }
+@keyframes prefillPop { 0%,100% { box-shadow: none; } 25% { box-shadow: 0 0 0 3px var(--accent); } }
 
 /* Meta cards */
 .ag-meta-cards {

@@ -1321,8 +1321,8 @@ function rtLocalBadge(rank) {
 function rtPopCell(kw) {
   if (!kw.popStatus) {
     const kw64 = encodeURIComponent(kw.keyword || '');
-    const url64 = encodeURIComponent(kw.url || '');
-    return `<button class="rt-run-pop-btn" data-kw="${escHtml(kw.keyword||'')}" data-url="${escHtml(kw.url||'')}" title="Run POP analysis">Run POP</button>`;
+    const url64 = encodeURIComponent(kw.targetUrl || kw.url || '');
+    return `<button class="rt-run-pop-btn" data-kw="${escHtml(kw.keyword||'')}" data-url="${escHtml(kw.targetUrl || kw.url||'')}" title="Run POP analysis">Run POP</button>`;
   }
   const date = kw.popDate ? ` <span class="rt-pop-date">${escHtml(kw.popDate)}</span>` : '';
   return `<span class="rt-pop-badge">POP ✓</span>${date}<br><span style="font-size:10px;color:var(--text-muted)">${escHtml(kw.popStatus)}</span>`;
@@ -1387,6 +1387,11 @@ function rtInit() {
       document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
       document.querySelector('.tab-btn[data-tab="article"]').classList.add('active');
       document.getElementById('tab-article').classList.add('active');
+      ['ag-keyword','ag-targetUrl'].forEach(id => {
+        const el = document.getElementById(id);
+        el.classList.add('ag-prefill-flash');
+        setTimeout(() => el.classList.remove('ag-prefill-flash'), 1200);
+      });
       document.getElementById('ag-keyword').focus();
       return;
     }
