@@ -872,6 +872,13 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
 .db-delta-up  { background: rgba(45,158,107,.14); color: var(--green); }
 .db-delta-down{ background: rgba(229,56,59,.1); color: var(--red); }
 
+.db-score-row   { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.db-score-total { display: flex; align-items: flex-end; gap: 10px; }
+.db-score-split { display: flex; gap: 14px; flex-shrink: 0; }
+.db-score-sub   { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.db-score-sub-val   { font-size: 18px; font-weight: 700; font-family: 'Inter', sans-serif; font-variant-numeric: tabular-nums; }
+.db-score-sub-label { font-size: 9px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em; }
+
 .db-stats-row { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; color: var(--text-muted); margin-bottom: 14px; }
 .db-stat-val  { font-weight: 700; color: var(--text-primary); }
 .db-stat-sep  { color: var(--border); }

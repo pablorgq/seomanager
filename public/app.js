@@ -1680,6 +1680,12 @@ function dbRender() {
     return;
   }
 
+  const tierColor = v => v === null ? 'var(--text-muted)'
+    : v <= 5  ? 'var(--green)'
+    : v <= 15 ? '#e8a838'
+    : v <= 30 ? '#FF7300'
+    : 'var(--red)';
+
   const scored = clients.map(c => {
     const mkKws  = (c.keywords || []).filter(k => k.mainKeyword);
     const ranked = mkKws.filter(k => k.rank);
@@ -1691,26 +1697,29 @@ function dbRender() {
     const top3  = ranked.filter(k => k.rank <= 3).length;
     const top10 = ranked.filter(k => k.rank <= 10).length;
     const topKws = [...ranked].sort((a, b) => a.rank - b.rank).slice(0, 4);
-    return { c, mkKws, ranked, avgRank, avgDelta, top3, top10, topKws };
+
+    const localRanked = mkKws.filter(k => k.localRank);
+    const avgLocalRank = localRanked.length
+      ? localRanked.reduce((s, k) => s + k.localRank, 0) / localRanked.length : null;
+
+    const avgTotal = avgRank !== null && avgLocalRank !== null
+      ? (avgRank + avgLocalRank) / 2
+      : avgRank !== null ? avgRank : avgLocalRank;
+
+    return { c, mkKws, ranked, avgRank, avgDelta, top3, top10, topKws, avgLocalRank, avgTotal };
   });
 
   scored.sort((a, b) => {
-    if (a.avgRank === null && b.avgRank === null) return 0;
-    if (a.avgRank === null) return 1;
-    if (b.avgRank === null) return -1;
-    return a.avgRank - b.avgRank;
+    if (a.avgTotal === null && b.avgTotal === null) return 0;
+    if (a.avgTotal === null) return 1;
+    if (b.avgTotal === null) return -1;
+    return a.avgTotal - b.avgTotal;
   });
 
-  grid.innerHTML = scored.map(({ c, mkKws, ranked, avgRank, avgDelta, top3, top10, topKws }, i) => {
+  grid.innerHTML = scored.map(({ c, mkKws, ranked, avgRank, avgDelta, top3, top10, topKws, avgLocalRank, avgTotal }, i) => {
     const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `<span class="db-pos-num">#${i + 1}</span>`;
-    const hasMk   = mkKws.length > 0;
-    const hasRank = ranked.length > 0;
-
-    const rankColor = !hasRank ? 'var(--text-muted)'
-      : avgRank <= 5  ? 'var(--green)'
-      : avgRank <= 15 ? '#e8a838'
-      : avgRank <= 30 ? '#FF7300'
-      : 'var(--red)';
+    const hasMk    = mkKws.length > 0;
+    const hasScore = avgTotal !== null;
 
     let deltaBadge = '';
     if (avgDelta !== null) {
@@ -1734,12 +1743,24 @@ function dbRender() {
         <span class="db-client-name">${escHtml(c.name)}</span>
         <span class="db-mk-count">${mkKws.length} MK</span>
       </div>
-      ${hasRank ? `
-      <div class="db-rank-row">
-        <span class="db-avg-rank" style="color:${rankColor}">${avgRank.toFixed(1)}</span>
-        <div class="db-rank-meta">
-          <span class="db-rank-label">avg position</span>
-          ${deltaBadge}
+      ${hasScore ? `
+      <div class="db-score-row">
+        <div class="db-score-total">
+          <span class="db-avg-rank" style="color:${tierColor(avgTotal)}">${avgTotal.toFixed(1)}</span>
+          <div class="db-rank-meta">
+            <span class="db-rank-label">total score</span>
+            ${deltaBadge}
+          </div>
+        </div>
+        <div class="db-score-split">
+          <div class="db-score-sub">
+            <span class="db-score-sub-val" style="color:${tierColor(avgRank)}">${avgRank !== null ? avgRank.toFixed(1) : '—'}</span>
+            <span class="db-score-sub-label">Organic</span>
+          </div>
+          <div class="db-score-sub">
+            <span class="db-score-sub-val" style="color:${tierColor(avgLocalRank)}">${avgLocalRank !== null ? avgLocalRank.toFixed(1) : '—'}</span>
+            <span class="db-score-sub-label">Local</span>
+          </div>
         </div>
       </div>
       <div class="db-stats-row">
