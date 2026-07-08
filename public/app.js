@@ -1213,10 +1213,13 @@ async function agContinueWithSelected() {
 
     agSetStep(4, 'active');
     const rd = await agPollReport(tid4, 4);
+    console.log('[POP report] full response — inspect for the real score field name if "score" shows as ?:', rd.report);
     const reportId  = rd.report.id;
     const wcTarget  = (rd.report.wordCount && rd.report.wordCount.target) || 600;
     const h2Target  = rd.report.subHeadingsCount || 3;
-    const pageScore = rd.report.pageScore || rd.report.pageScoreValue || '?';
+    const pageScore = rd.report.pageScore ?? rd.report.pageScoreValue ?? rd.report.score
+      ?? rd.report.contentScore ?? rd.report.optimizationScore
+      ?? rd.report.score?.value ?? rd.report.pageScore?.value ?? '?';
     const cbTerms   = (rd.report.cleanedContentBrief && rd.report.cleanedContentBrief.p) || [];
     const nlpEntities = enableNlp && rd.report.googleNlpSchemaData
       ? (rd.report.googleNlpSchemaData.entities || []).slice(0, 20) : [];
