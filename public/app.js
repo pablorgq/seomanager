@@ -2406,7 +2406,7 @@ async function rtRefreshAll() {
   }
 }
 
-/* ── Import primary (starred) keywords from AA campaign ── */
+/* ── Import all keywords from AA campaign — MK status stays manual (use the MK button) ── */
 async function rtImportFromAA() {
   const c = rtActiveClient();
   if (!c) return;
@@ -2422,7 +2422,7 @@ async function rtImportFromAA() {
     const kwRows = await aaQuery({
       asset: 'keyword',
       operation: 'read',
-      fields: ['id', 'keyword_phrase', 'primary_keyword'],
+      fields: ['id', 'keyword_phrase'],
       filters: [
         { campaign_id: { '$equals_comparison': campId } },
       ],
@@ -2430,33 +2430,24 @@ async function rtImportFromAA() {
       limit: 500,
       offset: 0,
     });
-    // Filter client-side — AA API doesn't reliably support primary_keyword filter
-    const primaryRows = kwRows.filter(r => r.primary_keyword === true || r.primary_keyword === 1 || r.primary_keyword === '1');
-    if (!primaryRows.length) throw new Error(`No primary (starred) keywords found for campaign ID ${campId}. Mark keywords as primary in AgencyAnalytics first.`);
+    if (!kwRows.length) throw new Error(`No keywords found for campaign ID ${campId}. Verify the campaign ID in ✎ edit.`);
 
-    const existingByPhrase = new Map(c.keywords.map(k => [(k.keyword || '').toLowerCase(), k]));
-    let added = 0, markedMk = 0, skipped = 0;
-    for (const row of primaryRows) {
+    const existing = new Set(c.keywords.map(k => (k.keyword || '').toLowerCase()));
+    let added = 0, skipped = 0;
+    for (const row of kwRows) {
       const phrase = (row.keyword_phrase || '').trim();
       if (!phrase) continue;
-      const key = phrase.toLowerCase();
-      const existingKw = existingByPhrase.get(key);
-      if (existingKw) {
-        if (!existingKw.mainKeyword) { existingKw.mainKeyword = true; markedMk++; }
-        else skipped++;
-        continue;
-      }
-      const newKw = { id: rtUid(), url: '', keyword: phrase, volume: null,
-        note: '', popStatus: '', popDate: '', rank: null, prevRank: null, lastCheck: null, mainKeyword: true };
-      c.keywords.push(newKw);
-      existingByPhrase.set(key, newKw);
+      if (existing.has(phrase.toLowerCase())) { skipped++; continue; }
+      c.keywords.push({ id: rtUid(), url: '', keyword: phrase, volume: null,
+        note: '', popStatus: '', popDate: '', rank: null, prevRank: null, lastCheck: null });
+      existing.add(phrase.toLowerCase());
       added++;
     }
 
     rtSave();
     rtRender();
     document.getElementById('rt-lastRefresh').textContent =
-      `Added ${added} new · marked ${markedMk} existing as MK (${skipped} already MK) — fetching ranks…`;
+      `Added ${added} new keyword${added !== 1 ? 's' : ''} (${skipped} already existed) — fetching ranks… Use the MK button to mark Main Keywords.`;
 
     // Auto-refresh ranks so URL/rank/local/vol populate immediately
     if (added > 0) await rtRefreshAll();
