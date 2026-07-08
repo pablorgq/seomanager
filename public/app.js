@@ -2406,7 +2406,20 @@ async function rtRefreshAll() {
   }
 }
 
-/* ── Import all keywords from AA campaign — MK status stays manual (use the MK button) ── */
+// Normalizes AA's "tags" field (shape varies: array of strings, array of
+// { name } objects, or a comma-separated string) into a lowercase name list.
+function aaTagNames(row) {
+  const raw = row.tags;
+  const list = Array.isArray(raw) ? raw
+    : typeof raw === 'string' ? raw.split(',')
+    : [];
+  return list.map(t => (typeof t === 'string' ? t : (t?.name || t?.tag || ''))
+    .trim().toLowerCase()).filter(Boolean);
+}
+
+/* ── Import all starred keywords from AA campaign.
+   Keywords also tagged "sm" in AA are auto-marked Main Keyword; the MK
+   button in Rank Tracker always remains available as a manual override. ── */
 async function rtImportFromAA() {
   const c = rtActiveClient();
   if (!c) return;
@@ -2422,7 +2435,7 @@ async function rtImportFromAA() {
     const kwRows = await aaQuery({
       asset: 'keyword',
       operation: 'read',
-      fields: ['id', 'keyword_phrase'],
+      fields: ['id', 'keyword_phrase', 'primary_keyword', 'tags'],
       filters: [
         { campaign_id: { '$equals_comparison': campId } },
       ],
@@ -2430,24 +2443,36 @@ async function rtImportFromAA() {
       limit: 500,
       offset: 0,
     });
-    if (!kwRows.length) throw new Error(`No keywords found for campaign ID ${campId}. Verify the campaign ID in ✎ edit.`);
+    // Filter client-side — AA API doesn't reliably support primary_keyword filter
+    const starredRows = kwRows.filter(r => r.primary_keyword === true || r.primary_keyword === 1 || r.primary_keyword === '1');
+    if (!starredRows.length) throw new Error(`No starred keywords found for campaign ID ${campId}. Star keywords in AgencyAnalytics first.`);
 
-    const existing = new Set(c.keywords.map(k => (k.keyword || '').toLowerCase()));
-    let added = 0, skipped = 0;
-    for (const row of kwRows) {
+    const existingByPhrase = new Map(c.keywords.map(k => [(k.keyword || '').toLowerCase(), k]));
+    let added = 0, markedMk = 0, skipped = 0;
+    for (const row of starredRows) {
       const phrase = (row.keyword_phrase || '').trim();
       if (!phrase) continue;
-      if (existing.has(phrase.toLowerCase())) { skipped++; continue; }
-      c.keywords.push({ id: rtUid(), url: '', keyword: phrase, volume: null,
-        note: '', popStatus: '', popDate: '', rank: null, prevRank: null, lastCheck: null });
-      existing.add(phrase.toLowerCase());
+      const key    = phrase.toLowerCase();
+      const wantMk = aaTagNames(row).includes('sm');
+
+      const existingKw = existingByPhrase.get(key);
+      if (existingKw) {
+        if (wantMk && !existingKw.mainKeyword) { existingKw.mainKeyword = true; markedMk++; }
+        else skipped++;
+        continue;
+      }
+      const newKw = { id: rtUid(), url: '', keyword: phrase, volume: null,
+        note: '', popStatus: '', popDate: '', rank: null, prevRank: null, lastCheck: null,
+        mainKeyword: wantMk };
+      c.keywords.push(newKw);
+      existingByPhrase.set(key, newKw);
       added++;
     }
 
     rtSave();
     rtRender();
     document.getElementById('rt-lastRefresh').textContent =
-      `Added ${added} new keyword${added !== 1 ? 's' : ''} (${skipped} already existed) — fetching ranks… Use the MK button to mark Main Keywords.`;
+      `Added ${added} new · marked ${markedMk} existing as MK via "sm" tag (${skipped} unchanged) — fetching ranks…`;
 
     // Auto-refresh ranks so URL/rank/local/vol populate immediately
     if (added > 0) await rtRefreshAll();
