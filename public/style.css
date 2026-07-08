@@ -725,6 +725,11 @@ details[open] .card-prompts-toggle::before { transform: rotate(90deg); }
 .ag-badge-lsi { background: var(--accent-dim); color: var(--accent); }
 .ag-badge-var { background: rgba(229,56,59,.1); color: var(--red); }
 .ag-badge-nlp { background: rgba(59,130,246,.12); color: #3b82f6; }
+.ag-badge-brand { background: rgba(232,168,56,.18); color: #8a5c00; }
+:root[data-theme="dark"] .ag-badge-brand { color: #e8a838; }
+.ag-term-item.ag-term-brand { opacity: .55; }
+.ag-term-item.ag-term-brand:hover { background: none; }
+.ag-term-item.ag-term-brand input[type=checkbox] { cursor: not-allowed; }
 
 /* Score badge */
 .ag-score-badge {

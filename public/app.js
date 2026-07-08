@@ -847,15 +847,46 @@ function agSetStep(i, state, detail) {
   agRenderSteps();
 }
 
-function agShowTermEditors(variations, lsaPhrases) {
+// Derives likely brand/competitor name tokens from the competitor URLs the
+// user entered (domain root, e.g. "icoone.com" → "icoone").
+function agBrandTokens(competitors) {
+  const tokens = new Set();
+  for (const url of competitors || []) {
+    try {
+      const host = new URL(/^https?:\/\//i.test(url) ? url : 'https://' + url).hostname.replace(/^www\./, '');
+      const root = host.split('.')[0];
+      if (root && root.length >= 3) tokens.add(root.toLowerCase());
+    } catch (_) {}
+  }
+  return tokens;
+}
+
+// A term looks like a brand/product name if it carries a trademark symbol,
+// or contains one of the competitor domain-root tokens as a whole word.
+function agIsBrandTerm(phrase, brandTokens) {
+  if (/[®™©]/.test(phrase)) return true;
+  if (!brandTokens || !brandTokens.size) return false;
+  const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return [...brandTokens].some(tok => new RegExp(`\\b${esc(tok)}\\b`, 'i').test(phrase));
+}
+
+function agTermItemHtml(phrase, badgeHtml, brandTokens) {
+  const isBrand = agIsBrandTerm(phrase, brandTokens);
+  const brandBadge = isBrand
+    ? `<span class="ag-term-badge ag-badge-brand" title="Looks like a competitor/brand name — excluded from content">⚠ brand</span>`
+    : '';
+  return `<label class="ag-term-item${isBrand ? ' ag-term-brand' : ''}">
+      <input type="checkbox" ${isBrand ? '' : 'checked'} data-phrase="${escHtml(phrase)}"${isBrand ? ' disabled' : ''}>
+      <span class="ag-term-phrase">${escHtml(phrase)}</span>
+      ${brandBadge}${badgeHtml}
+    </label>`;
+}
+
+function agShowTermEditors(variations, lsaPhrases, brandTokens) {
   const varList = document.getElementById('ag-varList');
   varList.innerHTML = variations.map(v => {
     const phrase = typeof v === 'string' ? v : (v.phrase || v.variation || String(v));
-    return `<label class="ag-term-item">
-      <input type="checkbox" checked data-phrase="${escHtml(phrase)}">
-      <span class="ag-term-phrase">${escHtml(phrase)}</span>
-      <span class="ag-term-badge ag-badge-var">var</span>
-    </label>`;
+    return agTermItemHtml(phrase, `<span class="ag-term-badge ag-badge-var">var</span>`, brandTokens);
   }).join('');
   document.getElementById('ag-varCount').textContent = `(${variations.length})`;
 
@@ -867,12 +898,7 @@ function agShowTermEditors(variations, lsaPhrases) {
     const badge = isNlp
       ? `<span class="ag-term-badge ag-badge-nlp">nlp</span>`
       : `<span class="ag-term-badge ag-badge-lsi">lsi</span>`;
-    return `<label class="ag-term-item">
-      <input type="checkbox" checked data-phrase="${escHtml(phrase)}">
-      <span class="ag-term-phrase">${escHtml(phrase)}</span>
-      <span class="ag-term-count">avg ${escHtml(String(avg))}</span>
-      ${badge}
-    </label>`;
+    return agTermItemHtml(phrase, `<span class="ag-term-count">avg ${escHtml(String(avg))}</span>${badge}`, brandTokens);
   }).join('');
   document.getElementById('ag-lsiCount').textContent = `(${lsaPhrases.length})`;
 
@@ -882,7 +908,7 @@ function agShowTermEditors(variations, lsaPhrases) {
 }
 
 function agToggleAll(listId, checked) {
-  document.querySelectorAll(`#${listId} input[type=checkbox]`).forEach(cb => cb.checked = checked);
+  document.querySelectorAll(`#${listId} input[type=checkbox]:not(:disabled)`).forEach(cb => cb.checked = checked);
 }
 
 function agGetSelected(listId) {
@@ -1162,9 +1188,10 @@ async function agStartFlow() {
     agTermsData = td;
     agSetStep(1, 'done', `${td.variations.length} vars · ${td.lsaPhrases.length} LSI`);
 
-    agSetStep(2, 'active', 'review terms below → uncheck brand names → click Continue');
-    agShowTermEditors(td.variations, td.lsaPhrases);
-    agLog('Terms loaded — uncheck any brand/competitor names, then click Continue.');
+    agSetStep(2, 'active', 'review terms below → possible brand/competitor names auto-excluded → click Continue');
+    const brandTokens = agBrandTokens(competitors);
+    agShowTermEditors(td.variations, td.lsaPhrases, brandTokens);
+    agLog('Terms loaded — possible brand/competitor names are unchecked & locked out automatically. Review, then click Continue.');
 
     window._agFlow = { popKey, keyword, targetUrl, pageNotBuilt, locName, targLang, competitors };
 
@@ -1216,13 +1243,17 @@ async function agContinueWithSelected() {
     const reportId  = rd.report.id;
     const wcTarget  = (rd.report.wordCount && rd.report.wordCount.target) || 600;
     const h2Target  = rd.report.subHeadingsCount || 3;
-    // POP nests the score under cleanedContentBrief.pageScore, not top-level
-    const rawScore  = rd.report.cleanedContentBrief?.pageScore ?? rd.report.pageScore
+    // POP nests the score under cleanedContentBrief.pageScore, itself an
+    // object shaped like { pageScore: 1.03, pageScoreValue: "" } — confirmed
+    // from a live report. The number looks like a 0–1 ratio vs. target
+    // (1.03 = 103% of target) rather than already being on a 0–100 scale.
+    const rawScore = rd.report.cleanedContentBrief?.pageScore ?? rd.report.pageScore
       ?? rd.report.pageScoreValue ?? rd.report.score ?? '?';
-    console.log('[POP report] pageScore (raw):', rawScore, '| pTotal:', rd.report.cleanedContentBrief?.pTotal, '| full cleanedContentBrief:', rd.report.cleanedContentBrief);
-    const pageScore = rawScore && typeof rawScore === 'object'
-      ? (rawScore.current ?? rawScore.value ?? rawScore.score ?? rawScore.percent ?? rawScore.total ?? JSON.stringify(rawScore))
+    console.log('[POP report] pageScore (raw):', rawScore, '| pTotal:', rd.report.cleanedContentBrief?.pTotal);
+    let pageScore = rawScore && typeof rawScore === 'object'
+      ? (rawScore.pageScore ?? rawScore.current ?? rawScore.value ?? rawScore.score ?? rawScore.percent ?? rawScore.total ?? JSON.stringify(rawScore))
       : rawScore;
+    if (typeof pageScore === 'number' && pageScore > 0 && pageScore <= 5) pageScore = Math.round(pageScore * 100);
     const cbTerms   = (rd.report.cleanedContentBrief && rd.report.cleanedContentBrief.p) || [];
     const nlpEntities = enableNlp && rd.report.googleNlpSchemaData
       ? (rd.report.googleNlpSchemaData.entities || []).slice(0, 20) : [];
