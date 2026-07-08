@@ -1177,6 +1177,7 @@ async function agContinueWithSelected() {
   const approach  = document.getElementById('ag-approach').value;
   const tone      = document.getElementById('ag-tone').value;
   const model     = document.getElementById('ag-oaiModel').value;
+  const contentInstructions = document.getElementById('ag-contentInstructions').value.trim();
 
   const selectedVars = agGetSelected('ag-varList');
   const selectedLsi  = agGetSelected('ag-lsiList');
@@ -1289,7 +1290,7 @@ ${nlpEntityNames.length ? '\nGOOGLE NLP ENTITIES — weave these in naturally in
 
 KEYWORD VARIATIONS — use naturally throughout (not all in one place):
 ${selectedVars.join(', ')}
-
+${contentInstructions ? `\nCONTENT INSTRUCTIONS — follow these exactly:\n${contentInstructions}\n` : ''}
 ── FORMAT ───────────────────────────────────────────────
 - Output: one # H1 title, ${h2Target} ## H2 sections, one conclusion paragraph
 - Use flowing paragraphs — NO bullet lists
@@ -1325,7 +1326,7 @@ TERMS TO WEAVE IN (insert where they fit naturally; do not force every term):
 ${insertTermLines}
 
 H1 must contain: ${titleTerms.join(', ') || keyword}
-
+${contentInstructions ? `\nCONTENT INSTRUCTIONS — follow these exactly:\n${contentInstructions}\n` : ''}
 EXISTING PAGE CONTENT (return this with edits applied):
 ---
 ${existingContent.slice(0, 8000)}
