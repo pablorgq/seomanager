@@ -2,6 +2,7 @@ import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { randomBytes } from 'crypto';
+import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { Storage } from '@google-cloud/storage';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -54,14 +55,40 @@ if (!AUTH_PASS) {
 }
 
 /* ─────────────────────────────────────────────
-   SESSION STORE  (in-memory, crypto-random tokens)
+   SESSION STORE  (crypto-random tokens, persisted to disk
+   so logins survive server restarts/redeploys)
 ───────────────────────────────────────────── */
 const sessions = new Map();          // token → { expiresAt }
 const SESSION_TTL = 30 * 24 * 60 * 60 * 1000;  // 30 days
+const SESSIONS_FILE = join(__dirname, '.sessions.json');
+
+function loadSessions() {
+  if (!existsSync(SESSIONS_FILE)) return;
+  try {
+    const raw = JSON.parse(readFileSync(SESSIONS_FILE, 'utf8'));
+    const now = Date.now();
+    for (const [token, s] of Object.entries(raw)) {
+      if (s.expiresAt > now) sessions.set(token, s);
+    }
+  } catch (e) {
+    console.warn('[session] Failed to load session store:', e.message);
+  }
+}
+
+function saveSessions() {
+  try {
+    writeFileSync(SESSIONS_FILE, JSON.stringify(Object.fromEntries(sessions)));
+  } catch (e) {
+    console.warn('[session] Failed to persist session store:', e.message);
+  }
+}
+
+loadSessions();
 
 function createSession() {
   const token = randomBytes(32).toString('hex');
   sessions.set(token, { expiresAt: Date.now() + SESSION_TTL });
+  saveSessions();
   return token;
 }
 
@@ -138,11 +165,13 @@ function isApiRateLimited(token) {
 ───────────────────────────────────────────── */
 setInterval(() => {
   const now = Date.now();
+  const sessionsSizeBefore = sessions.size;
   for (const [k, v] of sessions)      if (v.expiresAt < now) sessions.delete(k);
   for (const [k, v] of csrfTokens)    if (v < now) csrfTokens.delete(k);
   for (const [k, v] of loginAttempts) if (v.lockUntil && v.lockUntil < now - LOCKOUT_MS) loginAttempts.delete(k);
   if (sessions.size   > 500) sessions.clear();
   if (apiWindows.size > 500) apiWindows.clear();
+  if (sessions.size !== sessionsSizeBefore) saveSessions();
 }, 60 * 60 * 1000).unref();
 
 /* ─────────────────────────────────────────────
@@ -320,7 +349,7 @@ app.post('/login', (req, res) => {
 
 app.get('/logout', (req, res) => {
   const token = parseCookies(req).sm_auth;
-  if (token) sessions.delete(token);          // server-side invalidation
+  if (token) { sessions.delete(token); saveSessions(); }   // server-side invalidation
   res.setHeader('Set-Cookie', 'sm_auth=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
   res.redirect('/login');
 });
