@@ -132,6 +132,7 @@ function bindEvents() {
       document.getElementById('tab-' + tab).classList.add('active');
       toolsBtn.classList.toggle('active', TOOLS_TABS.has(tab));
       if (tab === 'dashboard') dbRender();
+      if (tab === 'files') filesRender();
     });
   });
 
@@ -779,6 +780,13 @@ function downloadDataUrl(dataUrl, filename) {
   a.click();
 }
 
+function downloadDoc(filename, htmlContent) {
+  const a = document.createElement('a');
+  a.href = 'data:application/msword;charset=utf-8,' + encodeURIComponent(htmlContent);
+  a.download = filename;
+  a.click();
+}
+
 function slugify(str) {
   return (str || 'blog').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 }
@@ -1158,7 +1166,7 @@ async function agStartFlow() {
     agShowTermEditors(td.variations, td.lsaPhrases);
     agLog('Terms loaded — uncheck any brand/competitor names, then click Continue.');
 
-    window._agFlow = { popKey, keyword, targetUrl, pageNotBuilt, locName, targLang };
+    window._agFlow = { popKey, keyword, targetUrl, pageNotBuilt, locName, targLang, competitors };
 
   } catch(e) {
     agLog('ERROR: ' + e.message);
@@ -1170,7 +1178,7 @@ async function agStartFlow() {
 }
 
 async function agContinueWithSelected() {
-  const { popKey, keyword, targetUrl, pageNotBuilt, locName, targLang } = window._agFlow;
+  const { popKey, keyword, targetUrl, pageNotBuilt, locName, targLang, competitors } = window._agFlow;
   const enableNlp = document.getElementById('ag-enableNlp').checked ? 1 : 0;
   const overOpt   = document.getElementById('ag-overOpt').checked ? 1 : 0;
   const strategy  = document.getElementById('ag-strategy').value;
@@ -1426,22 +1434,33 @@ ${popBriefSpecs}`;
     // Cora + POP cross-reference
     agRenderCrossRef(allTerms, selectedLsi, selectedVars);
 
-    // Auto-save report so it can be viewed from Rank Tracker
+    // Auto-save report so it can be viewed from Rank Tracker + Files
     const repClientId = rtData?.activeClientId;
     if (repClientId) {
       repSave({
-        savedAt:      new Date().toISOString(),
+        savedAt:        new Date().toISOString(),
         keyword,
-        clientId:     repClientId,
-        url:          targetUrl,
-        score:        pageScore,
+        clientId:       repClientId,
+        clientName:     rtActiveClient()?.name || '',
+        url:            targetUrl,
+        score:          pageScore,
         wordCount,
-        articleHtml:  agArticleHtml,
-        articleText:  agArticleText,
-        legendHtml:   document.getElementById('ag-hlLegend')?.innerHTML || '',
-        termsSummary: document.getElementById('ag-termsSummary')?.innerHTML || '',
+        articleHtml:    agArticleHtml,
+        articleText:    agArticleText,
+        legendHtml:     document.getElementById('ag-hlLegend')?.innerHTML || '',
+        termsSummary:   document.getElementById('ag-termsSummary')?.innerHTML || '',
+        competitors:    competitors || [],
+        strategy,
+        approach,
+        enableNlp:      !!enableNlp,
+        overOpt:        !!overOpt,
+        tone,
+        locationName:   locName,
+        targetLanguage: targLang,
+        contentInstructions,
       });
-      rtRender(); // refresh RT table so the 📄 icon activates
+      rtRender();    // refresh RT table so the 📄 icon activates
+      filesRender(); // refresh Files tab if it's the active tab
     }
 
   } catch(e) {
@@ -1486,6 +1505,19 @@ function repSave(data) {
 }
 function repGet(clientId, keyword) {
   try { return JSON.parse(localStorage.getItem(repKey(clientId, keyword)) || 'null'); } catch(_) { return null; }
+}
+function repListAll() {
+  const out = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k || !k.startsWith(REP_PFX)) continue;
+    try {
+      const rep = JSON.parse(localStorage.getItem(k));
+      if (rep) out.push(rep);
+    } catch(_) {}
+  }
+  out.sort((a, b) => new Date(b.savedAt || 0) - new Date(a.savedAt || 0));
+  return out;
 }
 
 let rtData   = { clients: [], activeClientId: null };
@@ -1642,7 +1674,9 @@ function showPopReport(clientId, keyword) {
   document.getElementById('rep-article').innerHTML = rep.articleHtml || '';
   document.getElementById('rep-summary').innerHTML = rep.termsSummary || '';
   document.getElementById('rep-summary').style.display = rep.termsSummary ? 'block' : 'none';
-  modal._repText = rep.articleText || '';
+  modal._repText     = rep.articleText || '';
+  modal._repClientId = clientId;
+  modal._repKeyword  = keyword;
   modal.classList.add('open');
 }
 
@@ -1657,6 +1691,50 @@ function copyPopReport() {
     const orig = b.textContent; b.textContent = 'Copied!';
     setTimeout(() => b.textContent = orig, 1500);
   }).catch(() => {});
+}
+
+function repDownloadDocFromModal() {
+  const modal = document.getElementById('popReportModal');
+  repDownloadDoc(modal._repClientId, modal._repKeyword);
+}
+
+function repDownloadDoc(clientId, keyword) {
+  const rep = repGet(clientId, keyword);
+  if (!rep) return;
+
+  const details = [
+    ['Client',               rep.clientName],
+    ['Keyword',               rep.keyword],
+    ['URL',                   rep.url],
+    ['Competitors',           (rep.competitors || []).join(', ')],
+    ['Strategy',               rep.strategy],
+    ['Approach',               rep.approach],
+    ['Google NLP Analysis',    rep.enableNlp ? 'Yes' : 'No'],
+    ['Consider Over-optimization', rep.overOpt ? 'Yes' : 'No'],
+    ['Tone',                   rep.tone],
+    ['Location',               rep.locationName],
+    ['Language',               rep.targetLanguage],
+    ['Content Instructions',   rep.contentInstructions],
+    ['POP Score',              rep.score],
+    ['Word Count',             rep.wordCount],
+    ['Saved',                  rep.savedAt ? new Date(rep.savedAt).toLocaleString() : ''],
+  ].filter(([, v]) => v);
+
+  const detailRows = details.map(([label, value]) =>
+    `<tr><td style="padding:3px 10px 3px 0;color:#666"><strong>${escHtml(label)}</strong></td><td style="padding:3px 0">${escHtml(String(value)).replace(/\n/g, '<br>')}</td></tr>`
+  ).join('');
+
+  const html = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+<head><meta charset="utf-8"><title>${escHtml(rep.keyword || 'SEO Article')}</title></head>
+<body style="font-family:Calibri,Arial,sans-serif">
+<h1>${escHtml(rep.keyword || 'SEO Article')}</h1>
+<table>${detailRows}</table>
+<hr>
+${rep.articleHtml || `<p>${escHtml(rep.articleText || '')}</p>`}
+</body></html>`;
+
+  const filename = `${slugify(rep.keyword)}${rep.clientName ? '-' + slugify(rep.clientName) : ''}.doc`;
+  downloadDoc(filename, html);
 }
 
 function rtPopCell(kw) {
@@ -1786,6 +1864,66 @@ function dbRender() {
       document.getElementById('tab-ranks').classList.add('active');
       document.getElementById('toolsMenuBtn')?.classList.remove('active');
       rtRender();
+    });
+  });
+}
+
+/* ── FILES ── */
+function filesRender() {
+  const grid = document.getElementById('fl-grid');
+  if (!grid) return;
+  const reps = repListAll();
+
+  if (!reps.length) {
+    grid.innerHTML = '<div class="db-empty">No content generated yet — articles you create in SEO Article are saved here automatically.</div>';
+    return;
+  }
+
+  grid.innerHTML = reps.map(rep => {
+    const details = [
+      rep.competitors?.length ? `Competitors: ${rep.competitors.join(', ')}` : null,
+      rep.strategy    ? `Strategy: ${rep.strategy}` : null,
+      rep.approach    ? `Approach: ${rep.approach}` : null,
+      `Google NLP Analysis: ${rep.enableNlp ? 'Yes' : 'No'}`,
+      `Consider Over-optimization: ${rep.overOpt ? 'Yes' : 'No'}`,
+      rep.tone           ? `Tone: ${rep.tone}` : null,
+      rep.locationName   ? `Location: ${rep.locationName}` : null,
+      rep.targetLanguage ? `Language: ${rep.targetLanguage}` : null,
+      rep.contentInstructions ? `Content Instructions: ${rep.contentInstructions}` : null,
+    ].filter(Boolean).join('\n');
+
+    const savedDate = rep.savedAt ? new Date(rep.savedAt).toLocaleDateString() : '';
+
+    return `
+    <div class="fl-card" data-client-id="${escHtml(rep.clientId || '')}" data-kw="${escHtml(rep.keyword || '')}" title="${escHtml(details)}">
+      <div class="fl-card-top">
+        <span class="fl-kw">${escHtml(rep.keyword || '')}</span>
+        <span class="fl-score">${escHtml(String(rep.score || '—'))}</span>
+      </div>
+      <div class="fl-client">${escHtml(rep.clientName || '—')}</div>
+      <div class="fl-url">${escHtml(rep.url || '')}</div>
+      <div class="fl-meta">
+        <span>${escHtml(String(rep.wordCount || '—'))} words</span>
+        <span class="db-stat-sep">·</span>
+        <span>Saved ${savedDate}</span>
+      </div>
+      <div class="fl-actions">
+        <button class="btn btn-secondary btn-sm fl-view-btn">View</button>
+        <button class="btn btn-secondary btn-sm fl-doc-btn">Download .doc</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  grid.querySelectorAll('.fl-view-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const card = btn.closest('.fl-card');
+      showPopReport(card.dataset.clientId, card.dataset.kw);
+    });
+  });
+  grid.querySelectorAll('.fl-doc-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const card = btn.closest('.fl-card');
+      repDownloadDoc(card.dataset.clientId, card.dataset.kw);
     });
   });
 }
