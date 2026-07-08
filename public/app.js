@@ -1786,6 +1786,11 @@ function rtInit() {
     rtOpenModal('rt-importModal');
   });
   document.getElementById('rt-importConfirmBtn').addEventListener('click', rtImport);
+  document.getElementById('rt-addKeywordsBtn').addEventListener('click', () => {
+    document.getElementById('rt-addKeywordsText').value = '';
+    rtOpenModal('rt-addKeywordsModal');
+  });
+  document.getElementById('rt-addKeywordsConfirmBtn').addEventListener('click', rtAddKeywordsBulk);
   document.getElementById('rt-aaImportBtn').addEventListener('click', rtImportFromAA);
   document.getElementById('rt-addRowBtn').addEventListener('click', rtAddRow);
   document.getElementById('rt-saveClientBtn').addEventListener('click', rtSaveClient);
@@ -2084,6 +2089,25 @@ function rtImport() {
   rtSave();
   rtRender();
   rtCloseModal('rt-importModal');
+}
+
+function rtAddKeywordsBulk() {
+  const c = rtActiveClient();
+  if (!c) return;
+  const text = document.getElementById('rt-addKeywordsText').value.trim();
+  if (!text) return;
+  const lines = text.split('\n').map(s => s.trim()).filter(Boolean);
+
+  for (const keyword of lines) {
+    c.keywords.push({
+      id: rtUid(), url: '', keyword, volume: null, note: '',
+      popStatus: '', popDate: '', rank: null, prevRank: null, lastCheck: null,
+    });
+  }
+  rtSave();
+  rtRender();
+  rtCloseModal('rt-addKeywordsModal');
+  document.getElementById('rt-addKeywordsText').value = '';
 }
 
 /* ── AA fetch helper (shared by refresh + import) ── */
