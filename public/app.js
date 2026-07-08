@@ -1474,12 +1474,38 @@ ${popBriefSpecs}`;
   btn.textContent = 'Generate SEO Article';
 }
 
+// Inline the highlight/heading styles so bold + colored terms survive
+// pasting into apps that don't see this page's stylesheet (Word, Docs, Gmail…)
+function agCopySafeHtml(html) {
+  return (html || '')
+    .replace(/<mark class="term-pop">/g,  '<mark style="background:#c7d2fe;font-weight:600">')
+    .replace(/<mark class="term-cora">/g, '<mark style="background:#a7f3d0;font-weight:600">')
+    .replace(/<mark class="term-both">/g, '<mark style="background:#fde68a;font-weight:700">');
+}
+
+function copyRichHtml(html, plainText, btn) {
+  const plain = plainText || (html || '').replace(/<[^>]+>/g, '');
+  const done = () => {
+    if (!btn) return;
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = orig, 1500);
+  };
+  if (window.ClipboardItem) {
+    const item = new ClipboardItem({
+      'text/html':  new Blob([html || ''], { type: 'text/html' }),
+      'text/plain': new Blob([plain], { type: 'text/plain' }),
+    });
+    navigator.clipboard.write([item]).then(done).catch(() => {
+      navigator.clipboard.writeText(plain).then(done).catch(() => {});
+    });
+  } else {
+    navigator.clipboard.writeText(plain).then(done).catch(() => {});
+  }
+}
+
 function agCopyArticle() {
-  navigator.clipboard.writeText(agArticleText || '').then(() => {
-    const b = event.target; const orig = b.textContent;
-    b.textContent = 'Copied!';
-    setTimeout(() => b.textContent = orig, 1500);
-  }).catch(() => {});
+  copyRichHtml(agCopySafeHtml(agArticleHtml), agArticleText, event.target);
 }
 
 function agCopyHtml() {
@@ -1583,7 +1609,7 @@ function rtRender() {
     th.dataset.sortDir = isSorted ? rtSort.dir : '';
   });
 
-  // Sort keywords — MK rows always float to top, then apply column sort within each group
+  // Apply column sort (if any) within the full list, then split into MK / non-MK groups
   let keywords = [...(client.keywords || [])];
   if (rtSort.col) {
     keywords.sort((a, b) => {
@@ -1603,25 +1629,32 @@ function rtRender() {
     });
   }
 
-  // MK always on top regardless of sort
-  keywords.sort((a, b) => (b.mainKeyword ? 1 : 0) - (a.mainKeyword ? 1 : 0));
+  const hasCora   = !!(client?.coraFileName);
+  const mkKws     = keywords.filter(kw => kw.mainKeyword);
+  const otherKws  = keywords.filter(kw => !kw.mainKeyword);
+  const emptyRow  = msg => `<tr class="rt-group-empty-row"><td colspan="13" class="rt-group-empty">${escHtml(msg)}</td></tr>`;
 
-  const tbody = document.getElementById('rt-tbody');
-  tbody.innerHTML = '';
-  const hasCora = !!(client?.coraFileName);
-  keywords.forEach(kw => {
-    const tr = document.createElement('tr');
-    tr.dataset.id = kw.id;
-    const coraCell = hasCora
-      ? `<td class="rt-td-cora"><button class="rt-cora-btn" title="View Cora report: ${escHtml(client.coraFileName)}">📊</button></td>`
-      : `<td class="rt-td-cora"><span class="rt-na">—</span></td>`;
-    const savedRep = repGet(client.id, kw.keyword);
-    const repDate  = savedRep?.savedAt ? new Date(savedRep.savedAt).toLocaleDateString() : '';
-    const repTip   = savedRep ? `SEO report — saved ${repDate}` : 'No report yet';
-    const repCell  = `<td class="rt-td-rep"><button class="rt-rep-btn${savedRep ? ' rt-rep-has' : ''}"
-      data-client="${escHtml(client.id)}" data-kw="${escHtml(kw.keyword || '')}"
-      title="${escHtml(repTip)}"${savedRep ? '' : ' disabled'}>📄</button></td>`;
-    tr.innerHTML = `
+  document.getElementById('rt-tbody-mk').innerHTML = mkKws.length
+    ? mkKws.map(kw => rtRowHtml(kw, client, hasCora)).join('')
+    : emptyRow('No main keywords yet — click MK on a row below to add one');
+
+  document.getElementById('rt-tbody-all').innerHTML = otherKws.length
+    ? otherKws.map(kw => rtRowHtml(kw, client, hasCora)).join('')
+    : emptyRow('No other keywords');
+}
+
+function rtRowHtml(kw, client, hasCora) {
+  const coraCell = hasCora
+    ? `<td class="rt-td-cora"><button class="rt-cora-btn" title="View Cora report: ${escHtml(client.coraFileName)}">📊</button></td>`
+    : `<td class="rt-td-cora"><span class="rt-na">—</span></td>`;
+  const savedRep = repGet(client.id, kw.keyword);
+  const repDate  = savedRep?.savedAt ? new Date(savedRep.savedAt).toLocaleDateString() : '';
+  const repTip   = savedRep ? `SEO report — saved ${repDate}` : 'No report yet';
+  const repCell  = `<td class="rt-td-rep"><button class="rt-rep-btn${savedRep ? ' rt-rep-has' : ''}"
+    data-client="${escHtml(client.id)}" data-kw="${escHtml(kw.keyword || '')}"
+    title="${escHtml(repTip)}"${savedRep ? '' : ' disabled'}>📄</button></td>`;
+  return `
+    <tr data-id="${escHtml(kw.id)}">
       <td class="rt-td-rank">${rtRankBadge(kw.rank, kw.prevRank)}</td>
       <td class="rt-td-local">${rtLocalBadge(kw.localRank)}</td>
       <td class="rt-td-url"><a href="${escHtml(kw.url || '')}" target="_blank" rel="noopener" class="rt-url-link" title="${escHtml(kw.url || '')}">${escHtml(rtShortUrl(kw.url || ''))}</a></td>
@@ -1636,9 +1669,8 @@ function rtRender() {
       ${repCell}
       <td class="rt-td-note rt-editable" data-field="note">${escHtml(kw.note || '')}</td>
       <td class="rt-td-check">${escHtml(rtFormatDate(kw.lastCheck) || '')}</td>
-      <td class="rt-td-del"><button class="rt-del-btn" title="Delete row">✕</button></td>`;
-    tbody.appendChild(tr);
-  });
+      <td class="rt-td-del"><button class="rt-del-btn" title="Delete row">✕</button></td>
+    </tr>`;
 }
 
 function rtShortUrl(url) {
@@ -1675,6 +1707,7 @@ function showPopReport(clientId, keyword) {
   document.getElementById('rep-summary').innerHTML = rep.termsSummary || '';
   document.getElementById('rep-summary').style.display = rep.termsSummary ? 'block' : 'none';
   modal._repText     = rep.articleText || '';
+  modal._repHtml     = rep.articleHtml || '';
   modal._repClientId = clientId;
   modal._repKeyword  = keyword;
   modal.classList.add('open');
@@ -1685,12 +1718,8 @@ function closePopReport() {
 }
 
 function copyPopReport() {
-  const text = document.getElementById('popReportModal')._repText || '';
-  navigator.clipboard.writeText(text).then(() => {
-    const b = document.getElementById('rep-copyBtn');
-    const orig = b.textContent; b.textContent = 'Copied!';
-    setTimeout(() => b.textContent = orig, 1500);
-  }).catch(() => {});
+  const modal = document.getElementById('popReportModal');
+  copyRichHtml(agCopySafeHtml(modal._repHtml), modal._repText, document.getElementById('rep-copyBtn'));
 }
 
 function repDownloadDocFromModal() {
@@ -1963,8 +1992,8 @@ function rtInit() {
       document.getElementById('rt-clientName').value = opt.dataset.name || '';
   });
 
-  // Table delegation: edit + delete + Run POP
-  document.getElementById('rt-tbody').addEventListener('click', e => {
+  // Table delegation: edit + delete + Run POP (covers both Main Keywords and Keywords groups)
+  document.getElementById('rt-table').addEventListener('click', e => {
     const delBtn = e.target.closest('.rt-del-btn');
     if (delBtn) { rtDeleteRow(delBtn.closest('tr').dataset.id); return; }
 

@@ -940,6 +940,17 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
 }
 .rt-table tr:hover td { background: var(--surface-2); }
 
+/* Keyword group headers (Main Keywords / Keywords) */
+.rt-group-title {
+  padding: 10px 10px 6px; border-bottom: 1px solid var(--border);
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--text-primary); background: var(--surface);
+}
+.rt-group-sub { font-weight: 500; text-transform: none; letter-spacing: normal; color: var(--text-muted); }
+.rt-group-sep tr:hover td { background: var(--surface); }
+.rt-group-empty { padding: 12px 10px; font-size: 12px; color: var(--text-muted); font-style: italic; background: var(--surface); }
+.rt-group-empty-row:hover td { background: var(--surface); }
+
 /* Sortable headers */
 .rt-sortable { cursor: pointer; user-select: none; white-space: nowrap; }
 .rt-sortable:hover { color: var(--accent); }
