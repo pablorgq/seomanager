@@ -2406,15 +2406,18 @@ async function rtRefreshAll() {
   }
 }
 
-// Normalizes AA's "tags" field (shape varies: array of strings, array of
-// { name } objects, or a comma-separated string) into a lowercase name list.
+// Normalizes AA's "tags" field into a flat lowercase name list. AA's own
+// filter DSL represents tags as a nested array (e.g. [[""]] for "any"), so
+// the read shape may likewise be nested arrays of strings/objects/ids —
+// flatten to any depth, then extract a name from whatever's left.
 function aaTagNames(row) {
-  const raw = row.tags;
-  const list = Array.isArray(raw) ? raw
-    : typeof raw === 'string' ? raw.split(',')
-    : [];
-  return list.map(t => (typeof t === 'string' ? t : (t?.name || t?.tag || ''))
-    .trim().toLowerCase()).filter(Boolean);
+  const flatten = v => Array.isArray(v) ? v.flatMap(flatten)
+    : typeof v === 'string' ? v.split(',')
+    : [v];
+  return flatten(row.tags)
+    .map(t => (typeof t === 'string' ? t : (t?.name || t?.tag || ''))
+      .toString().trim().toLowerCase())
+    .filter(Boolean);
 }
 
 /* ── Import all starred keywords from AA campaign.
