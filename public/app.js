@@ -102,8 +102,8 @@ async function init() {
   }
   await rtInit();
   coraInit();
-  dbRender();
   await weeklyLoadFromServer();
+  dbRender();
 
   // Hide POP key field when key is configured server-side
   if (hasPop) {
@@ -1981,6 +1981,7 @@ function dbRender() {
         <span class="db-client-name">${escHtml(c.name)}</span>
         <span class="db-mk-count">${mkKws.length} MK</span>
       </div>
+      ${dbTaskChipsHtml(c)}
       ${hasScore ? `
       <div class="db-score-row">
         <div class="db-score-total">
@@ -2098,10 +2099,10 @@ const WEEKLY_DAYS = [
   { key: 'sun', label: 'Sun' },
 ];
 const WEEKLY_CATEGORIES = [
-  { key: 'supportPages', label: 'Support Pages Creation', scope: 'mk' },
-  { key: 'schemaOpt',    label: 'Schema Optimization',    scope: 'page' },
-  { key: 'contentOpt',   label: 'Content Optimization',   scope: 'page' },
-  { key: 'offPage',      label: 'Off-Page Campaign',      scope: 'mk' },
+  { key: 'supportPages', label: 'Support Pages Creation', short: 'Pages',    scope: 'mk' },
+  { key: 'schemaOpt',    label: 'Schema Optimization',    short: 'Schema',   scope: 'page' },
+  { key: 'contentOpt',   label: 'Content Optimization',   short: 'Content', scope: 'page' },
+  { key: 'offPage',      label: 'Off-Page Campaign',      short: 'Off-Page', scope: 'mk' },
 ];
 const WEEKLY_STATUSES = [
   { key: 'not_started', label: 'Not Started', cls: 'wk-status-not' },
@@ -2166,6 +2167,42 @@ function weeklyClientPages(client) {
 
 function weeklyGetStatus(clientId, category, itemKey) {
   return weeklyData?.tasks?.[clientId]?.[category]?.[itemKey] || 'not_started';
+}
+
+// { [categoryKey]: { done, total, blocked } } across all 4 categories for one client
+function weeklyClientTaskCounts(client) {
+  const counts = {};
+  for (const cat of WEEKLY_CATEGORIES) {
+    const itemKeys = cat.scope === 'mk'
+      ? (client.keywords || []).filter(k => k.mainKeyword).map(k => k.id)
+      : weeklyClientPages(client);
+    let done = 0, blocked = 0;
+    for (const itemKey of itemKeys) {
+      const status = weeklyGetStatus(client.id, cat.key, itemKey);
+      if (status === 'done') done++;
+      if (status === 'blocked') blocked++;
+    }
+    counts[cat.key] = { done, total: itemKeys.length, blocked };
+  }
+  return counts;
+}
+
+// Compact per-category task-completion chips for a Dashboard client card
+function dbTaskChipsHtml(client) {
+  if (weeklyData === null) return '';
+  const counts = weeklyClientTaskCounts(client);
+  const totalItems = WEEKLY_CATEGORIES.reduce((s, cat) => s + counts[cat.key].total, 0);
+  if (!totalItems) return '';
+
+  const chips = WEEKLY_CATEGORIES.map(cat => {
+    const { done, total, blocked } = counts[cat.key];
+    if (!total) return '';
+    const cls = blocked ? 'db-task-blocked' : done === total ? 'db-task-done' : 'db-task-partial';
+    const tip = `${cat.label}: ${done}/${total} done${blocked ? ` · ${blocked} blocked` : ''}`;
+    return `<span class="db-task-chip ${cls}" title="${escHtml(tip)}">${escHtml(cat.short)} ${done}/${total}</span>`;
+  }).join('');
+
+  return `<div class="db-tasks-row">${chips}</div>`;
 }
 
 function weeklySetStatus(clientId, category, itemKey, status) {
