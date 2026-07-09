@@ -2565,7 +2565,7 @@ async function rtImportFromAA() {
       const tagRows = await aaQuery({
         asset: 'campaign-rankings',
         operation: 'read',
-        fields: ['keyword_id', 'tags'],
+        fields: ['keyword_id', 'keyword_phrase', 'tags'],
         filters: [
           { end_date:    { '$lessthanorequal_comparison': today } },
           { start_date:  { '$greaterthanorequal_comparison': today } },
