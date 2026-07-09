@@ -4,3 +4,4 @@ node_modules/
 *.log
 .sessions.json
 .rankdata.json
+.weeklydata.json

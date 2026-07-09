@@ -62,6 +62,7 @@ const TAB_ROUTES = {
   article:   '/seo-article',
   cora:      '/cora',
   files:     '/files',
+  weekly:    '/weekly-tasks',
   brands:    '/blog-brands',
   images:    '/image-generator',
 };
@@ -75,6 +76,7 @@ function switchTab(tab, { pushState = true } = {}) {
   document.getElementById('toolsMenuBtn')?.classList.toggle('active', TOOLS_TABS.has(tab));
   if (tab === 'dashboard') dbRender();
   if (tab === 'files') filesRender();
+  if (tab === 'weekly') weeklyRender();
   if (pushState) {
     const path = TAB_ROUTES[tab];
     if (window.location.pathname !== path) history.pushState({ tab }, '', path);
@@ -101,6 +103,7 @@ async function init() {
   await rtInit();
   coraInit();
   dbRender();
+  await weeklyLoadFromServer();
 
   // Hide POP key field when key is configured server-side
   if (hasPop) {
@@ -2077,6 +2080,192 @@ function filesRender() {
     btn.addEventListener('click', () => {
       const card = btn.closest('.fl-card');
       repDownloadDoc(card.dataset.clientId, card.dataset.kw);
+    });
+  });
+}
+
+/* ═══════════════════════════════════════════════
+   WEEKLY CLIENT TASKS
+════════════════════════════════════════════════ */
+
+const WEEKLY_DAYS = [
+  { key: 'mon', label: 'Mon' },
+  { key: 'tue', label: 'Tue' },
+  { key: 'wed', label: 'Wed' },
+  { key: 'thu', label: 'Thu' },
+  { key: 'fri', label: 'Fri' },
+  { key: 'sat', label: 'Sat' },
+  { key: 'sun', label: 'Sun' },
+];
+const WEEKLY_CATEGORIES = [
+  { key: 'supportPages', label: 'Support Pages Creation', scope: 'mk' },
+  { key: 'schemaOpt',    label: 'Schema Optimization',    scope: 'page' },
+  { key: 'contentOpt',   label: 'Content Optimization',   scope: 'page' },
+  { key: 'offPage',      label: 'Off-Page Campaign',      scope: 'mk' },
+];
+const WEEKLY_STATUSES = [
+  { key: 'not_started', label: 'Not Started', cls: 'wk-status-not' },
+  { key: 'in_progress', label: 'In Progress', cls: 'wk-status-progress' },
+  { key: 'done',        label: 'Done',        cls: 'wk-status-done' },
+  { key: 'blocked',     label: 'Blocked',      cls: 'wk-status-blocked' },
+];
+
+let weeklyData        = null;  // null = still loading; { schedule, tasks } once loaded
+let weeklySelectedDay  = null;  // which day's checklist is shown; defaults to today
+
+function weeklyTodayKey() {
+  return ['sun','mon','tue','wed','thu','fri','sat'][new Date().getDay()];
+}
+
+let weeklySyncTimer = null;
+function weeklyScheduleServerSync() {
+  if (weeklySyncTimer) clearTimeout(weeklySyncTimer);
+  weeklySyncTimer = setTimeout(weeklySyncToServer, 600);
+}
+async function weeklySyncToServer() {
+  weeklySyncTimer = null;
+  try {
+    await fetch('/api/weeklydata', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(weeklyData),
+    });
+  } catch (_) {}
+}
+
+async function weeklyLoadFromServer() {
+  try {
+    const r = await fetch('/api/weeklydata');
+    if (!r.ok) throw new Error('bad response');
+    weeklyData = await r.json();
+  } catch (_) {
+    weeklyData = { schedule: { mon: null, tue: null, wed: null, thu: null, fri: null, sat: null, sun: null }, tasks: {} };
+  }
+}
+
+// Unique target pages derived from a client's Main Keywords
+function weeklyClientPages(client) {
+  const pages = new Set();
+  (client?.keywords || []).filter(k => k.mainKeyword).forEach(k => {
+    const page = (k.targetUrl || k.url || '').trim();
+    if (page) pages.add(page);
+  });
+  return [...pages];
+}
+
+function weeklyGetStatus(clientId, category, itemKey) {
+  return weeklyData?.tasks?.[clientId]?.[category]?.[itemKey] || 'not_started';
+}
+
+function weeklySetStatus(clientId, category, itemKey, status) {
+  if (!weeklyData.tasks[clientId]) weeklyData.tasks[clientId] = {};
+  if (!weeklyData.tasks[clientId][category]) weeklyData.tasks[clientId][category] = {};
+  weeklyData.tasks[clientId][category][itemKey] = status;
+  weeklyScheduleServerSync();
+}
+
+function weeklySetDayClient(day, clientId) {
+  weeklyData.schedule[day] = clientId || null;
+  weeklyScheduleServerSync();
+  weeklyRender();
+}
+
+function weeklyStatusSelectHtml(clientId, category, itemKey) {
+  const status = weeklyGetStatus(clientId, category, itemKey);
+  const meta = WEEKLY_STATUSES.find(s => s.key === status) || WEEKLY_STATUSES[0];
+  const options = WEEKLY_STATUSES.map(s =>
+    `<option value="${s.key}"${s.key === status ? ' selected' : ''}>${s.label}</option>`
+  ).join('');
+  return `<select class="wk-status-select ${meta.cls}" data-client="${escHtml(clientId)}" data-category="${category}" data-item="${escHtml(itemKey)}">${options}</select>`;
+}
+
+function weeklyCategorySectionHtml(client, category) {
+  const items = category.scope === 'mk'
+    ? (client.keywords || []).filter(k => k.mainKeyword).map(k => ({ key: k.id, label: k.keyword || '(blank)' }))
+    : weeklyClientPages(client).map(page => ({ key: page, label: page }));
+
+  if (!items.length) {
+    const emptyMsg = category.scope === 'mk'
+      ? 'No Main Keywords set for this client'
+      : "No target pages set on this client's Main Keywords";
+    return `<div class="wk-category">
+      <div class="wk-category-title">${escHtml(category.label)}</div>
+      <div class="wk-category-empty">${escHtml(emptyMsg)}</div>
+    </div>`;
+  }
+
+  const rows = items.map(item => `
+    <div class="wk-item-row">
+      <span class="wk-item-label" title="${escHtml(item.label)}">${escHtml(item.label)}</span>
+      ${weeklyStatusSelectHtml(client.id, category.key, item.key)}
+    </div>`).join('');
+
+  return `<div class="wk-category">
+    <div class="wk-category-title">${escHtml(category.label)} <span class="wk-category-count">(${items.length})</span></div>
+    <div class="wk-item-list">${rows}</div>
+  </div>`;
+}
+
+function weeklyRender() {
+  const strip = document.getElementById('wk-scheduleStrip');
+  const body  = document.getElementById('wk-dayBody');
+  if (!strip || !body) return;
+
+  if (weeklyData === null) {
+    body.innerHTML = '<div class="db-empty">Loading…</div>';
+    return;
+  }
+  if (!weeklySelectedDay) weeklySelectedDay = weeklyTodayKey();
+
+  const clients  = rtData?.clients ?? [];
+  const todayKey = weeklyTodayKey();
+
+  strip.innerHTML = WEEKLY_DAYS.map(d => {
+    const clientId   = weeklyData.schedule[d.key];
+    const isToday    = d.key === todayKey;
+    const isSelected = d.key === weeklySelectedDay;
+    return `<div class="wk-day-card${isSelected ? ' wk-day-selected' : ''}${isToday ? ' wk-day-today' : ''}" data-day="${d.key}">
+      <div class="wk-day-label">${d.label}${isToday ? ' <span class="wk-today-dot">•</span>' : ''}</div>
+      <select class="wk-day-client-select" data-day="${d.key}">
+        <option value="">— none —</option>
+        ${clients.map(c => `<option value="${escHtml(c.id)}"${c.id === clientId ? ' selected' : ''}>${escHtml(c.name)}</option>`).join('')}
+      </select>
+    </div>`;
+  }).join('');
+
+  const selDay      = WEEKLY_DAYS.find(d => d.key === weeklySelectedDay);
+  const selClientId = weeklyData.schedule[weeklySelectedDay];
+  const selClient   = clients.find(c => c.id === selClientId);
+
+  body.innerHTML = !selClient
+    ? `<div class="db-empty">No client assigned to ${escHtml(selDay?.label || weeklySelectedDay)} yet — pick one above.</div>`
+    : `<div class="wk-day-header">
+        <span class="wk-day-header-day">${escHtml(selDay?.label || '')}</span>
+        <span class="wk-day-header-client">${escHtml(selClient.name)}</span>
+      </div>
+      <div class="wk-categories">
+        ${WEEKLY_CATEGORIES.map(cat => weeklyCategorySectionHtml(selClient, cat)).join('')}
+      </div>`;
+
+  strip.querySelectorAll('.wk-day-card').forEach(card => {
+    card.addEventListener('click', e => {
+      if (e.target.closest('select')) return;
+      weeklySelectedDay = card.dataset.day;
+      weeklyRender();
+    });
+  });
+  strip.querySelectorAll('.wk-day-client-select').forEach(sel => {
+    sel.addEventListener('click', e => e.stopPropagation());
+    sel.addEventListener('change', e => {
+      e.stopPropagation();
+      weeklySetDayClient(sel.dataset.day, sel.value);
+    });
+  });
+  body.querySelectorAll('.wk-status-select').forEach(sel => {
+    sel.addEventListener('change', e => {
+      weeklySetStatus(sel.dataset.client, sel.dataset.category, sel.dataset.item, sel.value);
+      const meta = WEEKLY_STATUSES.find(s => s.key === sel.value);
+      sel.className = 'wk-status-select ' + (meta?.cls || '');
     });
   });
 }

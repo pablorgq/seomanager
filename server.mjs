@@ -115,6 +115,38 @@ function saveRankData(data) {
   }
 }
 
+/* ─────────────────────────────────────────────
+   WEEKLY CLIENT TASKS  (day-of-week → client
+   schedule + per-client recurring task checklist)
+───────────────────────────────────────────── */
+const WEEKLYDATA_FILE = join(__dirname, '.weeklydata.json');
+const WEEKLYDATA_DEFAULT = {
+  schedule: { mon: null, tue: null, wed: null, thu: null, fri: null, sat: null, sun: null },
+  tasks: {},
+};
+
+function loadWeeklyData() {
+  if (!existsSync(WEEKLYDATA_FILE)) return { ...WEEKLYDATA_DEFAULT };
+  try {
+    const raw = JSON.parse(readFileSync(WEEKLYDATA_FILE, 'utf8'));
+    return {
+      schedule: { ...WEEKLYDATA_DEFAULT.schedule, ...(raw.schedule || {}) },
+      tasks:    raw.tasks || {},
+    };
+  } catch (e) {
+    console.warn('[weeklydata] Failed to load weekly data store:', e.message);
+    return { ...WEEKLYDATA_DEFAULT };
+  }
+}
+
+function saveWeeklyData(data) {
+  try {
+    writeFileSync(WEEKLYDATA_FILE, JSON.stringify(data));
+  } catch (e) {
+    console.warn('[weeklydata] Failed to persist weekly data store:', e.message);
+  }
+}
+
 function createSession() {
   const token = randomBytes(32).toString('hex');
   sessions.set(token, { expiresAt: Date.now() + SESSION_TTL });
@@ -442,6 +474,19 @@ app.post('/api/rankdata', apiGuard, (req, res) => {
     return res.status(400).json({ error: { message: 'Missing rtData in request body.' } });
   }
   saveRankData({ rtData, reports: (reports && typeof reports === 'object') ? reports : {} });
+  res.json({ ok: true });
+});
+
+app.get('/api/weeklydata', apiGuard, (req, res) => {
+  res.json(loadWeeklyData());
+});
+
+app.post('/api/weeklydata', apiGuard, (req, res) => {
+  const { schedule, tasks } = req.body || {};
+  if (!schedule || typeof schedule !== 'object') {
+    return res.status(400).json({ error: { message: 'Missing schedule in request body.' } });
+  }
+  saveWeeklyData({ schedule, tasks: (tasks && typeof tasks === 'object') ? tasks : {} });
   res.json({ ok: true });
 });
 
