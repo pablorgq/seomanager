@@ -55,6 +55,36 @@ let hasPop  = false;
 let generatedBlogs = [];
 let igImages = [];
 
+/* ── ROUTER ── */
+const TAB_ROUTES = {
+  dashboard: '/',
+  ranks:     '/rank-tracker',
+  article:   '/seo-article',
+  cora:      '/cora',
+  files:     '/files',
+  brands:    '/blog-brands',
+  images:    '/image-generator',
+};
+const ROUTE_TABS  = Object.fromEntries(Object.entries(TAB_ROUTES).map(([tab, path]) => [path, tab]));
+const TOOLS_TABS  = new Set(['brands', 'images']);
+
+function switchTab(tab, { pushState = true } = {}) {
+  if (!TAB_ROUTES[tab]) tab = 'dashboard';
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + tab));
+  document.getElementById('toolsMenuBtn')?.classList.toggle('active', TOOLS_TABS.has(tab));
+  if (tab === 'dashboard') dbRender();
+  if (tab === 'files') filesRender();
+  if (pushState) {
+    const path = TAB_ROUTES[tab];
+    if (window.location.pathname !== path) history.pushState({ tab }, '', path);
+  }
+}
+
+window.addEventListener('popstate', () => {
+  switchTab(ROUTE_TABS[window.location.pathname] || 'dashboard', { pushState: false });
+});
+
 /* ── INIT ── */
 async function init() {
   const cfg = await fetch('/api/config').then(r => r.json()).catch(() => ({}));
@@ -86,6 +116,9 @@ async function init() {
     if (el) el.value = popKey;
   }
   bindEvents();
+
+  // Show whichever tab the URL points to (deep link / refresh / back-forward)
+  switchTab(ROUTE_TABS[window.location.pathname] || 'dashboard', { pushState: false });
 }
 
 /* ── EVENTS ── */
@@ -114,7 +147,6 @@ function bindEvents() {
   // Tools dropdown
   const toolsBtn  = document.getElementById('toolsMenuBtn');
   const toolsDrop = document.getElementById('toolsDropdown');
-  const TOOLS_TABS = new Set(['brands', 'images']);
   toolsBtn.addEventListener('click', e => {
     e.stopPropagation();
     toolsDrop.classList.toggle('open');
@@ -124,16 +156,7 @@ function bindEvents() {
 
   // Tabs
   document.querySelectorAll('.tab-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const tab = btn.dataset.tab;
-      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-      btn.classList.add('active');
-      document.getElementById('tab-' + tab).classList.add('active');
-      toolsBtn.classList.toggle('active', TOOLS_TABS.has(tab));
-      if (tab === 'dashboard') dbRender();
-      if (tab === 'files') filesRender();
-    });
+    btn.addEventListener('click', () => switchTab(btn.dataset.tab));
   });
 
   // Generate blogs
@@ -1992,11 +2015,7 @@ function dbRender() {
       const id = card.dataset.clientId;
       rtData.activeClientId = id;
       localStorage.setItem(RT_KEY, JSON.stringify(rtData));
-      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-      document.querySelector('.tab-btn[data-tab="ranks"]').classList.add('active');
-      document.getElementById('tab-ranks').classList.add('active');
-      document.getElementById('toolsMenuBtn')?.classList.remove('active');
+      switchTab('ranks');
       rtRender();
     });
   });
@@ -2136,11 +2155,7 @@ async function rtInit() {
       // Pre-fill generator fields and switch to article tab
       document.getElementById('ag-keyword').value   = kw;
       document.getElementById('ag-targetUrl').value = url;
-      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-      document.querySelector('.tab-btn[data-tab="article"]').classList.add('active');
-      document.getElementById('tab-article').classList.add('active');
-      document.getElementById('toolsMenuBtn')?.classList.remove('active');
+      switchTab('article');
       ['ag-keyword','ag-targetUrl'].forEach(id => {
         const el = document.getElementById(id);
         el.classList.add('ag-prefill-flash');
@@ -2704,7 +2719,7 @@ function coraRenderTargetSelect() {
 // parsed Cora data isn't persisted, only the filename/domain tag is.
 function coraOpenForKeyword(kw, forceUpload) {
   coraTargetKwId = kw.id;
-  document.querySelector('.tab-btn[data-tab="cora"]')?.click();
+  switchTab('cora');
 
   const alreadyLoaded = !forceUpload && coraReport && kw.coraFileName && coraReport.fileName === kw.coraFileName;
   if (alreadyLoaded) {
