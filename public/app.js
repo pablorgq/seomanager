@@ -2582,14 +2582,22 @@ async function rtImportFromAA() {
       console.warn('[AA import] campaign-rankings tags lookup failed, falling back to keyword asset only:', e.message);
     }
 
+    console.log('[AA import] starredRows ids:', starredRows.map(r => r.id),
+      '| tagsByKwId keys:', Object.keys(tagsByKwId));
+
     const existingByPhrase = new Map(c.keywords.map(k => [(k.keyword || '').toLowerCase(), k]));
     let added = 0, markedMk = 0, skipped = 0;
     for (const row of starredRows) {
       const phrase = (row.keyword_phrase || '').trim();
       if (!phrase) continue;
       const key    = phrase.toLowerCase();
-      const wantMk = aaTagNames(row).includes('sm')
-        || aaTagNames({ tags: tagsByKwId[row.id] }).includes('sm');
+      const fromKwAsset = aaTagNames(row);
+      const fromRankings = aaTagNames({ tags: tagsByKwId[row.id] });
+      const wantMk = fromKwAsset.includes('sm') || fromRankings.includes('sm');
+      if (fromKwAsset.length || fromRankings.length) {
+        console.log('[AA import] row', row.id, phrase, '| keyword-asset tags:', fromKwAsset,
+          '| campaign-rankings tags:', fromRankings, '| wantMk:', wantMk);
+      }
 
       const existingKw = existingByPhrase.get(key);
       if (existingKw) {
