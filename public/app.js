@@ -2521,7 +2521,7 @@ function aaTagNames(row) {
     : typeof v === 'string' ? v.split(',')
     : [v];
   return flatten(row.tags)
-    .map(t => (typeof t === 'string' ? t : (t?.name || t?.tag || ''))
+    .map(t => (typeof t === 'string' ? t : (t?.label || t?.name || t?.tag || ''))
       .toString().trim().toLowerCase())
     .filter(Boolean);
 }
