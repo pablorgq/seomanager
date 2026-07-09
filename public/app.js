@@ -2133,13 +2133,24 @@ async function weeklySyncToServer() {
   } catch (_) {}
 }
 
+function weeklyDefaultData() {
+  return { schedule: { mon: [], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] }, tasks: {} };
+}
+
 async function weeklyLoadFromServer() {
   try {
     const r = await fetch('/api/weeklydata');
     if (!r.ok) throw new Error('bad response');
-    weeklyData = await r.json();
+    const server = await r.json();
+    // Normalize in case old single-clientId-per-day data is still around
+    const schedule = {};
+    for (const d of WEEKLY_DAYS) {
+      const v = server.schedule?.[d.key];
+      schedule[d.key] = Array.isArray(v) ? v : (v ? [v] : []);
+    }
+    weeklyData = { schedule, tasks: server.tasks || {} };
   } catch (_) {
-    weeklyData = { schedule: { mon: null, tue: null, wed: null, thu: null, fri: null, sat: null, sun: null }, tasks: {} };
+    weeklyData = weeklyDefaultData();
   }
 }
 
@@ -2164,8 +2175,15 @@ function weeklySetStatus(clientId, category, itemKey, status) {
   weeklyScheduleServerSync();
 }
 
-function weeklySetDayClient(day, clientId) {
-  weeklyData.schedule[day] = clientId || null;
+function weeklyAddDayClient(day, clientId) {
+  if (!clientId) return;
+  if (!weeklyData.schedule[day].includes(clientId)) weeklyData.schedule[day].push(clientId);
+  weeklyScheduleServerSync();
+  weeklyRender();
+}
+
+function weeklyRemoveDayClient(day, clientId) {
+  weeklyData.schedule[day] = weeklyData.schedule[day].filter(id => id !== clientId);
   weeklyScheduleServerSync();
   weeklyRender();
 }
@@ -2221,44 +2239,61 @@ function weeklyRender() {
   const todayKey = weeklyTodayKey();
 
   strip.innerHTML = WEEKLY_DAYS.map(d => {
-    const clientId   = weeklyData.schedule[d.key];
-    const isToday    = d.key === todayKey;
-    const isSelected = d.key === weeklySelectedDay;
+    const dayClientIds = weeklyData.schedule[d.key] || [];
+    const dayClients   = dayClientIds.map(id => clients.find(c => c.id === id)).filter(Boolean);
+    const unassigned   = clients.filter(c => !dayClientIds.includes(c.id));
+    const isToday      = d.key === todayKey;
+    const isSelected   = d.key === weeklySelectedDay;
+
+    const chips = dayClients.map(c => `
+      <span class="wk-day-chip">${escHtml(c.name)}<button class="wk-chip-remove" data-day="${d.key}" data-client="${escHtml(c.id)}" title="Remove">×</button></span>
+    `).join('');
+
     return `<div class="wk-day-card${isSelected ? ' wk-day-selected' : ''}${isToday ? ' wk-day-today' : ''}" data-day="${d.key}">
       <div class="wk-day-label">${d.label}${isToday ? ' <span class="wk-today-dot">•</span>' : ''}</div>
-      <select class="wk-day-client-select" data-day="${d.key}">
-        <option value="">— none —</option>
-        ${clients.map(c => `<option value="${escHtml(c.id)}"${c.id === clientId ? ' selected' : ''}>${escHtml(c.name)}</option>`).join('')}
+      <div class="wk-day-chips">${chips}</div>
+      <select class="wk-day-add-select" data-day="${d.key}">
+        <option value="">+ add client</option>
+        ${unassigned.map(c => `<option value="${escHtml(c.id)}">${escHtml(c.name)}</option>`).join('')}
       </select>
     </div>`;
   }).join('');
 
-  const selDay      = WEEKLY_DAYS.find(d => d.key === weeklySelectedDay);
-  const selClientId = weeklyData.schedule[weeklySelectedDay];
-  const selClient   = clients.find(c => c.id === selClientId);
+  const selDay        = WEEKLY_DAYS.find(d => d.key === weeklySelectedDay);
+  const selClientIds  = weeklyData.schedule[weeklySelectedDay] || [];
+  const selClients    = selClientIds.map(id => clients.find(c => c.id === id)).filter(Boolean);
 
-  body.innerHTML = !selClient
+  body.innerHTML = !selClients.length
     ? `<div class="db-empty">No client assigned to ${escHtml(selDay?.label || weeklySelectedDay)} yet — pick one above.</div>`
-    : `<div class="wk-day-header">
-        <span class="wk-day-header-day">${escHtml(selDay?.label || '')}</span>
-        <span class="wk-day-header-client">${escHtml(selClient.name)}</span>
-      </div>
-      <div class="wk-categories">
-        ${WEEKLY_CATEGORIES.map(cat => weeklyCategorySectionHtml(selClient, cat)).join('')}
-      </div>`;
+    : selClients.map(client => `
+        <div class="wk-client-block">
+          <div class="wk-day-header">
+            <span class="wk-day-header-day">${escHtml(selDay?.label || '')}</span>
+            <span class="wk-day-header-client">${escHtml(client.name)}</span>
+          </div>
+          <div class="wk-categories">
+            ${WEEKLY_CATEGORIES.map(cat => weeklyCategorySectionHtml(client, cat)).join('')}
+          </div>
+        </div>`).join('');
 
   strip.querySelectorAll('.wk-day-card').forEach(card => {
     card.addEventListener('click', e => {
-      if (e.target.closest('select')) return;
+      if (e.target.closest('select, button')) return;
       weeklySelectedDay = card.dataset.day;
       weeklyRender();
     });
   });
-  strip.querySelectorAll('.wk-day-client-select').forEach(sel => {
+  strip.querySelectorAll('.wk-day-add-select').forEach(sel => {
     sel.addEventListener('click', e => e.stopPropagation());
     sel.addEventListener('change', e => {
       e.stopPropagation();
-      weeklySetDayClient(sel.dataset.day, sel.value);
+      weeklyAddDayClient(sel.dataset.day, sel.value);
+    });
+  });
+  strip.querySelectorAll('.wk-chip-remove').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      weeklyRemoveDayClient(btn.dataset.day, btn.dataset.client);
     });
   });
   body.querySelectorAll('.wk-status-select').forEach(sel => {

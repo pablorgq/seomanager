@@ -930,9 +930,23 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
   font-size: 11px; font-weight: 700; text-transform: uppercase;
   letter-spacing: .06em; color: var(--text-muted); margin-bottom: 8px;
 }
-.wk-day-client-select { width: 100%; font-size: 12px; }
+.wk-day-chips { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; min-height: 4px; }
+.wk-day-chip {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  background: var(--accent-dim); color: var(--accent); font-size: 11px; font-weight: 600;
+  border-radius: 6px; padding: 3px 6px 3px 8px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.wk-chip-remove {
+  background: none; border: none; cursor: pointer; color: inherit; opacity: .6;
+  font-size: 13px; line-height: 1; padding: 0 2px; flex-shrink: 0;
+}
+.wk-chip-remove:hover { opacity: 1; }
+.wk-day-add-select { width: 100%; font-size: 11px; padding: 3px 6px; }
 
 .wk-day-body { min-height: 120px; }
+.wk-client-block { margin-bottom: 28px; }
+.wk-client-block:last-child { margin-bottom: 0; }
 .wk-day-header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 18px; }
 .wk-day-header-day { font-size: 13px; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: .06em; }
 .wk-day-header-client { font-size: 20px; font-weight: 800; font-family: 'Inter', sans-serif; letter-spacing: -.3px; color: var(--text-primary); }

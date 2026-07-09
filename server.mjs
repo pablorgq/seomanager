@@ -121,7 +121,7 @@ function saveRankData(data) {
 ───────────────────────────────────────────── */
 const WEEKLYDATA_FILE = join(__dirname, '.weeklydata.json');
 const WEEKLYDATA_DEFAULT = {
-  schedule: { mon: null, tue: null, wed: null, thu: null, fri: null, sat: null, sun: null },
+  schedule: { mon: [], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] },
   tasks: {},
 };
 
