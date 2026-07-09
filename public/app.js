@@ -1729,24 +1729,23 @@ function rtRender() {
     });
   }
 
-  const hasCora   = !!(client?.coraFileName);
   const mkKws     = keywords.filter(kw => kw.mainKeyword);
   const otherKws  = keywords.filter(kw => !kw.mainKeyword);
   const emptyRow  = msg => `<tr class="rt-group-empty-row"><td colspan="13" class="rt-group-empty">${escHtml(msg)}</td></tr>`;
 
   document.getElementById('rt-tbody-mk').innerHTML = mkKws.length
-    ? mkKws.map(kw => rtRowHtml(kw, client, hasCora)).join('')
+    ? mkKws.map(kw => rtRowHtml(kw, client)).join('')
     : emptyRow('No main keywords yet — click MK on a row below to add one');
 
   document.getElementById('rt-tbody-all').innerHTML = otherKws.length
-    ? otherKws.map(kw => rtRowHtml(kw, client, hasCora)).join('')
+    ? otherKws.map(kw => rtRowHtml(kw, client)).join('')
     : emptyRow('No other keywords');
 }
 
-function rtRowHtml(kw, client, hasCora) {
-  const coraCell = hasCora
-    ? `<td class="rt-td-cora"><button class="rt-cora-btn" title="View Cora report: ${escHtml(client.coraFileName)}">📊</button></td>`
-    : `<td class="rt-td-cora"><span class="rt-na">—</span></td>`;
+function rtRowHtml(kw, client) {
+  const coraCell = kw.coraFileName
+    ? `<td class="rt-td-cora"><button class="rt-cora-btn" data-id="${escHtml(kw.id)}" title="View Cora report: ${escHtml(kw.coraFileName)}">📊</button></td>`
+    : `<td class="rt-td-cora"><button class="rt-run-cora-btn" data-id="${escHtml(kw.id)}" title="Run Cora analysis for this keyword">▶</button></td>`;
   const savedRep = repGet(client.id, kw.keyword);
   const repDate  = savedRep?.savedAt ? new Date(savedRep.savedAt).toLocaleDateString() : '';
   const repTip   = savedRep ? `SEO report — saved ${repDate}` : 'No report yet';
@@ -2112,7 +2111,15 @@ async function rtInit() {
 
     const coraBtn = e.target.closest('.rt-cora-btn');
     if (coraBtn) {
-      document.querySelector('.tab-btn[data-tab="cora"]')?.click();
+      const kw = rtActiveClient()?.keywords?.find(k => k.id === coraBtn.dataset.id);
+      if (kw) coraOpenForKeyword(kw, false);
+      return;
+    }
+
+    const runCoraBtn = e.target.closest('.rt-run-cora-btn');
+    if (runCoraBtn) {
+      const kw = rtActiveClient()?.keywords?.find(k => k.id === runCoraBtn.dataset.id);
+      if (kw) coraOpenForKeyword(kw, true);
       return;
     }
 
@@ -2655,6 +2662,57 @@ document.addEventListener('keydown', e => {
 let coraReport       = null;
 let coraFilters      = { effort: 'all', corr: 'all' };
 let coraGroupByPhase = false;
+let coraTargetKwId   = null;   // which keyword an upload/report is associated with
+
+// Injects a "which keyword is this for" picker into the upload zone, since
+// Cora reports are now associated per-keyword instead of per-client.
+function coraRenderTargetSelect() {
+  const upload = document.getElementById('cora-upload');
+  const inner  = upload?.querySelector('.cora-upload-inner');
+  if (!inner) return;
+
+  const existing = document.getElementById('cora-targetKwWrap');
+  if (existing) existing.remove();
+
+  const client = rtActiveClient();
+  if (!client || !client.keywords?.length) return;
+
+  const wrap = document.createElement('div');
+  wrap.id = 'cora-targetKwWrap';
+  wrap.className = 'form-group';
+  wrap.style.cssText = 'max-width:340px;margin:0 auto 14px;text-align:left';
+  wrap.innerHTML = `
+    <label class="form-label">Associate with keyword</label>
+    <select id="cora-targetKeyword" class="form-select">
+      ${client.keywords.map(k =>
+        `<option value="${escHtml(k.id)}"${k.id === coraTargetKwId ? ' selected' : ''}>${escHtml(k.keyword || '(blank)')}</option>`
+      ).join('')}
+    </select>`;
+
+  const fileInput = inner.querySelector('input[type=file]');
+  inner.insertBefore(wrap, fileInput || inner.firstChild);
+
+  document.getElementById('cora-targetKeyword').addEventListener('change', e => {
+    coraTargetKwId = e.target.value;
+  });
+
+  if (!coraTargetKwId) coraTargetKwId = client.keywords[0].id;
+}
+
+// Opens the Cora tab scoped to one keyword — shows its report if it's
+// already the one loaded in memory, otherwise prompts a (re-)upload since
+// parsed Cora data isn't persisted, only the filename/domain tag is.
+function coraOpenForKeyword(kw, forceUpload) {
+  coraTargetKwId = kw.id;
+  document.querySelector('.tab-btn[data-tab="cora"]')?.click();
+
+  const alreadyLoaded = !forceUpload && coraReport && kw.coraFileName && coraReport.fileName === kw.coraFileName;
+  if (alreadyLoaded) {
+    coraRender();
+  } else {
+    coraReset();
+  }
+}
 
 /* ── Cora folder watcher ── */
 let coraWatchHandle = null;
@@ -3123,6 +3181,8 @@ async function coraLoadXLSX() {
 
 async function coraHandleFile(file) {
   const upload = document.getElementById('cora-upload');
+  // Capture the chosen target keyword before the upload zone gets wiped by the spinner
+  const targetKwId = document.getElementById('cora-targetKeyword')?.value || coraTargetKwId;
   upload.innerHTML = '<div style="text-align:center;padding:60px;color:var(--text-muted);font-size:15px">⏳ Parsing report…</div>';
   try {
     await coraLoadXLSX();
@@ -3144,35 +3204,34 @@ async function coraHandleFile(file) {
       lsiCritSpearman: lsiResult.spearmanCrit,
       lsiCritPearson:  lsiResult.pearsonCrit,
     };
-    // Validate domain matches active RT client, then tag it
+    // Validate domain matches the target keyword's URL, then tag it onto that keyword
     const rtClient = rtActiveClient();
-    if (rtClient) {
+    const targetKw = rtClient?.keywords?.find(k => k.id === targetKwId);
+    if (targetKw) {
       const normalize = d => String(d || '').toLowerCase().replace(/^www\./, '').replace(/\/.*$/, '').trim();
       const coraDomain = normalize(coraReport.meta?.domain);
 
       if (coraDomain) {
-        // Collect unique domains from all client keyword URLs
-        const clientDomains = new Set();
-        (rtClient.keywords || []).forEach(kw => {
-          [kw.url, kw.targetUrl].forEach(u => {
-            try { clientDomains.add(normalize(new URL(u).hostname)); } catch {}
-          });
+        const kwDomains = new Set();
+        [targetKw.url, targetKw.targetUrl].forEach(u => {
+          try { kwDomains.add(normalize(new URL(u).hostname)); } catch {}
         });
 
-        const matched = clientDomains.size === 0
-          || [...clientDomains].some(d => d === coraDomain || d.includes(coraDomain) || coraDomain.includes(d));
+        const matched = kwDomains.size === 0
+          || [...kwDomains].some(d => d === coraDomain || d.includes(coraDomain) || coraDomain.includes(d));
 
         if (!matched) {
-          const clientList = [...clientDomains].join(', ') || '(no URLs set on this client)';
+          const kwList = [...kwDomains].join(', ') || '(no URL set on this keyword)';
           const proceed = confirm(
-            `⚠️ Domain mismatch\n\nThis Cora report is for:  ${coraDomain}\nCurrent client URLs:       ${clientList}\n\nAssociate this report with "${rtClient.name}" anyway?`
+            `⚠️ Domain mismatch\n\nThis Cora report is for:  ${coraDomain}\nKeyword URL:              ${kwList}\n\nAssociate this report with "${targetKw.keyword}" anyway?`
           );
           if (!proceed) return;
         }
       }
 
-      rtClient.coraFileName = file.name;
-      rtClient.coraDomain   = coraDomain;
+      coraTargetKwId       = targetKw.id;
+      targetKw.coraFileName = file.name;
+      targetKw.coraDomain   = coraDomain;
       rtSave();
       rtRender();
     }
@@ -3590,6 +3649,8 @@ function coraBindUpload() {
     const f = e.dataTransfer.files[0];
     if (f) coraHandleFile(f);
   });
+
+  coraRenderTargetSelect();
 }
 
 function coraInit() {
