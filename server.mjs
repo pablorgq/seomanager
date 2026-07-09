@@ -85,6 +85,36 @@ function saveSessions() {
 
 loadSessions();
 
+/* ─────────────────────────────────────────────
+   RANK TRACKER DATA  (clients/keywords + saved SEO
+   reports — persisted server-side so it survives
+   browser/device switches, not just localStorage)
+───────────────────────────────────────────── */
+const RANKDATA_FILE = join(__dirname, '.rankdata.json');
+const RANKDATA_DEFAULT = { rtData: { clients: [], activeClientId: null }, reports: {} };
+
+function loadRankData() {
+  if (!existsSync(RANKDATA_FILE)) return { ...RANKDATA_DEFAULT };
+  try {
+    const raw = JSON.parse(readFileSync(RANKDATA_FILE, 'utf8'));
+    return {
+      rtData:  raw.rtData  || RANKDATA_DEFAULT.rtData,
+      reports: raw.reports || {},
+    };
+  } catch (e) {
+    console.warn('[rankdata] Failed to load rank data store:', e.message);
+    return { ...RANKDATA_DEFAULT };
+  }
+}
+
+function saveRankData(data) {
+  try {
+    writeFileSync(RANKDATA_FILE, JSON.stringify(data));
+  } catch (e) {
+    console.warn('[rankdata] Failed to persist rank data store:', e.message);
+  }
+}
+
 function createSession() {
   const token = randomBytes(32).toString('hex');
   sessions.set(token, { expiresAt: Date.now() + SESSION_TTL });
@@ -396,6 +426,24 @@ app.get('/api/config', (req, res) => res.json({
   hasAA:        !!AA_KEY,
   hasPop:       !!POP_KEY,
 }));
+
+/* ─────────────────────────────────────────────
+   RANK TRACKER DATA API
+   Full-replace GET/POST, mirroring localStorage.setItem
+   semantics — client sends the whole object each save.
+───────────────────────────────────────────── */
+app.get('/api/rankdata', apiGuard, (req, res) => {
+  res.json(loadRankData());
+});
+
+app.post('/api/rankdata', apiGuard, (req, res) => {
+  const { rtData, reports } = req.body || {};
+  if (!rtData || typeof rtData !== 'object') {
+    return res.status(400).json({ error: { message: 'Missing rtData in request body.' } });
+  }
+  saveRankData({ rtData, reports: (reports && typeof reports === 'object') ? reports : {} });
+  res.json({ ok: true });
+});
 
 /* ─────────────────────────────────────────────
    PAGE OPTIMIZER PRO PROXY

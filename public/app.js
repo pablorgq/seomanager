@@ -68,7 +68,7 @@ async function init() {
     apiKey = await Store.get('seomanager_api_key');
     if (apiKey) document.getElementById('apiKeyInput').value = apiKey;
   }
-  rtInit();
+  await rtInit();
   coraInit();
   dbRender();
 
@@ -1563,42 +1563,103 @@ const REP_PFX = 'pop_report::';
 function repKey(clientId, keyword) {
   return REP_PFX + (clientId || 'global') + '::' + (keyword || '').toLowerCase().trim();
 }
+
+// In-memory cache of saved SEO reports, keyed by repKey(). Source of truth
+// once loaded from the server; localStorage is kept as an instant local
+// mirror so reads never block on the network.
+let reportsCache = {};
+
 function repSave(data) {
-  try { localStorage.setItem(repKey(data.clientId, data.keyword), JSON.stringify(data)); } catch(_) {}
+  const key = repKey(data.clientId, data.keyword);
+  reportsCache[key] = data;
+  try { localStorage.setItem(key, JSON.stringify(data)); } catch(_) {}
+  rtScheduleServerSync();
 }
 function repGet(clientId, keyword) {
-  try { return JSON.parse(localStorage.getItem(repKey(clientId, keyword)) || 'null'); } catch(_) { return null; }
+  return reportsCache[repKey(clientId, keyword)] || null;
 }
 function repListAll() {
-  const out = [];
+  return Object.values(reportsCache)
+    .sort((a, b) => new Date(b.savedAt || 0) - new Date(a.savedAt || 0));
+}
+function repListAllLocal() {
+  const out = {};
   for (let i = 0; i < localStorage.length; i++) {
     const k = localStorage.key(i);
     if (!k || !k.startsWith(REP_PFX)) continue;
     try {
       const rep = JSON.parse(localStorage.getItem(k));
-      if (rep) out.push(rep);
+      if (rep) out[k] = rep;
     } catch(_) {}
   }
-  out.sort((a, b) => new Date(b.savedAt || 0) - new Date(a.savedAt || 0));
   return out;
 }
 
-let rtData   = { clients: [], activeClientId: null };
+// null = still loading from the server; { clients: [], activeClientId: null } = confirmed empty
+let rtData   = null;
 let rtSort   = { col: null, dir: 'asc' };
 let hasAA    = false;
 
 /* ── persistence ── */
-function rtLoad() {
+function rtLoadLocal() {
   try { return JSON.parse(localStorage.getItem(RT_KEY)) || { clients: [], activeClientId: null }; }
   catch { return { clients: [], activeClientId: null }; }
 }
-function rtSave() { localStorage.setItem(RT_KEY, JSON.stringify(rtData)); dbRender(); }
+
+let rtSyncTimer = null;
+function rtScheduleServerSync() {
+  if (rtSyncTimer) clearTimeout(rtSyncTimer);
+  rtSyncTimer = setTimeout(rtSyncToServer, 600);
+}
+async function rtSyncToServer() {
+  rtSyncTimer = null;
+  try {
+    await fetch('/api/rankdata', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rtData, reports: reportsCache }),
+    });
+  } catch (_) {}
+}
+
+// Loads from the server; falls back to (and migrates up) local data if the
+// server has nothing yet, or falls back entirely if the server is unreachable.
+async function rtLoadFromServer() {
+  try {
+    const r = await fetch('/api/rankdata');
+    if (!r.ok) throw new Error('bad response');
+    const server = await r.json();
+    if (server?.rtData?.clients?.length > 0) {
+      rtData = server.rtData;
+      reportsCache = server.reports || {};
+      return;
+    }
+    const local = rtLoadLocal();
+    if (local.clients?.length > 0) {
+      rtData = local;
+      reportsCache = repListAllLocal();
+      rtScheduleServerSync(); // one-time push of pre-existing local data
+      return;
+    }
+    rtData = server.rtData || { clients: [], activeClientId: null };
+    reportsCache = server.reports || {};
+  } catch (_) {
+    rtData = rtLoadLocal();
+    reportsCache = repListAllLocal();
+  }
+}
+
+function rtSave() {
+  try { localStorage.setItem(RT_KEY, JSON.stringify(rtData)); } catch(_) {}
+  dbRender();
+  rtScheduleServerSync();
+}
 
 /* ── helpers ── */
 function rtUid() { return '_' + Math.random().toString(36).slice(2, 10); }
 
 function rtActiveClient() {
-  return rtData.clients.find(c => c.id === rtData.activeClientId) || null;
+  return rtData?.clients?.find(c => c.id === rtData.activeClientId) || null;
 }
 
 function rtRankBadge(rank, prev) {
@@ -1621,6 +1682,8 @@ function rtFormatDate(iso) {
 
 /* ── render ── */
 function rtRender() {
+  if (rtData === null) return; // still loading from the server
+
   const client = rtActiveClient();
 
   // Update client selector
@@ -1817,6 +1880,12 @@ function rtPopCell(kw) {
 function dbRender() {
   const grid = document.getElementById('db-grid');
   if (!grid) return;
+
+  if (rtData === null) {
+    grid.innerHTML = '<div class="db-empty">Loading…</div>';
+    return;
+  }
+
   const clients = rtData?.clients ?? [];
 
   if (!clients.length) {
@@ -1995,8 +2064,8 @@ function filesRender() {
 }
 
 /* ── init rank tracker ── */
-function rtInit() {
-  rtData = rtLoad();
+async function rtInit() {
+  await rtLoadFromServer();
 
   // Events
   document.getElementById('rt-clientSelect').addEventListener('change', e => {
