@@ -2540,6 +2540,7 @@ async function rtImportFromAA() {
   btn.textContent = 'Importing…';
 
   try {
+    const today  = new Date().toISOString().slice(0, 10);
     const campId = String(c.aaCampaignId);
     const kwRows = await aaQuery({
       asset: 'keyword',
@@ -2556,13 +2557,39 @@ async function rtImportFromAA() {
     const starredRows = kwRows.filter(r => r.primary_keyword === true || r.primary_keyword === 1 || r.primary_keyword === '1');
     if (!starredRows.length) throw new Error(`No starred keywords found for campaign ID ${campId}. Star keywords in AgencyAnalytics first.`);
 
+    // "tags" isn't reliably populated off the `keyword` asset — also pull it
+    // from campaign-rankings (confirmed to expose a tags field there),
+    // keyed by keyword_id, and check both sources.
+    let tagsByKwId = {};
+    try {
+      const tagRows = await aaQuery({
+        asset: 'campaign-rankings',
+        operation: 'read',
+        fields: ['keyword_id', 'tags'],
+        filters: [
+          { end_date:    { '$lessthanorequal_comparison': today } },
+          { start_date:  { '$greaterthanorequal_comparison': today } },
+          { campaign_id: { '$equals_comparison': campId } },
+        ],
+        group_by: ['keyword_id'],
+        sort: [{ date: 'asc' }],
+        limit: 500,
+        offset: 0,
+      });
+      for (const r of tagRows) if (r.keyword_id != null) tagsByKwId[r.keyword_id] = r.tags;
+      console.log('[AA import] tags by keyword_id (from campaign-rankings):', tagsByKwId);
+    } catch (e) {
+      console.warn('[AA import] campaign-rankings tags lookup failed, falling back to keyword asset only:', e.message);
+    }
+
     const existingByPhrase = new Map(c.keywords.map(k => [(k.keyword || '').toLowerCase(), k]));
     let added = 0, markedMk = 0, skipped = 0;
     for (const row of starredRows) {
       const phrase = (row.keyword_phrase || '').trim();
       if (!phrase) continue;
       const key    = phrase.toLowerCase();
-      const wantMk = aaTagNames(row).includes('sm');
+      const wantMk = aaTagNames(row).includes('sm')
+        || aaTagNames({ tags: tagsByKwId[row.id] }).includes('sm');
 
       const existingKw = existingByPhrase.get(key);
       if (existingKw) {
