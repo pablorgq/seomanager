@@ -1092,12 +1092,66 @@ function agRenderArticle(text, termClassMap, originalText) {
   }).filter(Boolean).join('\n');
 }
 
-function agRenderScore(score) {
-  const num = parseFloat(score) || 0;
-  const cls = num >= 80 ? 'good' : num >= 60 ? 'warn' : 'bad';
-  const msg = num >= 80 ? 'Target score achieved ✓' : num >= 60 ? 'Needs improvement' : 'Below target — regenerate recommended';
-  document.getElementById('ag-scoreBadge').innerHTML =
-    `<div class="ag-score-badge ${cls}">POP Score: ${num} / 100 — ${msg}</div>`;
+function agComputeScore(articleText, bodyTerms, titleTerms, h2Items) {
+  const lower = articleText.toLowerCase();
+  const lines = articleText.split('\n');
+  const h1Line = (lines.find(l => l.startsWith('# ')) || '').toLowerCase();
+  const h2Lines = lines.filter(l => l.startsWith('## ')).map(l => l.toLowerCase()).join(' ');
+
+  let points = 0, total = 0;
+
+  // Body terms (min/max frequency)
+  for (const t of bodyTerms) {
+    const phrase = (t.term?.phrase || '').toLowerCase().trim();
+    const min = t.contentBrief?.min ?? 0;
+    const max = t.contentBrief?.max ?? t.contentBrief?.target ?? 0;
+    if (!phrase || max === 0) continue;
+    total++;
+    const rx = new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    const count = (lower.match(rx) || []).length;
+    if (count >= min && count <= max) points += 1;
+    else if (count > max)            points += 0.75; // slight over-opt penalty
+    else if (count > 0)              points += 0.4;  // present but below target
+  }
+
+  // Title terms (should appear in H1)
+  for (const t of (titleTerms || [])) {
+    if (!t) continue;
+    total++;
+    if (h1Line.includes(t.toLowerCase())) points += 1;
+  }
+
+  // H2 terms
+  for (const t of (h2Items || [])) {
+    const phrase = (t.term?.phrase || '').toLowerCase().trim();
+    if (!phrase) continue;
+    total++;
+    if (h2Lines.includes(phrase)) points += 1;
+  }
+
+  return total ? Math.round((points / total) * 100) : null;
+}
+
+function agRenderScore(before, after) {
+  const bNum = parseFloat(before) || 0;
+  const scoreBadge = document.getElementById('ag-scoreBadge');
+  if (after !== null && after !== undefined) {
+    const aNum = parseFloat(after) || 0;
+    const delta = aNum - bNum;
+    const aCls = aNum >= 80 ? 'good' : aNum >= 60 ? 'warn' : 'bad';
+    const dSign = delta >= 0 ? '+' : '';
+    const dColor = delta > 0 ? 'var(--green)' : delta < 0 ? 'var(--red)' : 'var(--text-muted)';
+    scoreBadge.innerHTML =
+      `<div class="ag-score-badge ${aCls}" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <span>Before: <strong>${bNum}</strong></span>
+        <span style="color:var(--text-muted)">→</span>
+        <span>After edit: <strong>${aNum} / 100</strong></span>
+        <span style="color:${dColor};font-weight:700">${dSign}${delta} pts</span>
+      </div>`;
+  } else {
+    const cls = bNum >= 80 ? 'good' : bNum >= 60 ? 'warn' : 'bad';
+    scoreBadge.innerHTML = `<div class="ag-score-badge ${cls}">POP Score: ${bNum} / 100</div>`;
+  }
 }
 
 /* ── Cora + POP cross-reference ── */
@@ -1429,17 +1483,21 @@ ${popBriefSpecs}`;
 
     const allTerms = bodyTerms.map(t => t.term.phrase).concat(selectedVars).concat(selectedLsi).filter(Boolean);
 
-    document.getElementById('ag-outputTitle').textContent = keyword;
-    agRenderScore(pageScore);
+    // Re-score the generated article against the content brief
+    const afterScore = agComputeScore(articleText, bodyTerms, titleTerms, h2Items);
 
+    document.getElementById('ag-outputTitle').textContent = keyword;
+    agRenderScore(pageScore, afterScore);
+
+    const scoreCls = s => s >= 80 ? 'var(--green)' : s >= 60 ? '#e8a838' : 'var(--red)';
     document.getElementById('ag-metaCards').innerHTML = [
-      { label: 'POP Score',   value: pageScore,       sub: '/ 100 target' },
-      { label: 'Word count',  value: wordCount,        sub: `target ~${wcTarget}` },
-      { label: 'H2 sections', value: h2Target,         sub: 'recommended' },
-      { label: 'Terms used',  value: allTerms.length,  sub: 'POP-recommended' },
+      { label: 'Score before', value: pageScore,   sub: 'original page', color: scoreCls(parseFloat(pageScore)||0) },
+      { label: 'Score after',  value: afterScore ?? '—', sub: 'this article', color: afterScore ? scoreCls(afterScore) : 'var(--text-muted)' },
+      { label: 'Word count',   value: wordCount,   sub: `target ~${wcTarget}`, color: null },
+      { label: 'Terms used',   value: allTerms.length, sub: 'POP-recommended', color: null },
     ].map(c => `<div class="ag-meta-card">
       <div class="ag-meta-label">${c.label}</div>
-      <div class="ag-meta-value">${escHtml(String(c.value))}</div>
+      <div class="ag-meta-value"${c.color ? ` style="color:${c.color}"` : ''}>${escHtml(String(c.value))}</div>
       <div class="ag-meta-sub">${c.sub}</div>
     </div>`).join('');
 
@@ -1507,6 +1565,7 @@ ${popBriefSpecs}`;
         clientName:     rtActiveClient()?.name || '',
         url:            targetUrl,
         score:          pageScore,
+        scoreAfter:     afterScore,
         wordCount,
         articleHtml:    agArticleHtml,
         articleText:    agArticleText,
@@ -1821,8 +1880,13 @@ function showPopReport(clientId, keyword) {
   if (!rep) return;
   const modal = document.getElementById('popReportModal');
   document.getElementById('rep-keyword').textContent = rep.keyword || keyword;
+  const scoreCls = s => s >= 80 ? 'var(--green)' : s >= 60 ? '#e8a838' : 'var(--red)';
+  const before = parseFloat(rep.score) || 0;
+  const after  = rep.scoreAfter ?? null;
+  const delta  = after !== null ? after - before : null;
   document.getElementById('rep-meta').innerHTML =
-    `<span class="ag-meta-card" style="min-width:80px"><div class="ag-meta-label">POP Score</div><div class="ag-meta-value">${escHtml(String(rep.score || '—'))}</div></span>` +
+    `<span class="ag-meta-card" style="min-width:80px"><div class="ag-meta-label">Before</div><div class="ag-meta-value" style="color:${scoreCls(before)}">${escHtml(String(rep.score || '—'))}</div></span>` +
+    (after !== null ? `<span class="ag-meta-card" style="min-width:80px"><div class="ag-meta-label">After edit</div><div class="ag-meta-value" style="color:${scoreCls(after)}">${after}${delta !== null ? ` <span style="font-size:13px;color:${delta>=0?'var(--green)':'var(--red)'}">(${delta>=0?'+':''}${delta})</span>` : ''}</div></span>` : '') +
     `<span class="ag-meta-card" style="min-width:80px"><div class="ag-meta-label">Words</div><div class="ag-meta-value">${escHtml(String(rep.wordCount || '—'))}</div></span>` +
     `<span style="font-size:11px;color:var(--text-muted);align-self:center">Saved ${rep.savedAt ? new Date(rep.savedAt).toLocaleDateString() : '—'}</span>`;
   const leg = document.getElementById('rep-legend');
