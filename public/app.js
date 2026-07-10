@@ -62,6 +62,7 @@ const TAB_ROUTES = {
   article:   '/seo-article',
   cora:      '/cora',
   files:     '/files',
+  gsc:       '/gsc',
   weekly:    '/weekly-tasks',
   brands:    '/blog-brands',
   images:    '/image-generator',
@@ -76,6 +77,7 @@ function switchTab(tab, { pushState = true } = {}) {
   document.getElementById('toolsMenuBtn')?.classList.toggle('active', TOOLS_TABS.has(tab));
   if (tab === 'dashboard') dbRender();
   if (tab === 'files') filesRender();
+  if (tab === 'gsc') gscRender();
   if (tab === 'weekly') weeklyRender();
   if (pushState) {
     const path = TAB_ROUTES[tab];
@@ -2558,6 +2560,308 @@ function weeklyRender() {
       if (stratSel) { stratSel.value = badge.dataset.stratId; stratSel.dispatchEvent(new Event('change')); }
     });
   });
+}
+
+/* ════════════════════════════════════════════════
+   GSC INSIGHTS
+════════════════════════════════════════════════ */
+
+let gscStatus  = { configured: false, connected: false };
+let gscSites   = [];
+let gscRows    = [];        // raw GSC query rows
+let gscLoaded  = false;
+
+function gscDateRange(days) {
+  const end = new Date(); end.setDate(end.getDate() - 1);
+  const start = new Date(end); start.setDate(start.getDate() - (days - 1));
+  const fmt = d => d.toISOString().slice(0, 10);
+  return { startDate: fmt(start), endDate: fmt(end) };
+}
+
+function gscTagRow(row) {
+  const pos = row.position;
+  const ctr = row.ctr;
+  const imp = row.impressions;
+  if (pos >= 4  && pos <= 15 && imp >= 50)  return 'quick-win';
+  if (pos >= 1  && pos <= 3  && ctr < 0.03) return 'ctr-issue';
+  if (pos >= 11 && pos <= 30 && imp >= 100) return 'gap';
+  return '';
+}
+
+function gscAllTrackedKeywords() {
+  return (rtData?.clients ?? [])
+    .flatMap(c => (c.keywords || []).map(k => (k.keyword || '').toLowerCase().trim()))
+    .filter(Boolean);
+}
+
+async function gscCheckStatus() {
+  try {
+    const r = await fetch('/api/gsc/status');
+    if (r.ok) gscStatus = await r.json();
+  } catch (_) {}
+}
+
+async function gscLoadSites() {
+  try {
+    const r = await fetch('/api/gsc/sites');
+    if (!r.ok) { const d = await r.json(); throw new Error(d.error || `HTTP ${r.status}`); }
+    const d = await r.json();
+    gscSites = d.sites || [];
+    const sel = document.getElementById('gsc-site-select');
+    if (!sel) return;
+    sel.innerHTML = gscSites.length
+      ? gscSites.map(s => `<option value="${escHtml(s.url)}">${escHtml(s.url)}</option>`).join('')
+      : '<option value="">No verified properties found</option>';
+  } catch (e) {
+    const sel = document.getElementById('gsc-site-select');
+    if (sel) sel.innerHTML = `<option value="">Error loading sites: ${escHtml(e.message)}</option>`;
+  }
+}
+
+async function gscLoadData() {
+  const siteUrl = document.getElementById('gsc-site-select')?.value;
+  const days    = parseInt(document.getElementById('gsc-range-select')?.value || '28');
+  const results = document.getElementById('gsc-results');
+  if (!siteUrl) { if (results) results.innerHTML = '<div class="gsc-msg">Select a property first.</div>'; return; }
+  if (results) results.innerHTML = '<div class="gsc-msg">Loading GSC data…</div>';
+
+  try {
+    const { startDate, endDate } = gscDateRange(days);
+    const r = await fetch('/api/gsc/queries', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ siteUrl, startDate, endDate, rowLimit: 500 }),
+    });
+    if (!r.ok) { const d = await r.json(); throw new Error(d.error || `HTTP ${r.status}`); }
+    const d = await r.json();
+    gscRows   = d.rows || [];
+    gscLoaded = true;
+    gscRenderResults(siteUrl, days, startDate, endDate);
+  } catch (e) {
+    if (results) results.innerHTML = `<div class="gsc-msg gsc-error">Error: ${escHtml(e.message)}</div>`;
+  }
+}
+
+function gscRenderResults(siteUrl, days, startDate, endDate) {
+  const results = document.getElementById('gsc-results');
+  if (!results || !gscRows.length) {
+    if (results) results.innerHTML = '<div class="gsc-msg">No data returned for this property / date range.</div>';
+    return;
+  }
+
+  const tracked  = new Set(gscAllTrackedKeywords());
+  const total    = gscRows.length;
+  const totClicks = gscRows.reduce((s, r) => s + r.clicks, 0);
+  const totImpr   = gscRows.reduce((s, r) => s + r.impressions, 0);
+  const avgCTR    = totImpr ? (totClicks / totImpr * 100).toFixed(1) : '0';
+  const avgPos    = gscRows.length ? (gscRows.reduce((s, r) => s + r.position, 0) / gscRows.length).toFixed(1) : '—';
+
+  const quickWins  = gscRows.filter(r => gscTagRow(r) === 'quick-win');
+  const ctrIssues  = gscRows.filter(r => gscTagRow(r) === 'ctr-issue');
+  const gaps       = gscRows.filter(r => gscTagRow(r) === 'gap');
+  const untracked  = gscRows.filter(r => r.clicks > 0 && !tracked.has((r.keys?.[0] || '').toLowerCase().trim()));
+
+  const tagBadge = tag => {
+    if (tag === 'quick-win') return '<span class="gsc-tag gsc-tag-win">Quick Win</span>';
+    if (tag === 'ctr-issue') return '<span class="gsc-tag gsc-tag-ctr">Low CTR</span>';
+    if (tag === 'gap')       return '<span class="gsc-tag gsc-tag-gap">Content Gap</span>';
+    return '';
+  };
+
+  const tableRows = gscRows.slice(0, 200).map(row => {
+    const q   = row.keys?.[0] || '';
+    const tag = gscTagRow(row);
+    const isUntracked = row.clicks > 0 && !tracked.has(q.toLowerCase().trim());
+    return `<tr class="${tag ? 'gsc-tr-' + tag : ''}">
+      <td class="gsc-td-kw">${escHtml(q)}${tagBadge(tag)}${isUntracked ? '<span class="gsc-tag gsc-tag-new">+Track</span>' : ''}</td>
+      <td class="gsc-td-num">${row.clicks}</td>
+      <td class="gsc-td-num">${row.impressions}</td>
+      <td class="gsc-td-num">${(row.ctr * 100).toFixed(1)}%</td>
+      <td class="gsc-td-pos ${row.position <= 3 ? 'gsc-pos-top' : row.position <= 10 ? 'gsc-pos-p1' : row.position <= 20 ? 'gsc-pos-p2' : 'gsc-pos-deep'}">${row.position.toFixed(1)}</td>
+    </tr>`;
+  }).join('');
+
+  results.innerHTML = `
+    <div class="gsc-summary-row">
+      <div class="gsc-stat"><div class="gsc-stat-val">${total}</div><div class="gsc-stat-lbl">Queries</div></div>
+      <div class="gsc-stat"><div class="gsc-stat-val">${totClicks.toLocaleString()}</div><div class="gsc-stat-lbl">Clicks</div></div>
+      <div class="gsc-stat"><div class="gsc-stat-val">${totImpr.toLocaleString()}</div><div class="gsc-stat-lbl">Impressions</div></div>
+      <div class="gsc-stat"><div class="gsc-stat-val">${avgCTR}%</div><div class="gsc-stat-lbl">Avg CTR</div></div>
+      <div class="gsc-stat"><div class="gsc-stat-val">${avgPos}</div><div class="gsc-stat-lbl">Avg Position</div></div>
+    </div>
+
+    <div class="gsc-insight-cards">
+      <div class="gsc-insight-card gsc-card-win">
+        <div class="gsc-insight-n">${quickWins.length}</div>
+        <div class="gsc-insight-label">Quick Wins</div>
+        <div class="gsc-insight-desc">Pos 4–15, 50+ impressions — one push from page 1</div>
+      </div>
+      <div class="gsc-insight-card gsc-card-ctr">
+        <div class="gsc-insight-n">${ctrIssues.length}</div>
+        <div class="gsc-insight-label">Low CTR</div>
+        <div class="gsc-insight-desc">Top 3 position but CTR &lt;3% — title/meta fix needed</div>
+      </div>
+      <div class="gsc-insight-card gsc-card-gap">
+        <div class="gsc-insight-n">${gaps.length}</div>
+        <div class="gsc-insight-label">Content Gaps</div>
+        <div class="gsc-insight-desc">Pos 11–30, 100+ impressions — needs content targeting</div>
+      </div>
+      <div class="gsc-insight-card gsc-card-new">
+        <div class="gsc-insight-n">${untracked.length}</div>
+        <div class="gsc-insight-label">Untracked</div>
+        <div class="gsc-insight-desc">Clicks but not in Rank Tracker — add to monitoring</div>
+      </div>
+    </div>
+
+    <div class="gsc-ai-bar">
+      <button id="gsc-ai-btn" class="btn-sm btn-accent">Get AI Recommendations</button>
+      <span class="gsc-ai-note">Sends top queries to OpenAI for expert SEO analysis</span>
+    </div>
+    <div id="gsc-ai-result" class="gsc-ai-result" style="display:none"></div>
+
+    <div class="gsc-table-wrap">
+      <table class="gsc-table">
+        <thead><tr>
+          <th>Query</th>
+          <th>Clicks</th>
+          <th>Impressions</th>
+          <th>CTR</th>
+          <th>Position</th>
+        </tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </div>`;
+
+  document.getElementById('gsc-ai-btn')?.addEventListener('click', () => gscRunAI(siteUrl, days));
+}
+
+async function gscRunAI(siteUrl, days) {
+  const btn    = document.getElementById('gsc-ai-btn');
+  const result = document.getElementById('gsc-ai-result');
+  if (!btn || !result) return;
+  btn.disabled = true; btn.textContent = 'Analyzing…';
+  result.style.display = 'none';
+
+  const tracked    = gscAllTrackedKeywords();
+  const top50      = gscRows.slice(0, 50);
+  const tableText  = top50.map(r =>
+    `${r.keys?.[0] || ''} | clicks:${r.clicks} | imp:${r.impressions} | ctr:${(r.ctr*100).toFixed(1)}% | pos:${r.position.toFixed(1)}`
+  ).join('\n');
+
+  const prompt = `You are a senior SEO expert. Analyze this Google Search Console data and give actionable recommendations.
+
+SITE: ${siteUrl}
+PERIOD: Last ${days} days
+
+TOP 50 QUERIES (by impressions):
+Query | Clicks | Impressions | CTR | Avg Position
+${tableText}
+
+KEYWORDS CURRENTLY TRACKED IN RANK TRACKER:
+${tracked.slice(0, 40).join(', ') || 'none'}
+
+Provide your analysis in exactly these sections — be specific, cite keyword names and numbers:
+
+## Quick Wins (Positions 4–15)
+List the top 5 keywords near page 1 with their current position and what specific action would push them to top 3.
+
+## CTR Problems
+List keywords ranking top 3 but with under-performing CTR. For each, suggest a better title tag or meta description angle.
+
+## Content Gap Opportunities
+Identify 5 high-impression queries (pos 11–50) that need dedicated content or page optimization. Explain why each is an opportunity.
+
+## Untracked Performers
+List any keywords getting clicks that seem important but aren't in the current tracking list.
+
+## Priority Action List
+Give 5 prioritized actions to take this month, ordered by estimated impact.
+
+Keep each section concise and actionable. Use data from the table to support every recommendation.`;
+
+  try {
+    const r = await fetch('/api/openai/chat', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ model: 'gpt-4o', max_tokens: 1800, messages: [{ role: 'user', content: prompt }] }),
+    });
+    if (!r.ok) { const d = await r.json(); throw new Error(d.error?.message || `HTTP ${r.status}`); }
+    const d = await r.json();
+    const text = d.choices?.[0]?.message?.content || '';
+    result.style.display = '';
+    result.innerHTML = '<div class="gsc-ai-content">' +
+      escHtml(text)
+        .replace(/^## (.+)$/gm, '</div><h3 class="gsc-ai-h3">$1</h3><div class="gsc-ai-body">')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\n/g, '<br>') +
+      '</div>';
+  } catch (e) {
+    result.style.display = '';
+    result.innerHTML = `<div class="gsc-msg gsc-error">AI error: ${escHtml(e.message)}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Get AI Recommendations';
+  }
+}
+
+async function gscRender() {
+  const bar      = document.getElementById('gsc-connect-bar');
+  const controls = document.getElementById('gsc-controls');
+  if (!bar) return;
+
+  await gscCheckStatus();
+
+  if (!gscStatus.configured) {
+    bar.innerHTML = `
+      <div class="gsc-setup-card">
+        <h3 class="gsc-setup-title">Connect Google Search Console</h3>
+        <p class="gsc-setup-desc">To connect GSC, you need a Google OAuth app. Set these Railway env vars:</p>
+        <ol class="gsc-setup-steps">
+          <li>Go to <strong>Google Cloud Console → APIs &amp; Services → Credentials</strong></li>
+          <li>Create an <strong>OAuth 2.0 Client ID</strong> (Web application type)</li>
+          <li>Add Authorized Redirect URI: <code class="gsc-code">${location.origin}/api/gsc/callback</code></li>
+          <li>Set Railway vars: <code class="gsc-code">GOOGLE_CLIENT_ID</code>, <code class="gsc-code">GOOGLE_CLIENT_SECRET</code>, <code class="gsc-code">APP_URL=${location.origin}</code></li>
+          <li>Enable the <strong>Google Search Console API</strong> in your Cloud project</li>
+        </ol>
+      </div>`;
+    if (controls) controls.style.display = 'none';
+    return;
+  }
+
+  if (!gscStatus.connected) {
+    bar.innerHTML = `
+      <div class="gsc-connect-prompt">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <span>Not connected to Google Search Console</span>
+        <a href="/api/gsc/auth" class="btn-sm btn-accent">Connect Google Account</a>
+      </div>`;
+    if (controls) controls.style.display = 'none';
+    return;
+  }
+
+  bar.innerHTML = `
+    <div class="gsc-connected-bar">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+      Connected to Google Search Console
+      <button id="gsc-disconnect-btn" class="gsc-disconnect-btn">Disconnect</button>
+    </div>`;
+  if (controls) controls.style.display = 'flex';
+
+  document.getElementById('gsc-disconnect-btn')?.addEventListener('click', async () => {
+    await fetch('/api/gsc/disconnect', { method: 'POST' });
+    gscStatus.connected = false; gscRows = []; gscLoaded = false;
+    document.getElementById('gsc-results').innerHTML = '';
+    gscRender();
+  });
+
+  if (!gscSites.length) await gscLoadSites();
+
+  document.getElementById('gsc-load-btn')?.addEventListener('click', gscLoadData);
+  if (gscLoaded) {
+    const siteUrl  = document.getElementById('gsc-site-select')?.value;
+    const days     = parseInt(document.getElementById('gsc-range-select')?.value || '28');
+    const { startDate, endDate } = gscDateRange(days);
+    gscRenderResults(siteUrl, days, startDate, endDate);
+  }
 }
 
 /* ── init rank tracker ── */

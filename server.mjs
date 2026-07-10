@@ -2,7 +2,7 @@ import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { randomBytes } from 'crypto';
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, rmSync } from 'fs';
 import { Storage } from '@google-cloud/storage';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -12,9 +12,17 @@ const PORT = process.env.PORT || 3000;
 /* ─────────────────────────────────────────────
    CREDENTIALS  (never hardcoded — env vars only)
 ───────────────────────────────────────────── */
-const OPENAI_KEY = process.env.OPENAI_API_KEY || null;
-const AUTH_USER  = process.env.AUTH_USER || 'pablo';
-const AUTH_PASS  = process.env.AUTH_PASS  || null;
+const OPENAI_KEY        = process.env.OPENAI_API_KEY      || null;
+const AUTH_USER         = process.env.AUTH_USER            || 'pablo';
+const AUTH_PASS         = process.env.AUTH_PASS            || null;
+
+/* ─────────────────────────────────────────────
+   GOOGLE SEARCH CONSOLE  (OAuth 2.0)
+   Requires: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, APP_URL
+───────────────────────────────────────────── */
+const GSC_CLIENT_ID     = process.env.GOOGLE_CLIENT_ID     || null;
+const GSC_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || null;
+const APP_URL           = process.env.APP_URL               || `http://localhost:${process.env.PORT || 3000}`;
 
 /* ─────────────────────────────────────────────
    AGENCY ANALYTICS
@@ -146,6 +154,61 @@ function saveWeeklyData(data) {
     console.warn('[weeklydata] Failed to persist weekly data store:', e.message);
   }
 }
+
+/* ─────────────────────────────────────────────
+   GSC OAUTH TOKENS  (persisted so they survive restarts)
+───────────────────────────────────────────── */
+const GSC_TOKENS_FILE = join(__dirname, '.gsc-tokens.json');
+let gscTokens = null;
+
+function loadGscTokens() {
+  if (!existsSync(GSC_TOKENS_FILE)) return;
+  try { gscTokens = JSON.parse(readFileSync(GSC_TOKENS_FILE, 'utf8')); }
+  catch (e) { console.warn('[gsc] Failed to load tokens:', e.message); }
+}
+
+function saveGscTokens(tokens) {
+  gscTokens = tokens;
+  try { writeFileSync(GSC_TOKENS_FILE, JSON.stringify(tokens)); }
+  catch (e) { console.warn('[gsc] Failed to save tokens:', e.message); }
+}
+
+async function gscRefreshAccessToken() {
+  if (!gscTokens?.refresh_token || !GSC_CLIENT_ID) return false;
+  try {
+    const r = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type:    'refresh_token',
+        refresh_token: gscTokens.refresh_token,
+        client_id:     GSC_CLIENT_ID,
+        client_secret: GSC_CLIENT_SECRET,
+      }),
+    });
+    const d = await r.json();
+    if (!d.access_token) return false;
+    saveGscTokens({ ...gscTokens, access_token: d.access_token, expiry_date: Date.now() + ((d.expires_in || 3600) * 1000) });
+    return true;
+  } catch (e) {
+    console.warn('[gsc] Token refresh failed:', e.message);
+    return false;
+  }
+}
+
+async function gscApiFetch(url, options = {}) {
+  if (!gscTokens?.access_token) return null;
+  if ((gscTokens.expiry_date || 0) < Date.now() + 30000) {
+    const ok = await gscRefreshAccessToken();
+    if (!ok) return null;
+  }
+  return fetch(url, {
+    ...options,
+    headers: { Authorization: `Bearer ${gscTokens.access_token}`, ...(options.headers || {}) },
+  });
+}
+
+loadGscTokens();
 
 function createSession() {
   const token = randomBytes(32).toString('hex');
@@ -632,6 +695,107 @@ app.post('/api/gcs/create-folder', apiGuard, async (req, res) => {
   } catch (e) {
     console.error('[gcs create-folder]', e.message);
     res.status(500).json({ error: { message: `GCS error: ${e.message}` } });
+  }
+});
+
+/* ─────────────────────────────────────────────
+   GOOGLE SEARCH CONSOLE API ROUTES
+───────────────────────────────────────────── */
+
+app.get('/api/gsc/status', apiGuard, (req, res) => {
+  res.json({
+    configured: !!(GSC_CLIENT_ID && GSC_CLIENT_SECRET),
+    connected:  !!(gscTokens?.refresh_token),
+  });
+});
+
+app.get('/api/gsc/auth', apiGuard, (req, res) => {
+  if (!GSC_CLIENT_ID || !GSC_CLIENT_SECRET)
+    return res.status(503).json({ error: 'GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET not configured on server.' });
+  const params = new URLSearchParams({
+    client_id:     GSC_CLIENT_ID,
+    redirect_uri:  `${APP_URL}/api/gsc/callback`,
+    response_type: 'code',
+    scope:         'https://www.googleapis.com/auth/webmasters.readonly',
+    access_type:   'offline',
+    prompt:        'consent',
+  });
+  res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
+});
+
+app.get('/api/gsc/callback', async (req, res) => {
+  const { code, error } = req.query;
+  if (error) return res.status(400).send(`Google OAuth error: ${String(error)}`);
+  if (!code)  return res.status(400).send('Missing authorization code');
+  try {
+    const r = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id:     GSC_CLIENT_ID,
+        client_secret: GSC_CLIENT_SECRET,
+        redirect_uri:  `${APP_URL}/api/gsc/callback`,
+        grant_type:    'authorization_code',
+      }),
+    });
+    const d = await r.json();
+    if (!d.access_token) {
+      console.error('[gsc] callback token error:', JSON.stringify(d));
+      return res.status(400).send('Token exchange failed: ' + (d.error_description || d.error || 'unknown'));
+    }
+    saveGscTokens({
+      access_token:  d.access_token,
+      refresh_token: d.refresh_token || gscTokens?.refresh_token || null,
+      expiry_date:   Date.now() + ((d.expires_in || 3600) * 1000),
+    });
+    console.log('[gsc] OAuth connected successfully');
+    res.redirect('/');
+  } catch (e) {
+    console.error('[gsc] callback error:', e.message);
+    res.status(500).send('OAuth error: ' + e.message);
+  }
+});
+
+app.post('/api/gsc/disconnect', apiGuard, (req, res) => {
+  gscTokens = null;
+  try { if (existsSync(GSC_TOKENS_FILE)) rmSync(GSC_TOKENS_FILE); } catch (_) {}
+  res.json({ ok: true });
+});
+
+app.get('/api/gsc/sites', apiGuard, async (req, res) => {
+  if (!gscTokens?.refresh_token) return res.status(401).json({ error: 'Not connected to Google Search Console' });
+  try {
+    const r = await gscApiFetch('https://www.googleapis.com/webmasters/v3/sites');
+    if (!r) return res.status(401).json({ error: 'Token expired — please reconnect' });
+    const d = await r.json();
+    if (d.error) return res.status(400).json({ error: d.error.message });
+    res.json({ sites: (d.siteEntry || []).map(s => ({ url: s.siteUrl, level: s.permissionLevel })) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/gsc/queries', apiGuard, async (req, res) => {
+  if (!gscTokens?.refresh_token) return res.status(401).json({ error: 'Not connected to Google Search Console' });
+  const { siteUrl, startDate, endDate, rowLimit = 500 } = req.body || {};
+  if (!siteUrl || !startDate || !endDate) return res.status(400).json({ error: 'Missing params: siteUrl, startDate, endDate' });
+  try {
+    const encodedSite = encodeURIComponent(siteUrl);
+    const r = await gscApiFetch(
+      `https://www.googleapis.com/webmasters/v3/sites/${encodedSite}/searchAnalytics/query`,
+      {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ startDate, endDate, dimensions: ['query'], rowLimit: Math.min(Number(rowLimit) || 500, 1000) }),
+      }
+    );
+    if (!r) return res.status(401).json({ error: 'Token expired — please reconnect' });
+    const d = await r.json();
+    if (d.error) return res.status(400).json({ error: d.error.message });
+    res.json({ rows: d.rows || [] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
