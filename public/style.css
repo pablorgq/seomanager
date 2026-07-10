@@ -981,6 +981,43 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
 .wk-status-blocked   { background: rgba(229,56,59,.1);   color: var(--red);   border-color: transparent; }
 :root[data-theme="dark"] .wk-status-progress { color: #e8a838; }
 
+/* ── OFF-PAGE ACCORDION (SEONEO strategy) ── */
+.wk-item-offpage { flex-direction: column; align-items: stretch; gap: 0; }
+.wk-item-main { display: flex; align-items: center; gap: 10px; }
+.wk-opg-toggle {
+  flex-shrink: 0; background: none; border: none; cursor: pointer;
+  color: var(--text-muted); font-size: 10px; padding: 2px 4px; line-height: 1;
+  border-radius: 3px; transition: color .15s, background .15s;
+}
+.wk-opg-toggle:hover { color: var(--accent); background: rgba(99,102,241,.1); }
+.wk-opg-accordion {
+  display: none; margin-top: 8px; padding: 10px 12px;
+  background: var(--surface-2); border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.wk-opg-accordion.wk-opg-open { display: block; }
+.wk-opg-inner { display: flex; flex-direction: column; gap: 7px; }
+.wk-opg-row { display: flex; align-items: center; gap: 8px; }
+.wk-opg-meta { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
+.wk-opg-strategy-select {
+  flex: 1; font-size: 11px; padding: 4px 7px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text-primary); cursor: pointer;
+}
+.wk-opg-desc {
+  font-size: 11px; color: var(--text-muted); font-style: italic; line-height: 1.45;
+  padding-left: 2px;
+}
+.wk-opg-suggest { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
+.wk-opg-suggest-label { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
+.wk-opg-badge {
+  font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 100px;
+  background: var(--surface); border: 1px solid var(--border);
+  color: var(--text-muted); cursor: pointer; transition: all .15s; white-space: nowrap;
+}
+.wk-opg-badge:hover { border-color: var(--accent); color: var(--accent); }
+.wk-opg-badge-active { background: rgba(99,102,241,.15); border-color: var(--accent); color: var(--accent); }
+
 /* ── RANK TRACKER ── */
 .rt-topbar {
   display: flex; align-items: center; justify-content: space-between;

@@ -2214,6 +2214,80 @@ const WEEKLY_STATUSES = [
   { key: 'blocked',     label: 'Blocked',      cls: 'wk-status-blocked' },
 ];
 
+const SEONEO_STRATEGIES = [
+  { id: 'das-v2',      name: 'DAS v2',                   type: 'organic', desc: 'First campaign for any site — plain URLs only, 4–5 runs in month 1. Passes link juice and creates content depth.' },
+  { id: 'elias-cloud', name: 'Elias Cloud',              type: 'organic', desc: 'Most powerful Cloud Stacking strategy, used by top SEO experts. Great for established sites.' },
+  { id: 'rd100',       name: 'RD100',                    type: 'organic', desc: 'Builds 100 Referring Domains to each T1 link. Ideal for boosting existing T1 links.' },
+  { id: 'hydra',       name: 'Neo - Hydra',              type: 'organic', desc: 'Most powerful diagram. Use for Moneysite, PBNs or Social links.' },
+  { id: 'hercules',    name: 'Neo - Hercules',           type: 'organic', desc: "One of the favourites. For established websites — use with Omega Indexer for faster rankings." },
+  { id: 'cl2',         name: 'Neo - Cloud Level 2',      type: 'organic', desc: 'Advanced Cloud Level 1 — a Ranking Machine. Use with Omega Indexer.' },
+  { id: 'cl1',         name: 'Neo - Cloud Level 1',      type: 'organic', desc: 'Basic Cloud for new or middle-aged websites. Creates Cloud Blogs.' },
+  { id: 'ctx-adv',     name: 'Neo - Contextual (Adv)',   type: 'organic', desc: 'VERY Powerful for High Competition Keywords. One of the favourite diagrams.' },
+  { id: 'ctx',         name: 'Neo - Contextual to Text', type: 'organic', desc: 'Use for Branded URLs: Homepage, About Us, Contact Us, Social Media.' },
+  { id: 'daredevil',   name: 'Neo - Daredevil',          type: 'organic', desc: 'For established websites with max 40% Primary Keywords.' },
+  { id: 'gnosis',      name: 'Neo - Gnosis',             type: 'organic', desc: 'PDF Groups as T1. Diversifies Link Profile and passes authority.' },
+  { id: 'rma',         name: 'Neo - Respect my Auth',    type: 'organic', desc: 'Super High-Quality backlinks fast from Authority websites. Boosts DA/PA/DR/UR.' },
+  { id: 't1-booster',  name: 'Neo - T1 Booster',        type: 'organic', desc: 'Ideal for boosting T1 links. Part of the RD100 strategy.' },
+  { id: 'zero-hero',   name: 'Zero To Hero',             type: 'organic', desc: 'Starting strategy for brand-new websites. Run 4–5 campaigns in month 1.' },
+  { id: 'gbp-blast',   name: 'GBP Blast',                type: 'gbp',     desc: 'Google Business Profile — broad blast campaign to boost GBP rankings.' },
+  { id: 'gbp-sniper',  name: 'GBP Sniper',               type: 'gbp',     desc: 'Google Business Profile — precision targeting for competitive GBP keywords.' },
+];
+
+function opgSuggestStrategies(kw) {
+  const rank    = parseInt(kw.rank ?? 0) || 0;
+  const keyword = (kw.keyword || '').toLowerCase();
+  const isGBP   = /\bgbp\b|\bgoogle business\b|\bgmb\b/i.test(keyword);
+  if (isGBP)      return ['gbp-blast', 'gbp-sniper'];
+  if (!rank || rank > 100) return ['zero-hero', 'das-v2', 'cl1'];
+  if (rank > 50)  return ['das-v2', 'cl1', 'ctx-adv'];
+  if (rank > 30)  return ['das-v2', 'cl2', 'hercules'];
+  if (rank > 20)  return ['elias-cloud', 'hercules', 'ctx-adv'];
+  if (rank > 10)  return ['elias-cloud', 'rd100', 'ctx-adv'];
+  return ['elias-cloud', 'rd100', 'hercules'];
+}
+
+function offPageRowHtml(client, category, kwObj) {
+  const kwid      = kwObj.id;
+  const label     = kwObj.keyword || '(blank)';
+  const rank      = kwObj.rank;
+  const rankLabel = rank ? `#${rank}` : '—';
+  const suggested = opgSuggestStrategies(kwObj);
+  const selected  = kwObj.opgStrategy || '';
+  const selStrat  = SEONEO_STRATEGIES.find(s => s.id === selected);
+
+  const stratOptions = `<option value="">— None selected —</option>` +
+    SEONEO_STRATEGIES.map(s =>
+      `<option value="${s.id}"${selected === s.id ? ' selected' : ''}>${escHtml(s.name)}</option>`
+    ).join('');
+
+  const badges = suggested.map(id => {
+    const s = SEONEO_STRATEGIES.find(x => x.id === id);
+    return `<span class="wk-opg-badge${selected === id ? ' wk-opg-badge-active' : ''}" data-strat-id="${id}" title="${escHtml(s?.desc || '')}">${escHtml(s?.name || id)}</span>`;
+  }).join('');
+
+  return `
+    <div class="wk-item-row wk-item-offpage">
+      <div class="wk-item-main">
+        <button class="wk-opg-toggle" data-kwid="${escHtml(kwid)}" title="Off-page strategy">▸</button>
+        <span class="wk-item-label" title="${escHtml(label)}">${escHtml(label)}</span>
+        ${weeklyStatusSelectHtml(client.id, category.key, kwid)}
+      </div>
+      <div class="wk-opg-accordion" id="wk-opg-${escHtml(kwid)}">
+        <div class="wk-opg-inner">
+          <div class="wk-opg-row">
+            <span class="wk-opg-meta">Rank ${escHtml(rankLabel)}</span>
+            <select class="wk-opg-strategy-select" data-kwid="${escHtml(kwid)}">${stratOptions}</select>
+          </div>
+          <div class="wk-opg-desc" style="${selStrat?.desc ? '' : 'display:none'}">${escHtml(selStrat?.desc || '')}</div>
+          <div class="wk-opg-suggest">
+            <span class="wk-opg-suggest-label">Suggested for rank ${escHtml(rankLabel)}:</span>
+            ${badges}
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
 let weeklyData        = null;  // null = still loading; { schedule, tasks } once loaded
 let weeklySelectedDay  = null;  // which day's checklist is shown; defaults to today
 
@@ -2338,9 +2412,10 @@ function weeklyStatusSelectHtml(clientId, category, itemKey) {
 }
 
 function weeklyCategorySectionHtml(client, category) {
+  const mkKws = (client.keywords || []).filter(k => k.mainKeyword);
   const items = category.scope === 'mk'
-    ? (client.keywords || []).filter(k => k.mainKeyword).map(k => ({ key: k.id, label: k.keyword || '(blank)' }))
-    : weeklyClientPages(client).map(page => ({ key: page, label: page }));
+    ? mkKws.map(k => ({ key: k.id, label: k.keyword || '(blank)', kw: k }))
+    : weeklyClientPages(client).map(page => ({ key: page, label: page, kw: null }));
 
   if (!items.length) {
     const emptyMsg = category.scope === 'mk'
@@ -2352,11 +2427,16 @@ function weeklyCategorySectionHtml(client, category) {
     </div>`;
   }
 
-  const rows = items.map(item => `
-    <div class="wk-item-row">
-      <span class="wk-item-label" title="${escHtml(item.label)}">${escHtml(item.label)}</span>
-      ${weeklyStatusSelectHtml(client.id, category.key, item.key)}
-    </div>`).join('');
+  const rows = items.map(item => {
+    if (category.key === 'offPage' && item.kw) {
+      return offPageRowHtml(client, category, item.kw);
+    }
+    return `
+      <div class="wk-item-row">
+        <span class="wk-item-label" title="${escHtml(item.label)}">${escHtml(item.label)}</span>
+        ${weeklyStatusSelectHtml(client.id, category.key, item.key)}
+      </div>`;
+  }).join('');
 
   return `<div class="wk-category">
     <div class="wk-category-title">${escHtml(category.label)} <span class="wk-category-count">(${items.length})</span></div>
@@ -2441,6 +2521,41 @@ function weeklyRender() {
       weeklySetStatus(sel.dataset.client, sel.dataset.category, sel.dataset.item, sel.value);
       const meta = WEEKLY_STATUSES.find(s => s.key === sel.value);
       sel.className = 'wk-status-select ' + (meta?.cls || '');
+    });
+  });
+
+  body.querySelectorAll('.wk-opg-toggle').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const accordion = document.getElementById('wk-opg-' + btn.dataset.kwid);
+      if (!accordion) return;
+      const open = accordion.classList.toggle('wk-opg-open');
+      btn.textContent = open ? '▾' : '▸';
+    });
+  });
+
+  body.querySelectorAll('.wk-opg-strategy-select').forEach(sel => {
+    sel.addEventListener('change', () => {
+      const client = rtData?.clients?.find(c => c.id === (sel.closest('.wk-client-block') ? sel.dataset.kwid : null))
+                  ?? rtActiveClient();
+      const kw = client?.keywords?.find(k => k.id === sel.dataset.kwid)
+              ?? rtData?.clients?.flatMap(c => c.keywords || []).find(k => k.id === sel.dataset.kwid);
+      if (kw) { kw.opgStrategy = sel.value; rtSave(); }
+      const inner  = sel.closest('.wk-opg-inner');
+      if (!inner) return;
+      const strat  = SEONEO_STRATEGIES.find(s => s.id === sel.value);
+      const descEl = inner.querySelector('.wk-opg-desc');
+      if (descEl) { descEl.textContent = strat?.desc || ''; descEl.style.display = strat?.desc ? '' : 'none'; }
+      inner.querySelectorAll('.wk-opg-badge').forEach(b =>
+        b.classList.toggle('wk-opg-badge-active', b.dataset.stratId === sel.value));
+    });
+  });
+
+  body.querySelectorAll('.wk-opg-badge').forEach(badge => {
+    badge.addEventListener('click', () => {
+      const inner = badge.closest('.wk-opg-inner');
+      const stratSel = inner?.querySelector('.wk-opg-strategy-select');
+      if (stratSel) { stratSel.value = badge.dataset.stratId; stratSel.dispatchEvent(new Event('change')); }
     });
   });
 }
