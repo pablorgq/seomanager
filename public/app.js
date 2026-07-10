@@ -1827,6 +1827,26 @@ function rtRender() {
     : emptyRow('No other keywords');
 }
 
+const TASK_FIELDS = [
+  { key: 'spc',     label: 'SPC',  title: 'Support Pages Creation' },
+  { key: 'schema',  label: 'SCH',  title: 'Schema Optimization' },
+  { key: 'co',      label: 'CO',   title: 'Content Optimization' },
+  { key: 'offpage', label: 'OPG',  title: 'Off-Page Campaign' },
+];
+const TASK_STATES = [
+  { val: 0, icon: '—',  cls: 'rt-task-none', tip: 'Not started' },
+  { val: 1, icon: '~',  cls: 'rt-task-prog', tip: 'In progress' },
+  { val: 2, icon: '✓',  cls: 'rt-task-done', tip: 'Done' },
+];
+
+function rtTaskCell(kw, taskKey, taskTitle) {
+  const v   = kw[taskKey] ?? 0;
+  const st  = TASK_STATES[v] || TASK_STATES[0];
+  return `<td class="rt-td-task"><button class="rt-task-btn ${st.cls}"
+    data-id="${escHtml(kw.id)}" data-task="${escHtml(taskKey)}"
+    title="${escHtml(taskTitle + ': ' + st.tip)}">${st.icon}</button></td>`;
+}
+
 function rtRowHtml(kw, client) {
   const coraCell = kw.coraFileName
     ? `<td class="rt-td-cora"><button class="rt-cora-btn" data-id="${escHtml(kw.id)}" title="View Cora report: ${escHtml(kw.coraFileName)}">📊</button></td>`
@@ -1837,6 +1857,7 @@ function rtRowHtml(kw, client) {
   const repCell  = `<td class="rt-td-rep"><button class="rt-rep-btn${savedRep ? ' rt-rep-has' : ''}"
     data-client="${escHtml(client.id)}" data-kw="${escHtml(kw.keyword || '')}"
     title="${escHtml(repTip)}"${savedRep ? '' : ' disabled'}>📄</button></td>`;
+  const taskCells = TASK_FIELDS.map(t => rtTaskCell(kw, t.key, t.title)).join('');
   return `
     <tr data-id="${escHtml(kw.id)}">
       <td class="rt-td-rank">${rtRankBadge(kw.rank, kw.prevRank)}</td>
@@ -1851,6 +1872,7 @@ function rtRowHtml(kw, client) {
       <td class="rt-td-pop">${rtPopCell(kw)}</td>
       ${coraCell}
       ${repCell}
+      ${taskCells}
       <td class="rt-td-note rt-editable" data-field="note">${escHtml(kw.note || '')}</td>
       <td class="rt-td-check">${escHtml(rtFormatDate(kw.lastCheck) || '')}</td>
       <td class="rt-td-del"><button class="rt-del-btn" title="Delete row">✕</button></td>
@@ -2008,7 +2030,14 @@ function dbRender() {
       ? (avgRank + avgLocalRank) / 2
       : avgRank !== null ? avgRank : avgLocalRank;
 
-    return { c, mkKws, ranked, avgRank, avgDelta, top3, top10, topKws, avgLocalRank, avgTotal };
+    // SEO task completion %  per TASK_FIELDS across all MK keywords
+    const taskPct = {};
+    for (const tf of TASK_FIELDS) {
+      const done = mkKws.filter(k => (k[tf.key] ?? 0) === 2).length;
+      taskPct[tf.key] = mkKws.length ? Math.round((done / mkKws.length) * 100) : null;
+    }
+
+    return { c, mkKws, ranked, avgRank, avgDelta, top3, top10, topKws, avgLocalRank, avgTotal, taskPct };
   });
 
   scored.sort((a, b) => {
@@ -2018,7 +2047,7 @@ function dbRender() {
     return a.avgTotal - b.avgTotal;
   });
 
-  grid.innerHTML = scored.map(({ c, mkKws, ranked, avgRank, avgDelta, top3, top10, topKws, avgLocalRank, avgTotal }, i) => {
+  grid.innerHTML = scored.map(({ c, mkKws, ranked, avgRank, avgDelta, top3, top10, topKws, avgLocalRank, avgTotal, taskPct }, i) => {
     const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `<span class="db-pos-num">#${i + 1}</span>`;
     const hasMk    = mkKws.length > 0;
     const hasScore = avgTotal !== null;
@@ -2046,6 +2075,16 @@ function dbRender() {
         <span class="db-mk-count">${mkKws.length} MK</span>
       </div>
       ${dbTaskChipsHtml(c)}
+      ${mkKws.length ? `<div class="db-seo-tasks">${TASK_FIELDS.map(tf => {
+        const pct = taskPct[tf.key];
+        const cls = pct === null ? '' : pct === 100 ? 'db-st-done' : pct > 0 ? 'db-st-prog' : 'db-st-none';
+        const label = pct === null ? '—' : pct + '%';
+        return `<div class="db-st-item ${cls}" title="${escHtml(tf.title + ': ' + label)}">
+          <div class="db-st-label">${escHtml(tf.label)}</div>
+          <div class="db-st-val">${label}</div>
+          <div class="db-st-bar"><div class="db-st-fill" style="width:${pct ?? 0}%"></div></div>
+        </div>`;
+      }).join('')}</div>` : ''}
       ${hasScore ? `
       <div class="db-score-row">
         <div class="db-score-total">
@@ -2470,6 +2509,17 @@ async function rtInit() {
     const repBtn = e.target.closest('.rt-rep-btn');
     if (repBtn && !repBtn.disabled) {
       showPopReport(repBtn.dataset.client, repBtn.dataset.kw);
+      return;
+    }
+
+    const taskBtn = e.target.closest('.rt-task-btn');
+    if (taskBtn) {
+      const kw = rtActiveClient()?.keywords?.find(k => k.id === taskBtn.dataset.id);
+      if (kw) {
+        const field = taskBtn.dataset.task;
+        kw[field] = ((kw[field] ?? 0) + 1) % 3;
+        rtSave(); rtRender(); dbRender();
+      }
       return;
     }
 

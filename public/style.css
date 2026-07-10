@@ -1385,3 +1385,34 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
   color: var(--text-primary);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+
+/* ── RT task columns ── */
+.rt-th-task { width: 30px; text-align: center; font-size: 10px; color: var(--text-muted); }
+.rt-td-task { text-align: center; }
+.rt-task-btn {
+  background: none; border: 1px solid var(--border);
+  border-radius: 4px; cursor: pointer;
+  width: 22px; height: 22px; font-size: 11px; font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: all .15s;
+}
+.rt-task-none { color: var(--text-muted); opacity: .4; }
+.rt-task-prog { color: #e8a838; border-color: #e8a838; background: rgba(232,168,56,.1); opacity: 1; }
+.rt-task-done { color: var(--green); border-color: var(--green); background: rgba(45,158,107,.1); opacity: 1; }
+.rt-task-btn:hover { opacity: 1 !important; transform: scale(1.15); }
+
+/* ── Dashboard SEO task progress bars ── */
+.db-seo-tasks {
+  display: grid; grid-template-columns: repeat(4,1fr);
+  gap: 6px; padding: 10px 0 4px;
+  border-top: 1px solid var(--border); margin-top: 8px;
+}
+.db-st-item { text-align: center; }
+.db-st-label { font-size: 9px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em; }
+.db-st-val   { font-size: 13px; font-weight: 800; margin: 1px 0; color: var(--text-muted); }
+.db-st-bar   { height: 4px; background: var(--surface-3); border-radius: 2px; overflow: hidden; }
+.db-st-fill  { height: 100%; border-radius: 2px; background: var(--text-muted); transition: width .3s; }
+.db-st-prog .db-st-val  { color: #e8a838; }
+.db-st-prog .db-st-fill { background: #e8a838; }
+.db-st-done .db-st-val  { color: var(--green); }
+.db-st-done .db-st-fill { background: var(--green); }
