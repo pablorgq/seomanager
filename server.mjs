@@ -210,6 +210,24 @@ async function gscApiFetch(url, options = {}) {
 
 loadGscTokens();
 
+/* ─────────────────────────────────────────────
+   ACTIVITY LOG  (task status change history)
+───────────────────────────────────────────── */
+const ACTLOG_FILE = join(__dirname, '.activitylog.json');
+const ACTLOG_MAX  = 2000;
+let   activityLog = [];
+
+function loadActivityLog() {
+  if (!existsSync(ACTLOG_FILE)) return;
+  try { activityLog = JSON.parse(readFileSync(ACTLOG_FILE, 'utf8')) || []; }
+  catch (e) { console.warn('[actlog] load error:', e.message); }
+}
+function saveActivityLog() {
+  try { writeFileSync(ACTLOG_FILE, JSON.stringify(activityLog)); }
+  catch (e) { console.warn('[actlog] save error:', e.message); }
+}
+loadActivityLog();
+
 function createSession() {
   const token = randomBytes(32).toString('hex');
   sessions.set(token, { expiresAt: Date.now() + SESSION_TTL });
@@ -696,6 +714,23 @@ app.post('/api/gcs/create-folder', apiGuard, async (req, res) => {
     console.error('[gcs create-folder]', e.message);
     res.status(500).json({ error: { message: `GCS error: ${e.message}` } });
   }
+});
+
+/* ─────────────────────────────────────────────
+   ACTIVITY LOG ROUTES
+───────────────────────────────────────────── */
+
+app.get('/api/activitylog', apiGuard, (req, res) => {
+  res.json({ entries: activityLog });
+});
+
+app.post('/api/activitylog', apiGuard, (req, res) => {
+  const { entries } = req.body || {};
+  if (!Array.isArray(entries) || !entries.length)
+    return res.status(400).json({ error: 'entries array required' });
+  activityLog = [...entries, ...activityLog].slice(0, ACTLOG_MAX);
+  saveActivityLog();
+  res.json({ ok: true, total: activityLog.length });
 });
 
 /* ─────────────────────────────────────────────

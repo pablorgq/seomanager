@@ -55,6 +55,28 @@ let hasPop  = false;
 let generatedBlogs = [];
 let igImages = [];
 
+/* ── ACTIVITY LOG ── */
+let activityLog   = [];
+let actLogPending = [];
+let actLogTimer   = null;
+
+function logActivity(entry) {
+  const full = { ...entry, ts: new Date().toISOString(), id: '_' + Math.random().toString(36).slice(2, 9) };
+  activityLog.unshift(full);
+  actLogPending.push(full);
+  clearTimeout(actLogTimer);
+  actLogTimer = setTimeout(async () => {
+    if (!actLogPending.length) return;
+    const batch = actLogPending.splice(0);
+    try {
+      await fetch('/api/activitylog', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entries: batch }),
+      });
+    } catch (_) { actLogPending.unshift(...batch); }
+  }, 800);
+}
+
 /* ── ROUTER ── */
 const TAB_ROUTES = {
   dashboard: '/',
@@ -63,6 +85,7 @@ const TAB_ROUTES = {
   cora:      '/cora',
   files:     '/files',
   gsc:       '/gsc',
+  log:       '/log',
   weekly:    '/weekly-tasks',
   brands:    '/blog-brands',
   images:    '/image-generator',
@@ -78,6 +101,7 @@ function switchTab(tab, { pushState = true } = {}) {
   if (tab === 'dashboard') dbRender();
   if (tab === 'files') filesRender();
   if (tab === 'gsc') gscRender();
+  if (tab === 'log') logTabRender();
   if (tab === 'weekly') weeklyRender();
   if (pushState) {
     const path = TAB_ROUTES[tab];
@@ -2385,6 +2409,20 @@ function dbTaskChipsHtml(client) {
 }
 
 function weeklySetStatus(clientId, category, itemKey, status) {
+  const from = weeklyData.tasks?.[clientId]?.[category]?.[itemKey] ?? 'not_started';
+  if (from !== status) {
+    const client    = rtData?.clients?.find(c => c.id === clientId);
+    const cat       = WEEKLY_CATEGORIES.find(c => c.key === category);
+    const kw        = client?.keywords?.find(k => k.id === itemKey);
+    logActivity({
+      type: 'weekly', clientId, clientName: client?.name || clientId,
+      category, categoryLabel: cat?.label || category,
+      itemKey,  itemLabel: kw?.keyword || itemKey,
+      from, to: status,
+      fromLabel: WEEKLY_STATUSES.find(s => s.key === from)?.label  || from,
+      toLabel:   WEEKLY_STATUSES.find(s => s.key === status)?.label || status,
+    });
+  }
   if (!weeklyData.tasks[clientId]) weeklyData.tasks[clientId] = {};
   if (!weeklyData.tasks[clientId][category]) weeklyData.tasks[clientId][category] = {};
   weeklyData.tasks[clientId][category][itemKey] = status;
@@ -2560,6 +2598,115 @@ function weeklyRender() {
       if (stratSel) { stratSel.value = badge.dataset.stratId; stratSel.dispatchEvent(new Event('change')); }
     });
   });
+}
+
+/* ════════════════════════════════════════════════
+   ACTIVITY LOG TAB
+════════════════════════════════════════════════ */
+
+let logFilterClient   = '';
+let logFilterCategory = '';
+let logFilterDays     = 0;   // 0 = all time
+
+function logFmtTs(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function logStatusPill(label, type, value) {
+  let cls = 'log-pill';
+  if (type === 'weekly') {
+    const m = WEEKLY_STATUSES.find(s => s.label === label || s.key === value);
+    if (m) cls += ' ' + m.cls;
+  } else {
+    const state = TASK_STATES.find(s => s.tip === label || s.val === value);
+    if (state) cls += ' rt-task-' + (state.val === 0 ? 'none' : state.val === 1 ? 'prog' : 'done');
+  }
+  return `<span class="${cls}">${escHtml(label)}</span>`;
+}
+
+function logApplyFilters(entries) {
+  let list = entries;
+  if (logFilterClient)   list = list.filter(e => e.clientId === logFilterClient);
+  if (logFilterCategory) list = list.filter(e => e.category === logFilterCategory);
+  if (logFilterDays) {
+    const cutoff = Date.now() - logFilterDays * 86400000;
+    list = list.filter(e => new Date(e.ts).getTime() >= cutoff);
+  }
+  return list;
+}
+
+function logRenderList() {
+  const listEl = document.getElementById('log-list');
+  if (!listEl) return;
+  const filtered = logApplyFilters(activityLog);
+  if (!filtered.length) {
+    listEl.innerHTML = '<div class="log-empty">No log entries yet — status changes will appear here.</div>';
+    return;
+  }
+  listEl.innerHTML = filtered.map(e => `
+    <div class="log-entry">
+      <span class="log-entry-ts">${escHtml(logFmtTs(e.ts))}</span>
+      <span class="log-entry-client">${escHtml(e.clientName || e.clientId || '—')}</span>
+      <span class="log-entry-cat">${escHtml(e.categoryLabel || e.category)}</span>
+      <span class="log-entry-item" title="${escHtml(e.itemLabel || e.itemKey || '')}">${escHtml(e.itemLabel || e.itemKey || '—')}</span>
+      <span class="log-entry-arrow">→</span>
+      ${logStatusPill(e.fromLabel, e.type, e.from)}
+      <span class="log-entry-arrow">→</span>
+      ${logStatusPill(e.toLabel, e.type, e.to)}
+    </div>`).join('');
+}
+
+function logBuildControls() {
+  const controlsEl = document.getElementById('log-controls');
+  if (!controlsEl) return;
+
+  const clients    = rtData?.clients ?? [];
+  const categories = [
+    ...WEEKLY_CATEGORIES.map(c => ({ key: c.key, label: c.label })),
+    ...TASK_FIELDS.map(f => ({ key: f.key, label: f.title })),
+  ];
+
+  const clientOpts = `<option value="">All clients</option>` +
+    clients.map(c => `<option value="${escHtml(c.id)}"${logFilterClient === c.id ? ' selected' : ''}>${escHtml(c.name)}</option>`).join('');
+  const catOpts = `<option value="">All categories</option>` +
+    categories.map(c => `<option value="${escHtml(c.key)}"${logFilterCategory === c.key ? ' selected' : ''}>${escHtml(c.label)}</option>`).join('');
+  const dayOpts = [
+    { v: 0, l: 'All time' }, { v: 7, l: 'Last 7 days' },
+    { v: 30, l: 'Last 30 days' }, { v: 90, l: 'Last 90 days' },
+  ].map(o => `<option value="${o.v}"${logFilterDays === o.v ? ' selected' : ''}>${o.l}</option>`).join('');
+
+  controlsEl.innerHTML = `
+    <select id="log-filter-client"   class="log-filter-select">${clientOpts}</select>
+    <select id="log-filter-category" class="log-filter-select">${catOpts}</select>
+    <select id="log-filter-days"     class="log-filter-select">${dayOpts}</select>
+    <span class="log-count">${escHtml(String(logApplyFilters(activityLog).length))} entries</span>`;
+
+  document.getElementById('log-filter-client')?.addEventListener('change', e => {
+    logFilterClient = e.target.value; logRenderList();
+    controlsEl.querySelector('.log-count').textContent = logApplyFilters(activityLog).length + ' entries';
+  });
+  document.getElementById('log-filter-category')?.addEventListener('change', e => {
+    logFilterCategory = e.target.value; logRenderList();
+    controlsEl.querySelector('.log-count').textContent = logApplyFilters(activityLog).length + ' entries';
+  });
+  document.getElementById('log-filter-days')?.addEventListener('change', e => {
+    logFilterDays = parseInt(e.target.value) || 0; logRenderList();
+    controlsEl.querySelector('.log-count').textContent = logApplyFilters(activityLog).length + ' entries';
+  });
+}
+
+async function logTabRender() {
+  if (!activityLog.length) {
+    try {
+      const r = await fetch('/api/activitylog');
+      if (r.ok) { const d = await r.json(); activityLog = d.entries || []; }
+    } catch (_) {}
+  }
+  logBuildControls();
+  logRenderList();
 }
 
 /* ════════════════════════════════════════════════
@@ -2935,8 +3082,20 @@ async function rtInit() {
     if (taskBtn) {
       const kw = rtActiveClient()?.keywords?.find(k => k.id === taskBtn.dataset.id);
       if (kw) {
-        const field = taskBtn.dataset.task;
-        kw[field] = ((kw[field] ?? 0) + 1) % 3;
+        const field  = taskBtn.dataset.task;
+        const from   = kw[field] ?? 0;
+        const to     = (from + 1) % 3;
+        const tf     = TASK_FIELDS.find(f => f.key === field);
+        const client = rtActiveClient();
+        logActivity({
+          type: 'rt', clientId: client?.id || '', clientName: client?.name || '',
+          category: field, categoryLabel: tf?.title || field,
+          itemKey: kw.id, itemLabel: kw.keyword || kw.id,
+          from, to,
+          fromLabel: TASK_STATES.find(s => s.val === from)?.tip || String(from),
+          toLabel:   TASK_STATES.find(s => s.val === to)?.tip   || String(to),
+        });
+        kw[field] = to;
         rtSave(); rtRender(); dbRender();
       }
       return;

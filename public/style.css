@@ -1091,6 +1091,35 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
 .gsc-pos-p2   { color: var(--text-secondary); }
 .gsc-pos-deep { color: var(--text-muted); }
 
+/* ── ACTIVITY LOG ── */
+.log-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; }
+.log-filter-select { font-size: 12px; padding: 5px 10px; }
+.log-count { font-size: 11px; color: var(--text-muted); margin-left: 4px; }
+.log-list { display: flex; flex-direction: column; }
+.log-entry {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  border-bottom: 1px solid var(--border); padding: 9px 2px; font-size: 12px;
+}
+.log-entry:last-child { border-bottom: none; }
+.log-entry-ts { font-family: monospace; font-size: 11px; color: var(--text-muted); min-width: 130px; flex-shrink: 0; }
+.log-entry-client { font-weight: 700; color: var(--text-primary); }
+.log-entry-cat { color: var(--accent); font-size: 11px; font-weight: 600; padding: 1px 7px; background: rgba(99,102,241,.08); border-radius: 100px; }
+.log-entry-item { color: var(--text-secondary); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-entry-arrow { color: var(--text-muted); flex-shrink: 0; }
+.log-pill {
+  font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 100px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text-muted);
+  white-space: nowrap;
+}
+.log-pill.wk-status-progress { background: rgba(232,168,56,.16); color: #8a5c00; border-color: transparent; }
+.log-pill.wk-status-done     { background: rgba(45,158,107,.14); color: var(--green); border-color: transparent; }
+.log-pill.wk-status-blocked  { background: rgba(229,56,59,.1);   color: var(--red);   border-color: transparent; }
+.log-pill.rt-task-prog { background: rgba(232,168,56,.16); color: #8a5c00; border-color: transparent; }
+.log-pill.rt-task-done { background: rgba(45,158,107,.14); color: var(--green); border-color: transparent; }
+:root[data-theme="dark"] .log-pill.wk-status-progress,
+:root[data-theme="dark"] .log-pill.rt-task-prog { color: #e8a838; }
+.log-empty { text-align: center; color: var(--text-muted); padding: 48px 0; font-size: 13px; }
+
 /* ── RANK TRACKER ── */
 .rt-topbar {
   display: flex; align-items: center; justify-content: space-between;
