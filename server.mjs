@@ -6,6 +6,7 @@ import { readFileSync, writeFileSync, existsSync, rmSync } from 'fs';
 import { Storage } from '@google-cloud/storage';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const DATA_DIR  = existsSync('/data') ? '/data' : __dirname;
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
@@ -68,7 +69,7 @@ if (!AUTH_PASS) {
 ───────────────────────────────────────────── */
 const sessions = new Map();          // token → { expiresAt }
 const SESSION_TTL = 30 * 24 * 60 * 60 * 1000;  // 30 days
-const SESSIONS_FILE = join(__dirname, '.sessions.json');
+const SESSIONS_FILE = join(DATA_DIR, '.sessions.json');
 
 function loadSessions() {
   if (!existsSync(SESSIONS_FILE)) return;
@@ -98,7 +99,7 @@ loadSessions();
    reports — persisted server-side so it survives
    browser/device switches, not just localStorage)
 ───────────────────────────────────────────── */
-const RANKDATA_FILE = join(__dirname, '.rankdata.json');
+const RANKDATA_FILE = join(DATA_DIR, '.rankdata.json');
 const RANKDATA_DEFAULT = { rtData: { clients: [], activeClientId: null }, reports: {} };
 
 function loadRankData() {
@@ -127,7 +128,7 @@ function saveRankData(data) {
    WEEKLY CLIENT TASKS  (day-of-week → client
    schedule + per-client recurring task checklist)
 ───────────────────────────────────────────── */
-const WEEKLYDATA_FILE = join(__dirname, '.weeklydata.json');
+const WEEKLYDATA_FILE = join(DATA_DIR, '.weeklydata.json');
 const WEEKLYDATA_DEFAULT = {
   schedule: { mon: [], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] },
   tasks: {},
@@ -158,7 +159,7 @@ function saveWeeklyData(data) {
 /* ─────────────────────────────────────────────
    GSC OAUTH TOKENS  (persisted so they survive restarts)
 ───────────────────────────────────────────── */
-const GSC_TOKENS_FILE = join(__dirname, '.gsc-tokens.json');
+const GSC_TOKENS_FILE = join(DATA_DIR, '.gsc-tokens.json');
 let gscTokens = null;
 
 function loadGscTokens() {
@@ -213,7 +214,7 @@ loadGscTokens();
 /* ─────────────────────────────────────────────
    ACTIVITY LOG  (task status change history)
 ───────────────────────────────────────────── */
-const ACTLOG_FILE = join(__dirname, '.activitylog.json');
+const ACTLOG_FILE = join(DATA_DIR, '.activitylog.json');
 const ACTLOG_MAX  = 2000;
 let   activityLog = [];
 
