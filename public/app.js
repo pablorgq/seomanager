@@ -1283,7 +1283,6 @@ async function agStartFlow() {
   try {
     agSetStep(0, 'active');
     const body1 = { apiKey: popKey, keyword, locationName: locName, targetUrl, targetLanguage: targLang };
-    if (competitors.length) body1.competitors = competitors;
     const r1 = await agPopPost('/expose/get-terms/', body1);
     const tid1 = r1.taskId || r1.task_id || r1.id;
     if (!tid1) throw new Error('No taskId from get-terms — response: ' + JSON.stringify(r1).slice(0, 200));
