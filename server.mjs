@@ -486,7 +486,7 @@ app.post('/login', (req, res) => {
   const token  = createSession();
   const secure = isSecureRequest(req);
   res.setHeader('Set-Cookie',
-    `sm_auth=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${30 * 24 * 60 * 60}${secure ? '; Secure' : ''}`
+    `sm_auth=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${30 * 24 * 60 * 60}${secure ? '; Secure' : ''}`
   );
   res.redirect('/');
 });
@@ -494,7 +494,7 @@ app.post('/login', (req, res) => {
 app.get('/logout', (req, res) => {
   const token = parseCookies(req).sm_auth;
   if (token) { sessions.delete(token); saveSessions(); }   // server-side invalidation
-  res.setHeader('Set-Cookie', 'sm_auth=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
+  res.setHeader('Set-Cookie', 'sm_auth=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
   res.redirect('/login');
 });
 
