@@ -2938,8 +2938,8 @@ Please run the full GSC audit on this data. Be specific — cite query names and
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({
-        model:      'claude-sonnet-5',
-        max_tokens: 8000,
+        model:      'claude-haiku-4-5',
+        max_tokens: 4000,
         system:     systemPrompt,
         messages:   [{ role: 'user', content: userMessage }],
       }),
