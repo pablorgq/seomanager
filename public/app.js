@@ -2888,6 +2888,13 @@ async function gscRunAI(siteUrl, days) {
   btn.disabled = true; btn.textContent = 'Analyzing…';
   result.style.display = 'none';
 
+  if (!gscRows.length) {
+    result.style.display = '';
+    result.innerHTML = '<div class="gsc-msg gsc-error">Load GSC data first before running AI analysis.</div>';
+    btn.disabled = false; btn.textContent = 'Get AI Recommendations';
+    return;
+  }
+
   const tracked   = gscAllTrackedKeywords();
   const top50     = gscRows.slice(0, 50);
   const tableText = top50.map(r =>
@@ -2939,7 +2946,12 @@ Please run the full GSC audit on this data. Be specific — cite query names and
     });
     if (!r.ok) { const d = await r.json(); throw new Error(d.error?.message || `HTTP ${r.status}`); }
     const d = await r.json();
-    const text = d.content?.[0]?.text || '';
+    const text = d.content?.find(b => b.type === 'text')?.text || '';
+    if (!text) {
+      result.style.display = '';
+      result.innerHTML = '<div class="gsc-msg gsc-error">AI returned no content. Check ANTHROPIC_API_KEY is set in Railway and try again.</div>';
+      return;
+    }
     result.style.display = '';
     result.innerHTML = '<div class="gsc-ai-content">' +
       escHtml(text)
