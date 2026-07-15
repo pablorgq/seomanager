@@ -14,6 +14,7 @@ const PORT = process.env.PORT || 3000;
    CREDENTIALS  (never hardcoded — env vars only)
 ───────────────────────────────────────────── */
 const OPENAI_KEY        = process.env.OPENAI_API_KEY      || null;
+const ANTHROPIC_KEY     = process.env.ANTHROPIC_API_KEY   || null;
 const AUTH_USER         = process.env.AUTH_USER            || 'pablo';
 const AUTH_PASS         = process.env.AUTH_PASS            || null;
 
@@ -623,6 +624,24 @@ app.post('/api/aa', apiGuard, async (req, res) => {
 app.post('/api/openai/text',   apiGuard, (req, res) => proxyOpenAI('https://api.openai.com/v1/responses', req, res));
 app.post('/api/openai/images', apiGuard, (req, res) => proxyOpenAI('https://api.openai.com/v1/images/generations', req, res));
 app.post('/api/openai/chat',   apiGuard, (req, res) => proxyOpenAI('https://api.openai.com/v1/chat/completions', req, res));
+
+app.post('/api/claude/chat', apiGuard, async (req, res) => {
+  if (!ANTHROPIC_KEY) return res.status(503).json({ error: { message: 'ANTHROPIC_API_KEY not configured on server.' } });
+  try {
+    const up = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key':         ANTHROPIC_KEY,
+        'anthropic-version': '2023-06-01',
+        'content-type':      'application/json',
+      },
+      body: JSON.stringify(req.body),
+    });
+    res.status(up.status).json(await up.json());
+  } catch {
+    res.status(502).json({ error: { message: 'Upstream request failed. Try again.' } });
+  }
+});
 
 /* ─────────────────────────────────────────────
    FETCH EXISTING PAGE CONTENT

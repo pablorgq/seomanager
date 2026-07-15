@@ -2861,7 +2861,7 @@ function gscRenderResults(siteUrl, days, startDate, endDate) {
 
     <div class="gsc-ai-bar">
       <button id="gsc-ai-btn" class="btn-sm btn-accent">Get AI Recommendations</button>
-      <span class="gsc-ai-note">Sends top queries to OpenAI for expert SEO analysis</span>
+      <span class="gsc-ai-note">Sends top queries to Claude for senior SEO audit</span>
     </div>
     <div id="gsc-ai-result" class="gsc-ai-result" style="display:none"></div>
 
@@ -2888,56 +2888,63 @@ async function gscRunAI(siteUrl, days) {
   btn.disabled = true; btn.textContent = 'Analyzing…';
   result.style.display = 'none';
 
-  const tracked    = gscAllTrackedKeywords();
-  const top50      = gscRows.slice(0, 50);
-  const tableText  = top50.map(r =>
+  const tracked   = gscAllTrackedKeywords();
+  const top50     = gscRows.slice(0, 50);
+  const tableText = top50.map(r =>
     `${r.keys?.[0] || ''} | clicks:${r.clicks} | imp:${r.impressions} | ctr:${(r.ctr*100).toFixed(1)}% | pos:${r.position.toFixed(1)}`
   ).join('\n');
 
-  const prompt = `You are a senior SEO expert. Analyze this Google Search Console data and give actionable recommendations.
+  const systemPrompt = `You are a senior SEO analyst with 10+ years of hands-on experience auditing Google Search Console (GSC) data for clients across e-commerce, SaaS, content, and local business sites. You think like a consultant, not a report generator: you prioritize findings by business impact, flag what's urgent vs. nice-to-have, and always translate raw numbers into a clear action plan a non-technical client can understand.
 
-SITE: ${siteUrl}
+You are precise, evidence-based, and never invent data. If a metric isn't in the data provided, say so explicitly rather than guessing.
+
+Run through each of the following analyses. For each, state: what you found → why it matters → recommended action. Use bullet points and tables where useful. Cite the actual numbers from the data for every claim.
+
+1. CTR vs. Position Mismatches — pages/queries ranking 1–3 with below-average CTR (benchmark: pos 1 ≈ 25-35%, pos 2-3 ≈ 10-20%); also positions 15-30 with unusually high CTR (quick-win candidates).
+2. Striking-Distance Keywords — queries at position 8-20 with meaningful impression volume; rank by estimated opportunity.
+3. Branded vs. Non-Branded Split — classify queries; flag if branded >60-70% of clicks.
+4. Decay Patterns — identify queries/pages with notable click or impression drops.
+5. New/Unplanned Query Opportunities — queries generating impressions with no obvious matching page.
+6. Impression Spikes Without Click Growth — impressions rose but clicks flat or declining.
+7. Untracked Performers — keywords getting clicks that aren't in the Rank Tracker list.
+
+Output structure:
+1. Executive Summary (3-5 bullets, plain language, client-facing tone)
+2. Findings by Category (sections above, only where data supports a finding)
+3. Priority Action Plan — table with: Finding | Impact (High/Med/Low) | Effort (High/Med/Low) | Recommended Action
+4. Data Gaps — any analysis you couldn't complete due to missing data`;
+
+  const userMessage = `SITE: ${siteUrl}
 PERIOD: Last ${days} days
 
-TOP 50 QUERIES (by impressions):
+TOP QUERIES (by impressions):
 Query | Clicks | Impressions | CTR | Avg Position
 ${tableText}
 
-KEYWORDS CURRENTLY TRACKED IN RANK TRACKER:
+KEYWORDS CURRENTLY IN RANK TRACKER:
 ${tracked.slice(0, 40).join(', ') || 'none'}
 
-Provide your analysis in exactly these sections — be specific, cite keyword names and numbers:
-
-## Quick Wins (Positions 4–15)
-List the top 5 keywords near page 1 with their current position and what specific action would push them to top 3.
-
-## CTR Problems
-List keywords ranking top 3 but with under-performing CTR. For each, suggest a better title tag or meta description angle.
-
-## Content Gap Opportunities
-Identify 5 high-impression queries (pos 11–50) that need dedicated content or page optimization. Explain why each is an opportunity.
-
-## Untracked Performers
-List any keywords getting clicks that seem important but aren't in the current tracking list.
-
-## Priority Action List
-Give 5 prioritized actions to take this month, ordered by estimated impact.
-
-Keep each section concise and actionable. Use data from the table to support every recommendation.`;
+Please run the full GSC audit on this data. Be specific — cite query names and actual numbers for every finding.`;
 
   try {
-    const r = await fetch('/api/openai/chat', {
+    const r = await fetch('/api/claude/chat', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ model: 'gpt-4o', max_tokens: 1800, messages: [{ role: 'user', content: prompt }] }),
+      body:    JSON.stringify({
+        model:      'claude-sonnet-5',
+        max_tokens: 2500,
+        system:     systemPrompt,
+        messages:   [{ role: 'user', content: userMessage }],
+      }),
     });
     if (!r.ok) { const d = await r.json(); throw new Error(d.error?.message || `HTTP ${r.status}`); }
     const d = await r.json();
-    const text = d.choices?.[0]?.message?.content || '';
+    const text = d.content?.[0]?.text || '';
     result.style.display = '';
     result.innerHTML = '<div class="gsc-ai-content">' +
       escHtml(text)
         .replace(/^## (.+)$/gm, '</div><h3 class="gsc-ai-h3">$1</h3><div class="gsc-ai-body">')
+        .replace(/^### (.+)$/gm, '<h4 class="gsc-ai-h4">$1</h4>')
         .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
         .replace(/\n/g, '<br>') +
       '</div>';
