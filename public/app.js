@@ -2944,7 +2944,11 @@ Please run the full GSC audit on this data. Be specific — cite query names and
         messages:   [{ role: 'user', content: userMessage }],
       }),
     });
-    if (!r.ok) { const d = await r.json(); throw new Error(d.error?.message || `HTTP ${r.status}`); }
+    if (!r.ok) {
+      let msg;
+      try { const d = await r.json(); msg = d.error?.message; } catch {}
+      throw new Error(msg || `HTTP ${r.status} — server may be restarting, try again`);
+    }
     const d = await r.json();
     const text = d.content?.find(b => b.type === 'text')?.text || '';
     if (!text) {
