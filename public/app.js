@@ -2957,13 +2957,25 @@ Please run the full GSC audit on this data. Be specific — cite query names and
       return;
     }
     result.style.display = '';
-    result.innerHTML = '<div class="gsc-ai-content">' +
-      escHtml(text)
-        .replace(/^## (.+)$/gm, '</div><h3 class="gsc-ai-h3">$1</h3><div class="gsc-ai-body">')
-        .replace(/^### (.+)$/gm, '<h4 class="gsc-ai-h4">$1</h4>')
-        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-        .replace(/\n/g, '<br>') +
-      '</div>';
+    const inl = s => s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    let mdHtml = escHtml(text);
+    // Convert markdown tables before the newline→<br> pass
+    mdHtml = mdHtml.replace(/^\|.+\|\n\|[-| :]+\|\n(?:\|.+\|(?:\n|$))*/gm, blk => {
+      const lines = blk.trim().split('\n');
+      const hdrs = lines[0].split('|').slice(1, -1).map(s => s.trim());
+      const rows = lines.slice(2).filter(Boolean).map(r => r.split('|').slice(1, -1).map(s => s.trim()));
+      return '<table class="gsc-ai-table"><thead><tr>' +
+        hdrs.map(h => `<th>${inl(h)}</th>`).join('') +
+        '</tr></thead><tbody>' +
+        rows.map(r => '<tr>' + r.map(c => `<td>${inl(c)}</td>`).join('') + '</tr>').join('') +
+        '</tbody></table>';
+    });
+    mdHtml = mdHtml
+      .replace(/^## (.+)$/gm, '</div><h3 class="gsc-ai-h3">$1</h3><div class="gsc-ai-body">')
+      .replace(/^### (.+)$/gm, '<h4 class="gsc-ai-h4">$1</h4>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\n/g, '<br>');
+    result.innerHTML = '<div class="gsc-ai-content">' + mdHtml + '</div>';
   } catch (e) {
     result.style.display = '';
     result.innerHTML = `<div class="gsc-msg gsc-error">AI error: ${escHtml(e.message)}</div>`;
