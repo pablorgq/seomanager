@@ -131,6 +131,7 @@ async function init() {
   await rtInit();
   coraInit();
   await weeklyLoadFromServer();
+  fetch('/api/auditdata').then(r => r.ok ? r.json() : {}).then(d => { auditData = d || {}; dbRender(); }).catch(() => {});
   dbRender();
 
   // Hide POP key field when key is configured server-side
@@ -2111,7 +2112,19 @@ function dbRender() {
           <div class="db-st-val">${label}</div>
           <div class="db-st-bar"><div class="db-st-fill" style="width:${pct ?? 0}%"></div></div>
         </div>`;
-      }).join('')}</div>` : ''}
+      }).join('')}${(() => {
+        const aud = auditData[c.id];
+        if (!aud?.todoText) return '';
+        const total   = (aud.todoText.match(/^- \[/gm) || []).length;
+        const checked = (aud.checkedItems || []).length;
+        const pct     = total ? Math.round(checked / total * 100) : 0;
+        const cls     = pct === 100 ? 'db-st-done' : pct > 0 ? 'db-st-prog' : 'db-st-none';
+        return `<div class="db-st-item ${cls}" title="SEO Audit: ${checked}/${total} tasks done">
+          <div class="db-st-label">Audit</div>
+          <div class="db-st-val">${pct}%</div>
+          <div class="db-st-bar"><div class="db-st-fill" style="width:${pct}%"></div></div>
+        </div>`;
+      })()}</div>` : ''}
       ${hasScore ? `
       <div class="db-score-row">
         <div class="db-score-total">
@@ -2315,6 +2328,7 @@ function offPageRowHtml(client, category, kwObj) {
     </div>`;
 }
 
+let auditData         = {};    // { [clientId]: { ts, sourceFiles, todoText, checkedItems: string[] } }
 let weeklyData        = null;  // null = still loading; { schedule, tasks } once loaded
 let weeklySelectedDay  = null;  // which day's checklist is shown; defaults to today
 
@@ -4751,12 +4765,24 @@ function coraInit() {
 }
 
 /* ── INDEXY ── */
+let indexySaveTimer = null;
+
 function indexyRender() {
   const area = document.getElementById('indexy-upload-area');
   if (!area || area.dataset.ready) return;
   area.dataset.ready = '1';
+
+  const clients  = rtData?.clients ?? [];
+  const clientOpts = clients.length
+    ? clients.map(c => `<option value="${escHtml(c.id)}">${escHtml(c.name)}</option>`).join('')
+    : '<option value="">— no clients yet —</option>';
+
   area.innerHTML = `
     <div class="indexy-form">
+      <select id="indexy-client" class="indexy-client-select">
+        <option value="">Select client…</option>
+        ${clientOpts}
+      </select>
       <label class="indexy-file-label">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
         <span id="indexy-pdf-name">Audit Report (PDF)</span>
@@ -4769,14 +4795,110 @@ function indexyRender() {
       </label>
       <button id="indexy-btn" class="btn-sm btn-accent">Extract To-Do List</button>
       <span class="indexy-note">Upload one or both files — Claude reads all sheets and pages</span>
+    </div>
+    <div id="indexy-progress" class="indexy-progress" style="display:none">
+      <div class="indexy-prog-bar"><div id="indexy-prog-fill" class="indexy-prog-fill"></div></div>
+      <span id="indexy-prog-label" class="indexy-prog-label"></span>
     </div>`;
+
   document.getElementById('indexy-pdf').addEventListener('change', e => {
     document.getElementById('indexy-pdf-name').textContent = e.target.files[0]?.name || 'Audit Report (PDF)';
   });
   document.getElementById('indexy-xlsx').addEventListener('change', e => {
     document.getElementById('indexy-xlsx-name').textContent = e.target.files[0]?.name || 'Workbook (XLSX / CSV)';
   });
+  document.getElementById('indexy-client').addEventListener('change', e => {
+    indexyLoadSaved(e.target.value);
+  });
   document.getElementById('indexy-btn').addEventListener('click', indexyExtract);
+
+  // Auto-select first client that has a saved audit
+  const firstWithAudit = clients.find(c => auditData[c.id]);
+  if (firstWithAudit) {
+    document.getElementById('indexy-client').value = firstWithAudit.id;
+    indexyLoadSaved(firstWithAudit.id);
+  }
+}
+
+function indexyLoadSaved(clientId) {
+  const result = document.getElementById('indexy-result');
+  if (!result) return;
+  const saved = auditData[clientId];
+  if (!saved?.todoText) {
+    result.innerHTML = '';
+    document.getElementById('indexy-progress').style.display = 'none';
+    return;
+  }
+  result.innerHTML = '<div class="indexy-output">' + indexyRenderMd(saved.todoText, saved.checkedItems || []) + '</div>';
+  indexyWireCheckboxes(clientId);
+  indexyUpdateProgress(clientId);
+}
+
+function indexyWireCheckboxes(clientId) {
+  const result  = document.getElementById('indexy-result');
+  const client  = rtData?.clients?.find(c => c.id === clientId);
+  result?.querySelectorAll('.indexy-check').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const li       = cb.closest('li');
+      const taskText = li.querySelector('label')?.textContent?.trim() || '';
+      li.classList.toggle('indexy-done', cb.checked);
+
+      const rec = auditData[clientId] || {};
+      const set = new Set(rec.checkedItems || []);
+      cb.checked ? set.add(taskText) : set.delete(taskText);
+      if (!auditData[clientId]) auditData[clientId] = { todoText: '' };
+      auditData[clientId].checkedItems = [...set];
+
+      indexyUpdateProgress(clientId);
+      indexyScheduleSave(clientId);
+
+      if (client) {
+        logActivity({
+          type:          'indexy',
+          clientId,
+          clientName:    client.name,
+          category:      'audit',
+          categoryLabel: 'SEO Audit',
+          itemLabel:     taskText.slice(0, 120),
+          from:          cb.checked ? 'pending' : 'done',
+          to:            cb.checked ? 'done'    : 'pending',
+          fromLabel:     cb.checked ? 'Pending' : 'Done',
+          toLabel:       cb.checked ? 'Done'    : 'Pending',
+        });
+      }
+    });
+  });
+}
+
+function indexyUpdateProgress(clientId) {
+  const progEl   = document.getElementById('indexy-progress');
+  const fillEl   = document.getElementById('indexy-prog-fill');
+  const labelEl  = document.getElementById('indexy-prog-label');
+  const result   = document.getElementById('indexy-result');
+  if (!progEl || !result) return;
+  const total   = result.querySelectorAll('.indexy-check').length;
+  const checked = result.querySelectorAll('.indexy-check:checked').length;
+  if (!total) { progEl.style.display = 'none'; return; }
+  const pct = Math.round(checked / total * 100);
+  progEl.style.display = 'flex';
+  fillEl.style.width   = pct + '%';
+  labelEl.textContent  = `${checked} / ${total} tasks complete (${pct}%)`;
+}
+
+function indexyScheduleSave(clientId) {
+  clearTimeout(indexySaveTimer);
+  indexySaveTimer = setTimeout(() => indexySaveAudit(clientId), 800);
+}
+
+async function indexySaveAudit(clientId) {
+  if (!clientId || !auditData[clientId]) return;
+  try {
+    await fetch('/api/auditdata', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [clientId]: auditData[clientId] }),
+    });
+  } catch (_) {}
 }
 
 async function indexyExtract() {
@@ -4784,12 +4906,14 @@ async function indexyExtract() {
   const result    = document.getElementById('indexy-result');
   const pdfInput  = document.getElementById('indexy-pdf');
   const xlsxInput = document.getElementById('indexy-xlsx');
+  const clientId  = document.getElementById('indexy-client')?.value || '';
   if (!pdfInput.files.length && !xlsxInput.files.length) {
     result.innerHTML = '<div class="gsc-msg gsc-error">Upload at least one file first.</div>';
     return;
   }
   btn.disabled = true; btn.textContent = 'Reading files…';
   result.innerHTML = '';
+  const sourceFiles = [pdfInput.files[0]?.name, xlsxInput.files[0]?.name].filter(Boolean).join(', ');
   const fd = new FormData();
   if (pdfInput.files[0])  fd.append('pdf',  pdfInput.files[0]);
   if (xlsxInput.files[0]) fd.append('xlsx', xlsxInput.files[0]);
@@ -4802,10 +4926,22 @@ async function indexyExtract() {
     const d    = await r.json();
     const text = d.content?.find(b => b.type === 'text')?.text || '';
     if (!text) throw new Error('No content returned — try again.');
-    result.innerHTML = '<div class="indexy-output">' + indexyRenderMd(text) + '</div>';
-    result.querySelectorAll('.indexy-check').forEach(cb => {
-      cb.addEventListener('change', () => cb.closest('li').classList.toggle('indexy-done', cb.checked));
-    });
+
+    // Save to auditData and server
+    if (clientId) {
+      auditData[clientId] = { ts: new Date().toISOString(), sourceFiles, todoText: text, checkedItems: [] };
+      indexySaveAudit(clientId);
+    }
+
+    result.innerHTML = '<div class="indexy-output">' + indexyRenderMd(text, []) + '</div>';
+    if (clientId) indexyWireCheckboxes(clientId);
+    else {
+      result.querySelectorAll('.indexy-check').forEach(cb => {
+        cb.addEventListener('change', () => cb.closest('li').classList.toggle('indexy-done', cb.checked));
+      });
+    }
+    indexyUpdateProgress(clientId);
+    dbRender();
   } catch (e) {
     result.innerHTML = `<div class="gsc-msg gsc-error">Error: ${escHtml(e.message)}</div>`;
   } finally {
@@ -4813,7 +4949,8 @@ async function indexyExtract() {
   }
 }
 
-function indexyRenderMd(rawText) {
+function indexyRenderMd(rawText, checkedItems = []) {
+  const checkedSet = new Set(checkedItems);
   const lines  = rawText.split('\n');
   const out    = [];
   const inl    = s => escHtml(s).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
@@ -4862,8 +4999,9 @@ function indexyRenderMd(rawText) {
     const cbMatch = line.match(/^- \[([ xX])\] (.+)/);
     if (cbMatch) {
       if (!inList) { out.push('<ul class="indexy-list">'); inList = true; }
-      const checked = cbMatch[1].toLowerCase() === 'x';
-      out.push(`<li class="${checked ? 'indexy-done' : ''}"><label><input type="checkbox" class="indexy-check"${checked ? ' checked' : ''}> ${inl(cbMatch[2])}</label></li>`);
+      const taskText = cbMatch[2];
+      const checked  = cbMatch[1].toLowerCase() === 'x' || checkedSet.has(taskText);
+      out.push(`<li class="${checked ? 'indexy-done' : ''}"><label><input type="checkbox" class="indexy-check"${checked ? ' checked' : ''}> ${inl(taskText)}</label></li>`);
       continue;
     }
 

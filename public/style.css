@@ -1072,11 +1072,16 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
 .gsc-ai-body { font-size: 13px; color: var(--text-secondary); line-height: 1.6; }
 .gsc-ai-content > div:first-child { display: none; }
 /* ── INDEXY ── */
-.indexy-form       { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 20px 24px; background: var(--surface-alt); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 20px; }
+.indexy-client-select { padding: 7px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text-primary); font-size: 13px; min-width: 180px; }
+.indexy-form       { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 20px 24px; background: var(--surface-alt); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 12px; }
 .indexy-file-label { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border: 1px dashed var(--border); border-radius: 8px; cursor: pointer; font-size: 13px; color: var(--text-secondary); transition: border-color .15s, color .15s; }
 .indexy-file-label:hover { border-color: var(--accent); color: var(--accent); }
 .indexy-file-label input { display: none; }
 .indexy-note       { font-size: 11px; color: var(--text-muted); }
+.indexy-progress   { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.indexy-prog-bar   { flex: 1; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+.indexy-prog-fill  { height: 100%; background: var(--accent); border-radius: 4px; transition: width .3s; }
+.indexy-prog-label { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
 .indexy-output     { background: var(--surface-alt); border: 1px solid var(--border); border-radius: 12px; padding: 20px 24px; }
 .indexy-h3         { font-size: 13px; font-weight: 700; color: var(--accent); margin: 16px 0 6px; text-transform: uppercase; letter-spacing: .05em; }
 .indexy-h4         { font-size: 12px; font-weight: 600; color: var(--text-primary); margin: 12px 0 4px; }

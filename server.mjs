@@ -597,6 +597,30 @@ app.post('/api/rankdata', apiGuard, (req, res) => {
   res.json({ ok: true });
 });
 
+/* ─────────────────────────────────────────────
+   AUDIT DATA  (Indexy — per-client to-do list + checked state)
+───────────────────────────────────────────── */
+const AUDITDATA_FILE = join(DATA_DIR, '.auditdata.json');
+function loadAuditData() {
+  if (!existsSync(AUDITDATA_FILE)) return {};
+  try { return JSON.parse(readFileSync(AUDITDATA_FILE, 'utf8')); }
+  catch { return {}; }
+}
+function saveAuditData(data) {
+  try { writeFileSync(AUDITDATA_FILE, JSON.stringify(data)); }
+  catch (e) { console.warn('[auditdata] Failed to persist:', e.message); }
+}
+
+app.get('/api/auditdata', apiGuard, (req, res) => res.json(loadAuditData()));
+
+app.post('/api/auditdata', apiGuard, (req, res) => {
+  const body = req.body;
+  if (!body || typeof body !== 'object') return res.status(400).json({ error: { message: 'Invalid body.' } });
+  const existing = loadAuditData();
+  saveAuditData({ ...existing, ...body });
+  res.json({ ok: true });
+});
+
 app.get('/api/weeklydata', apiGuard, (req, res) => {
   res.json(loadWeeklyData());
 });
