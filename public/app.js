@@ -4831,6 +4831,7 @@ function indexyLoadSaved(clientId) {
   }
   result.innerHTML = '<div class="indexy-output">' + indexyRenderMd(saved.todoText, saved.checkedItems || []) + '</div>';
   indexyWireCheckboxes(clientId);
+  indexyWireRTButtons(result);
   indexyUpdateProgress(clientId);
 }
 
@@ -4934,6 +4935,7 @@ async function indexyExtract() {
     }
 
     result.innerHTML = '<div class="indexy-output">' + indexyRenderMd(text, []) + '</div>';
+    indexyWireRTButtons(result);
     if (clientId) indexyWireCheckboxes(clientId);
     else {
       result.querySelectorAll('.indexy-check').forEach(cb => {
@@ -4954,19 +4956,40 @@ function indexyRenderMd(rawText, checkedItems = []) {
   const lines  = rawText.split('\n');
   const out    = [];
   const inl    = s => escHtml(s).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  let inList   = false;
-  let inTable  = false;
-  let tableLines = [];
+  let inList      = false;
+  let inTable     = false;
+  let tableLines  = [];
+  let lastHeading = '';
+
+  const isContentPlanTable = hdrs => {
+    const low = hdrs.map(h => h.toLowerCase());
+    return lastHeading.toLowerCase().includes('new content') ||
+      low.includes('keyword') || low.includes('recommended title') || low.includes('parent topic');
+  };
 
   const flushTable = () => {
     if (!tableLines.length) return;
     const hdrs = tableLines[0].split('|').slice(1, -1).map(s => s.trim());
     const rows = tableLines.slice(2).filter(Boolean).map(r => r.split('|').slice(1, -1).map(s => s.trim()));
-    out.push('<div class="gsc-ai-table-wrap"><table class="gsc-ai-table"><thead><tr>' +
-      hdrs.map(h => `<th>${inl(h)}</th>`).join('') +
-      '</tr></thead><tbody>' +
-      rows.map(r => '<tr>' + r.map(c => `<td>${inl(c)}</td>`).join('') + '</tr>').join('') +
-      '</tbody></table></div>');
+    const contentPlan = isContentPlanTable(hdrs);
+
+    const headCells = hdrs.map(h => `<th>${inl(h)}</th>`).join('') + (contentPlan ? '<th>RT</th>' : '');
+    const bodyRows = rows.map(r => {
+      const cells = r.map(c => `<td>${inl(c)}</td>`).join('');
+      if (contentPlan) {
+        // find keyword value — prefer "Keyword" col, fall back to "Parent Topic"
+        const kwIdx = hdrs.findIndex(h => /^keyword$/i.test(h.trim()));
+        const ptIdx = hdrs.findIndex(h => /parent.?topic/i.test(h.trim()));
+        const volIdx = hdrs.findIndex(h => /volume|traffic/i.test(h.trim()));
+        const kw  = r[kwIdx >= 0 ? kwIdx : ptIdx] || '';
+        const vol = r[volIdx >= 0 ? volIdx : -1] || '';
+        const btn = kw ? `<button class="indexy-rt-btn btn-xs" data-kw="${escHtml(kw)}" data-vol="${escHtml(vol)}" title="Add to Rank Tracker">+ RT</button>` : '';
+        return `<tr>${cells}<td>${btn}</td></tr>`;
+      }
+      return `<tr>${cells}</tr>`;
+    }).join('');
+
+    out.push(`<div class="gsc-ai-table-wrap"><table class="gsc-ai-table"><thead><tr>${headCells}</tr></thead><tbody>${bodyRows}</tbody></table></div>`);
     tableLines = [];
     inTable = false;
   };
@@ -4983,32 +5006,37 @@ function indexyRenderMd(rawText, checkedItems = []) {
     }
     if (inTable) { flushTable(); }
 
-    // Headings
+    // Headings — track last heading for table context
     if (/^#{1,2} /.test(line)) {
       if (inList) { out.push('</ul>'); inList = false; }
-      out.push(`<h3 class="indexy-h3">${inl(line.replace(/^#{1,2} /, ''))}</h3>`);
+      const txt = line.replace(/^#{1,2} /, '');
+      lastHeading = txt;
+      out.push(`<h3 class="indexy-h3">${inl(txt)}</h3>`);
       continue;
     }
     if (/^### /.test(line)) {
       if (inList) { out.push('</ul>'); inList = false; }
-      out.push(`<h4 class="indexy-h4">${inl(line.replace(/^### /, ''))}</h4>`);
+      const txt = line.replace(/^### /, '');
+      lastHeading = txt;
+      out.push(`<h4 class="indexy-h4">${inl(txt)}</h4>`);
       continue;
     }
 
-    // Checkbox list items
+    // Checkbox list items — strip any trailing [placeholder] notation from task text
     const cbMatch = line.match(/^- \[([ xX])\] (.+)/);
     if (cbMatch) {
       if (!inList) { out.push('<ul class="indexy-list">'); inList = true; }
-      const taskText = cbMatch[2];
+      const taskText = cbMatch[2].replace(/\s*\[([^\]]{0,80})\]\s*$/, ' ($1)').trim();
       const checked  = cbMatch[1].toLowerCase() === 'x' || checkedSet.has(taskText);
       out.push(`<li class="${checked ? 'indexy-done' : ''}"><label><input type="checkbox" class="indexy-check"${checked ? ' checked' : ''}> ${inl(taskText)}</label></li>`);
       continue;
     }
 
-    // Regular bullet
+    // Regular bullet — also strip trailing [placeholder] notation
     if (/^- /.test(line)) {
       if (!inList) { out.push('<ul class="indexy-list">'); inList = true; }
-      out.push(`<li>${inl(line.slice(2))}</li>`);
+      const txt = line.slice(2).replace(/\s*\[([^\]]{0,80})\]\s*$/, ' ($1)').trim();
+      out.push(`<li>${inl(txt)}</li>`);
       continue;
     }
 
@@ -5018,13 +5046,38 @@ function indexyRenderMd(rawText, checkedItems = []) {
     // Blank line
     if (!line.trim()) { out.push('<br>'); continue; }
 
-    // Plain paragraph
-    out.push(`<p>${inl(line)}</p>`);
+    // Plain paragraph — strip [placeholder] notation
+    const txt = line.replace(/\s*\[([^\]]{0,80})\]\s*$/, ' ($1)').trim();
+    out.push(`<p>${inl(txt)}</p>`);
   }
 
   if (inList)  out.push('</ul>');
   if (inTable) flushTable();
   return out.join('');
+}
+
+function indexyAddToRT(kw, vol) {
+  const c = rtActiveClient();
+  if (!c) { alert('Select a client in Rank Tracker first, then come back to add keywords.'); return false; }
+  const exists = c.keywords.some(k => k.keyword.toLowerCase() === kw.toLowerCase());
+  if (exists) { alert(`"${kw}" is already in Rank Tracker.`); return false; }
+  c.keywords.push({ id: rtUid(), url: '', keyword: kw, volume: vol ? parseInt(vol) || null : null, note: 'Added from Indexy', popStatus: '', popDate: '', rank: null, prevRank: null, lastCheck: null });
+  rtSave();
+  return true;
+}
+
+function indexyWireRTButtons(container) {
+  container.querySelectorAll('.indexy-rt-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const kw = btn.dataset.kw;
+      const vol = btn.dataset.vol;
+      if (indexyAddToRT(kw, vol)) {
+        btn.textContent = '✓ Added';
+        btn.disabled = true;
+        btn.classList.add('indexy-rt-added');
+      }
+    });
+  });
 }
 
 /* ── START ── */

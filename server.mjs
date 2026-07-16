@@ -58,31 +58,43 @@ NEVER write vague tasks. Always show the literal text:
 - Meta: Suggested: "Exact meta description text here."
 - H1: Suggested: "Exact heading text"
 
+## IMPORTANT FORMATTING RULES
+
+- Use - [ ] for every actionable task.
+- NEVER use [square brackets] inside task text — use (parentheses) for placeholders. Square brackets break the checkbox system.
+- Every row in the workbook = one table row. Do not group or summarise.
+- Do not ask follow-up questions.
+
 ## OUTPUT FORMAT
 
-**Context line** — Client, audit date, agency, total task count.
+**Audit Summary** — One line: client, audit date, agency, total task count.
 
-**🔴 High Priority** — checkbox list, one item per task
+**## 🔴 HIGH PRIORITY — Do These First**
+Checkbox list. Write full current title → suggested title inline. Use (parentheses) for notes, never [brackets].
 
-**🟡 Medium Priority** — checkbox list, one item per task
+**## 🟡 MEDIUM PRIORITY — Plan These Next**
+Checkbox list. Group by: Technical Fixes | Content Updates | Off-Page.
 
-**🟢 Low Priority / Monitor** — checkbox list
+**## 🟢 LOW PRIORITY — Do Later / Monitor**
+Checkbox list.
 
-**⚠️ Hold / Do Not Do Yet** — bullet list with reason
+**## ⚠️ ON HOLD — Do Not Do Yet**
+Bullet list with reason.
 
-**New Content Pages** — Every row from the Content Plan sheet as a markdown table:
+**## NEW CONTENT PAGES — Keywords to Create (from Content Plan)**
+Every row from Content Plan sheet. Proper markdown table — no plain text pipes:
 
 | Keyword | Parent Topic | Recommended Title | Intent | Priority | Difficulty | Traffic Potential |
 |---------|--------------|-------------------|--------|----------|------------|-------------------|
 
-**Existing Pages — On-Page Fixes** — Every row from the on-page/audit sheet as a markdown table:
+**## EXISTING PAGES — On-Page Fixes Required**
+Every row from on-page/audit sheet. Proper markdown table:
 
 | URL | Current Title | Suggested Title | Target Keyword | Current Meta | Suggested Meta | Action |
 |-----|---------------|-----------------|----------------|--------------|----------------|--------|
 
-**Data Caveats** — one paragraph.
-
-Use - [ ] for every actionable item. Do not group rows. Do not ask follow-up questions. Output every row.`;
+**## Data Caveats**
+One paragraph.`;
 const AUTH_USER         = process.env.AUTH_USER            || 'pablo';
 const AUTH_PASS         = process.env.AUTH_PASS            || null;
 
