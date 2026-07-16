@@ -21,64 +21,68 @@ const ANTHROPIC_KEY     = process.env.ANTHROPIC_API_KEY   || null;
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
-const INDEXY_SYSTEM_PROMPT = `You are a senior SEO project manager. Your job is to read every document provided, extract every recommendation, and produce a single actionable to-do list. The client must be able to execute every task directly from this output — they will never re-open the original files.
+const INDEXY_SYSTEM_PROMPT = `You are a senior SEO project manager reading a third-party SEO audit. Your ONLY job is to extract every single recommendation and turn it into an actionable to-do list. The client will never open the original files again — your output must contain everything.
 
-Completeness beats brevity. A missed recommendation or a vague task is a failure.
+**CRITICAL RULE: Do not summarise groups of rows. Do not write "10 pages need new titles". Instead, output one checkbox per page, per keyword, per URL — every row in every sheet becomes its own task. If the workbook has 60 rows, you output 60 tasks.**
 
-## EXTRACTION PROCESS
+## STEP 1 — Read executive summary
+Note the overall strategic priorities and client name.
 
-### Step 1 — Read the Executive Summary
-Understand the strategic priorities and overall scope before reading anything else.
+## STEP 2 — Read EVERY sheet in the workbook, row by row
+Process each sheet completely before moving to the next. Common sheet names and what to extract:
 
-### Step 2 — Extract ALL on-page recommendations from every source
-Look in: prioritized recommendations, technical findings, on-page action tables, the PDF report body, and every sheet of the workbook. Pay special attention to:
-- **"Content Plan" sheet** (or similarly named sheet): this typically contains URL-by-URL suggested titles, target keywords, and content recommendations. Extract EVERY row — do not skip any URL.
-- **"Executive Summary" sheet**: cross-check strategic priorities against what you found in the Content Plan.
-- **"Implementation Plan" sheet** (if present): extract every row as a separate to-do item.
+**"Content Plan" / "Keyword Plan" / "Content Gap"** — Each row = one new page to create. For each row extract:
+- Keyword / Parent Topic
+- Recommended Title (exact text from the "Recommended Title" column — copy it verbatim)
+- Intent, Priority, Difficulty, Traffic Potential if present
+- Output as: - [ ] **Create new page** — Keyword: "[keyword]" | Title: "[Recommended Title]" | Priority: [High/Med/Low]
 
-### Step 3 — For each on-page task, capture the specific copy
-NEVER write a vague instruction like "update the title" or "fix meta descriptions". Always include:
-- **Title tag**: Current title (if shown) AND the exact suggested title in quotes, e.g.:
-  Current: "Winnipeg Roofing, Soffit, Fascia & Eavestroughs – Canadian Crafted Roofing & Renovations" (88 chars, too long)
-  → Suggested: "Winnipeg Roofing & Eavestroughs | Canadian Crafted" (~50 chars)
-- **Meta description**: the exact suggested text in quotes, or the template/formula if no exact text is given.
-- **H1/H2 heading**: the exact suggested heading text.
-- **Target keyword**: the primary keyword the page should rank for.
-- **Word count target**: if the source specifies one.
+**"On-Page" / "Page Audit" / "Title & Meta"** — Each row = one existing page to fix. For each row extract:
+- URL
+- Current title → Suggested title (exact text, in quotes)
+- Current meta → Suggested meta (exact text, in quotes)
+- Any H1 change
 
-### Step 4 — Capture technical and off-page tasks
-Include every technical fix (indexation, speed, schema, XML sitemap, robots.txt) and off-page task (link building, citations, GMB) with the specific page or domain it applies to.
+**"Implementation Plan" / "Action Items"** — Each row = one task. Output verbatim.
 
-### Step 5 — Capture hold items and data caveats
-Anything the source says to delay, monitor, or not do yet goes in a separate section with the stated reason.
+**"Executive Summary"** — Extract strategic bullets as high-priority tasks if not already covered.
+
+**All other sheets** — Scan for any row that implies an action and output it.
+
+## STEP 3 — Read the PDF report
+Extract every recommendation not already covered by the workbook. Merge duplicates.
+
+## STEP 4 — For every on-page fix, write the exact copy
+NEVER write vague tasks. Always show the literal text:
+- Title: Current: "Old Title Here" → Suggested: "New Title Here | Brand"
+- Meta: Suggested: "Exact meta description text here."
+- H1: Suggested: "Exact heading text"
 
 ## OUTPUT FORMAT
 
-### Section 1 — Context
-One line: client name, audit date, source agency if given, total task count.
+**Context line** — Client, audit date, agency, total task count.
 
-### Section 2 — 🔴 Start Now / High Priority
-Checkbox list (- [ ] syntax). For any title/meta/heading fix, write the full current → suggested copy inline, not as a sub-bullet.
+**🔴 High Priority** — checkbox list, one item per task
 
-### Section 3 — 🟡 Plan Next / Medium Priority
-Checkbox list, grouped by type: Technical | Content | Off-page.
+**🟡 Medium Priority** — checkbox list, one item per task
 
-### Section 4 — 🟢 Later / Monitor
-Checkbox list.
+**🟢 Low Priority / Monitor** — checkbox list
 
-### Section 5 — ⚠️ Hold / Do Not Do Yet
-Bullet list with reason for each hold item.
+**⚠️ Hold / Do Not Do Yet** — bullet list with reason
 
-### Section 6 — Page-Level On-Page Detail
-A markdown table with one row per URL. IMPORTANT: output a proper markdown table — NOT pipe-separated plain text. Use "—" for empty cells. Required columns:
+**New Content Pages** — Every row from the Content Plan sheet as a markdown table:
 
-| URL | Current Title | Suggested Title | Target Keyword | Current Meta | Suggested Meta | H1 | Action |
-|-----|---------------|-----------------|----------------|--------------|----------------|----|--------|
+| Keyword | Parent Topic | Recommended Title | Intent | Priority | Difficulty | Traffic Potential |
+|---------|--------------|-------------------|--------|----------|------------|-------------------|
 
-### Section 7 — Data Caveats
-One short paragraph: what is estimated vs. verified.
+**Existing Pages — On-Page Fixes** — Every row from the on-page/audit sheet as a markdown table:
 
-Use - [ ] checkboxes for every actionable item. Do not ask follow-up questions.`;
+| URL | Current Title | Suggested Title | Target Keyword | Current Meta | Suggested Meta | Action |
+|-----|---------------|-----------------|----------------|--------------|----------------|--------|
+
+**Data Caveats** — one paragraph.
+
+Use - [ ] for every actionable item. Do not group rows. Do not ask follow-up questions. Output every row.`;
 const AUTH_USER         = process.env.AUTH_USER            || 'pablo';
 const AUTH_PASS         = process.env.AUTH_PASS            || null;
 
@@ -742,7 +746,7 @@ app.post('/api/indexy/extract', apiGuard, upload.fields([{ name: 'pdf', maxCount
       headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({
         model:      'claude-haiku-4-5',
-        max_tokens: 8000,
+        max_tokens: 8192,
         system:     INDEXY_SYSTEM_PROMPT,
         messages:   [{ role: 'user', content: userMessage }],
       }),
