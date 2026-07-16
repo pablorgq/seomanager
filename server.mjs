@@ -52,7 +52,12 @@ Structure the response as a single markdown to-do list:
 3. **🟡 Plan Next / Medium Priority** — checkbox list, grouped by type (Technical, Content, Off-page) if enough items
 4. **🟢 Later / Monitor / Low Priority** — checkbox list
 5. **⚠️ Hold / Do Not Do Yet** — watch-list items with reason they are on hold
-6. **Page-level detail appendix** — URL-specific findings that support the items above, listed by URL
+6. **Page-level detail appendix** — URL-specific findings that support the items above, formatted as a proper markdown table. Use this exact column structure (omit columns that have no data):
+
+| URL | Status | Current Title | Suggested Title | Current Meta | H1 | Word Count | Action |
+|-----|--------|---------------|-----------------|--------------|-----|------------|--------|
+
+Each row is one URL. Use "—" for any cell with no data. Do NOT write pipe-separated plain text lines — only valid markdown table rows.
 7. **Data caveats** — one short section noting what is estimated vs. verified
 
 Use - [ ] checkboxes for every actionable item. Output only the to-do list — do not ask follow-up questions at the end.`;

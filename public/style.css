@@ -1100,10 +1100,14 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
 .gsc-stab.active { color: var(--accent); border-bottom-color: var(--accent); }
 .gsc-stab-panel        { display: none; }
 .gsc-stab-panel.active { display: block; }
-.gsc-ai-table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 8px 0 12px; }
-.gsc-ai-table th, .gsc-ai-table td { padding: 6px 10px; border: 1px solid var(--border); text-align: left; }
-.gsc-ai-table thead th { background: var(--surface); font-weight: 600; color: var(--text-primary); }
+.gsc-ai-table-wrap { overflow-x: auto; margin: 8px 0 16px; border-radius: 6px; border: 1px solid var(--border); }
+.gsc-ai-table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px; }
+.gsc-ai-table th, .gsc-ai-table td { padding: 7px 12px; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); text-align: left; vertical-align: top; white-space: normal; max-width: 280px; }
+.gsc-ai-table th:last-child, .gsc-ai-table td:last-child { border-right: none; }
+.gsc-ai-table thead th { background: var(--surface-2, var(--surface)); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); position: sticky; top: 0; }
+.gsc-ai-table tbody tr:last-child td { border-bottom: none; }
 .gsc-ai-table tbody tr:nth-child(even) { background: var(--surface); }
+.gsc-ai-table tbody tr:hover { background: rgba(99,102,241,.06); }
 
 .gsc-table-wrap { overflow-x: auto; margin-top: 4px; }
 .gsc-table { width: 100%; border-collapse: collapse; font-size: 12px; }

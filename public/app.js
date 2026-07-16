@@ -3016,11 +3016,11 @@ Please run the full GSC audit on this data. Be specific — cite query names and
       const lines = blk.trim().split('\n');
       const hdrs = lines[0].split('|').slice(1, -1).map(s => s.trim());
       const rows = lines.slice(2).filter(Boolean).map(r => r.split('|').slice(1, -1).map(s => s.trim()));
-      return '<table class="gsc-ai-table"><thead><tr>' +
+      return '<div class="gsc-ai-table-wrap"><table class="gsc-ai-table"><thead><tr>' +
         hdrs.map(h => `<th>${inl(h)}</th>`).join('') +
         '</tr></thead><tbody>' +
         rows.map(r => '<tr>' + r.map(c => `<td>${inl(c)}</td>`).join('') + '</tr>').join('') +
-        '</tbody></table>';
+        '</tbody></table></div>';
     });
     mdHtml = mdHtml
       .replace(/^## (.+)$/gm, '</div><h3 class="gsc-ai-h3">$1</h3><div class="gsc-ai-body">')
@@ -4962,11 +4962,11 @@ function indexyRenderMd(rawText, checkedItems = []) {
     if (!tableLines.length) return;
     const hdrs = tableLines[0].split('|').slice(1, -1).map(s => s.trim());
     const rows = tableLines.slice(2).filter(Boolean).map(r => r.split('|').slice(1, -1).map(s => s.trim()));
-    out.push('<table class="gsc-ai-table"><thead><tr>' +
+    out.push('<div class="gsc-ai-table-wrap"><table class="gsc-ai-table"><thead><tr>' +
       hdrs.map(h => `<th>${inl(h)}</th>`).join('') +
       '</tr></thead><tbody>' +
       rows.map(r => '<tr>' + r.map(c => `<td>${inl(c)}</td>`).join('') + '</tr>').join('') +
-      '</tbody></table>');
+      '</tbody></table></div>');
     tableLines = [];
     inTable = false;
   };
