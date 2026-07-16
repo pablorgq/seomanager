@@ -1071,6 +1071,12 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
 .gsc-ai-h4 { font-size: 12px; font-weight: 600; color: var(--text-primary); margin: 10px 0 2px; }
 .gsc-ai-body { font-size: 13px; color: var(--text-secondary); line-height: 1.6; }
 .gsc-ai-content > div:first-child { display: none; }
+.gsc-stab-nav  { display: flex; gap: 2px; padding: 4px 0 0; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+.gsc-stab      { padding: 8px 18px; border: none; background: none; color: var(--text-muted); font-size: 13px; font-weight: 500; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.gsc-stab:hover  { color: var(--text-primary); }
+.gsc-stab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.gsc-stab-panel        { display: none; }
+.gsc-stab-panel.active { display: block; }
 .gsc-ai-table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 8px 0 12px; }
 .gsc-ai-table th, .gsc-ai-table td { padding: 6px 10px; border: 1px solid var(--border); text-align: left; }
 .gsc-ai-table thead th { background: var(--surface); font-weight: 600; color: var(--text-primary); }

@@ -2828,57 +2828,74 @@ function gscRenderResults(siteUrl, days, startDate, endDate) {
   }).join('');
 
   results.innerHTML = `
-    <div class="gsc-summary-row">
-      <div class="gsc-stat"><div class="gsc-stat-val">${total}</div><div class="gsc-stat-lbl">Queries</div></div>
-      <div class="gsc-stat"><div class="gsc-stat-val">${totClicks.toLocaleString()}</div><div class="gsc-stat-lbl">Clicks</div></div>
-      <div class="gsc-stat"><div class="gsc-stat-val">${totImpr.toLocaleString()}</div><div class="gsc-stat-lbl">Impressions</div></div>
-      <div class="gsc-stat"><div class="gsc-stat-val">${avgCTR}%</div><div class="gsc-stat-lbl">Avg CTR</div></div>
-      <div class="gsc-stat"><div class="gsc-stat-val">${avgPos}</div><div class="gsc-stat-lbl">Avg Position</div></div>
+    <div class="gsc-stab-nav">
+      <button class="gsc-stab active" data-stab="performance">Performance Report</button>
+      <button class="gsc-stab"        data-stab="ai">AI Analysis</button>
     </div>
 
-    <div class="gsc-insight-cards">
-      <div class="gsc-insight-card gsc-card-win">
-        <div class="gsc-insight-n">${quickWins.length}</div>
-        <div class="gsc-insight-label">Quick Wins</div>
-        <div class="gsc-insight-desc">Pos 4–15, 50+ impressions — one push from page 1</div>
+    <div class="gsc-stab-panel active" id="gsc-tab-performance">
+      <div class="gsc-summary-row">
+        <div class="gsc-stat"><div class="gsc-stat-val">${total}</div><div class="gsc-stat-lbl">Queries</div></div>
+        <div class="gsc-stat"><div class="gsc-stat-val">${totClicks.toLocaleString()}</div><div class="gsc-stat-lbl">Clicks</div></div>
+        <div class="gsc-stat"><div class="gsc-stat-val">${totImpr.toLocaleString()}</div><div class="gsc-stat-lbl">Impressions</div></div>
+        <div class="gsc-stat"><div class="gsc-stat-val">${avgCTR}%</div><div class="gsc-stat-lbl">Avg CTR</div></div>
+        <div class="gsc-stat"><div class="gsc-stat-val">${avgPos}</div><div class="gsc-stat-lbl">Avg Position</div></div>
       </div>
-      <div class="gsc-insight-card gsc-card-ctr">
-        <div class="gsc-insight-n">${ctrIssues.length}</div>
-        <div class="gsc-insight-label">Low CTR</div>
-        <div class="gsc-insight-desc">Top 3 position but CTR &lt;3% — title/meta fix needed</div>
+
+      <div class="gsc-insight-cards">
+        <div class="gsc-insight-card gsc-card-win">
+          <div class="gsc-insight-n">${quickWins.length}</div>
+          <div class="gsc-insight-label">Quick Wins</div>
+          <div class="gsc-insight-desc">Pos 4–15, 50+ impressions — one push from page 1</div>
+        </div>
+        <div class="gsc-insight-card gsc-card-ctr">
+          <div class="gsc-insight-n">${ctrIssues.length}</div>
+          <div class="gsc-insight-label">Low CTR</div>
+          <div class="gsc-insight-desc">Top 3 position but CTR &lt;3% — title/meta fix needed</div>
+        </div>
+        <div class="gsc-insight-card gsc-card-gap">
+          <div class="gsc-insight-n">${gaps.length}</div>
+          <div class="gsc-insight-label">Content Gaps</div>
+          <div class="gsc-insight-desc">Pos 11–30, 100+ impressions — needs content targeting</div>
+        </div>
+        <div class="gsc-insight-card gsc-card-new">
+          <div class="gsc-insight-n">${untracked.length}</div>
+          <div class="gsc-insight-label">Untracked</div>
+          <div class="gsc-insight-desc">Clicks but not in Rank Tracker — add to monitoring</div>
+        </div>
       </div>
-      <div class="gsc-insight-card gsc-card-gap">
-        <div class="gsc-insight-n">${gaps.length}</div>
-        <div class="gsc-insight-label">Content Gaps</div>
-        <div class="gsc-insight-desc">Pos 11–30, 100+ impressions — needs content targeting</div>
-      </div>
-      <div class="gsc-insight-card gsc-card-new">
-        <div class="gsc-insight-n">${untracked.length}</div>
-        <div class="gsc-insight-label">Untracked</div>
-        <div class="gsc-insight-desc">Clicks but not in Rank Tracker — add to monitoring</div>
+
+      <div class="gsc-table-wrap">
+        <table class="gsc-table">
+          <thead><tr>
+            <th>Query</th>
+            <th>Clicks</th>
+            <th>Impressions</th>
+            <th>CTR</th>
+            <th>Position</th>
+          </tr></thead>
+          <tbody>${tableRows}</tbody>
+        </table>
       </div>
     </div>
 
-    <div class="gsc-ai-bar">
-      <button id="gsc-ai-btn" class="btn-sm btn-accent">Get AI Recommendations</button>
-      <span class="gsc-ai-note">Sends top queries to Claude for senior SEO audit</span>
-    </div>
-    <div id="gsc-ai-result" class="gsc-ai-result" style="display:none"></div>
-
-    <div class="gsc-table-wrap">
-      <table class="gsc-table">
-        <thead><tr>
-          <th>Query</th>
-          <th>Clicks</th>
-          <th>Impressions</th>
-          <th>CTR</th>
-          <th>Position</th>
-        </tr></thead>
-        <tbody>${tableRows}</tbody>
-      </table>
+    <div class="gsc-stab-panel" id="gsc-tab-ai">
+      <div class="gsc-ai-bar">
+        <button id="gsc-ai-btn" class="btn-sm btn-accent">Run Full SEO Audit</button>
+        <span class="gsc-ai-note">Powered by Claude · analyses top queries against a 13-section senior SEO framework</span>
+      </div>
+      <div id="gsc-ai-result" class="gsc-ai-result" style="display:none"></div>
     </div>`;
 
   document.getElementById('gsc-ai-btn')?.addEventListener('click', () => gscRunAI(siteUrl, days));
+  document.querySelectorAll('.gsc-stab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const stab = btn.dataset.stab;
+      document.querySelectorAll('.gsc-stab').forEach(b => b.classList.toggle('active', b === btn));
+      document.querySelectorAll('.gsc-stab-panel').forEach(p =>
+        p.classList.toggle('active', p.id === `gsc-tab-${stab}`));
+    });
+  });
 }
 
 async function gscRunAI(siteUrl, days) {
@@ -2891,7 +2908,7 @@ async function gscRunAI(siteUrl, days) {
   if (!gscRows.length) {
     result.style.display = '';
     result.innerHTML = '<div class="gsc-msg gsc-error">Load GSC data first before running AI analysis.</div>';
-    btn.disabled = false; btn.textContent = 'Get AI Recommendations';
+    btn.disabled = false; btn.textContent = 'Run Full SEO Audit';
     return;
   }
 
@@ -2903,23 +2920,42 @@ async function gscRunAI(siteUrl, days) {
 
   const systemPrompt = `You are a senior SEO analyst with 10+ years of hands-on experience auditing Google Search Console (GSC) data for clients across e-commerce, SaaS, content, and local business sites. You think like a consultant, not a report generator: you prioritize findings by business impact, flag what's urgent vs. nice-to-have, and always translate raw numbers into a clear action plan a non-technical client can understand.
 
-You are precise, evidence-based, and never invent data. If a metric isn't in the data provided, say so explicitly rather than guessing.
+You are precise, evidence-based, and never invent data. If a metric isn't in the data provided, say so explicitly rather than guessing. If a report is missing, note the gap and skip that section rather than fabricating numbers.
 
-Run through each of the following analyses. For each, state: what you found → why it matters → recommended action. Use bullet points and tables where useful. Cite the actual numbers from the data for every claim.
+Work through every section below that you have data for. For each finding, state: what you found → why it matters → recommended action. Use bullet points and tables where useful. Cite the actual numbers from the data for every claim.
 
-1. CTR vs. Position Mismatches — pages/queries ranking 1–3 with below-average CTR (benchmark: pos 1 ≈ 25-35%, pos 2-3 ≈ 10-20%); also positions 15-30 with unusually high CTR (quick-win candidates).
-2. Striking-Distance Keywords — queries at position 8-20 with meaningful impression volume; rank by estimated opportunity.
-3. Branded vs. Non-Branded Split — classify queries; flag if branded >60-70% of clicks.
-4. Decay Patterns — identify queries/pages with notable click or impression drops.
-5. New/Unplanned Query Opportunities — queries generating impressions with no obvious matching page.
-6. Impression Spikes Without Click Growth — impressions rose but clicks flat or declining.
-7. Untracked Performers — keywords getting clicks that aren't in the Rank Tracker list.
+## 1. Performance Report — Query Analysis
+- Query segmentation: branded vs. non-branded, and by intent (transactional / informational / navigational).
+- CTR vs. position benchmarking: compare actual CTR against typical curves (pos 1 ≈ 25-35%, pos 2-3 ≈ 10-20%). Flag underperformers (title/meta issue) and overperformers at low positions (quick-win candidates).
+- Long-tail vs. head-term ratio: healthy growth usually shows long-tail queries outpacing head terms.
 
-Output structure:
-1. Executive Summary (3-5 bullets, plain language, client-facing tone)
-2. Findings by Category (sections above, only where data supports a finding)
-3. Priority Action Plan — table with: Finding | Impact (High/Med/Low) | Effort (High/Med/Low) | Recommended Action
-4. Data Gaps — any analysis you couldn't complete due to missing data`;
+## 2. Striking-Distance Keywords
+- Queries at position 8-20 with meaningful impression volume (top 20% of impressions in this band).
+- Rank by estimated opportunity (impressions × realistic CTR uplift if moved to position 5 or better — label as estimate).
+- Note which already have a matching page vs. need new content.
+
+## 3. Keyword Cannibalization
+- Queries where multiple URLs from the site may be competing — infer from query patterns and position volatility.
+- Recommend consolidation, canonicalization, or internal linking fixes where likely.
+
+## 4. Decay Patterns
+- Flag queries/keywords showing signs of click or impression decline based on current position and CTR data.
+- Distinguish real decay from likely seasonality where possible.
+
+## 5. New/Unplanned Query Opportunities & Impression Spikes
+- Surface queries generating meaningful impressions with no obviously targeted page.
+- Flag queries where impressions are high but clicks are disproportionately low (possible algo testing, irrelevant match, or SERP feature stealing clicks).
+
+## 6. Untracked Performers
+- Keywords getting clicks that aren't in the Rank Tracker list — recommend adding to monitoring.
+
+## Output Structure
+1. **Executive Summary** (3-5 bullets, plain language, client-facing tone)
+2. **Findings by Category** (sections 1-6 above, only include where data supports a finding)
+3. **Priority Action Plan** — table with columns: Finding | Impact (High/Med/Low) | Effort (High/Med/Low) | Recommended Action
+4. **Data Gaps** — note any analysis you couldn't complete due to missing reports (Index Coverage, Links, CWVs, Crawl Stats, etc.) and what GSC export would fill the gap
+
+Be direct and specific — cite real numbers, not vague language. Never present an estimate as a fact; label projections as estimates. If the data shows a clearly positive trend, say so.`;
 
   const userMessage = `SITE: ${siteUrl}
 PERIOD: Last ${days} days
@@ -2980,7 +3016,7 @@ Please run the full GSC audit on this data. Be specific — cite query names and
     result.style.display = '';
     result.innerHTML = `<div class="gsc-msg gsc-error">AI error: ${escHtml(e.message)}</div>`;
   } finally {
-    btn.disabled = false; btn.textContent = 'Get AI Recommendations';
+    btn.disabled = false; btn.textContent = 'Run Full SEO Audit';
   }
 }
 
