@@ -4,9 +4,11 @@ import { dirname, join } from 'path';
 import { randomBytes } from 'crypto';
 import { readFileSync, writeFileSync, existsSync, rmSync } from 'fs';
 import { Storage } from '@google-cloud/storage';
+import { createRequire } from 'module';
 import multer from 'multer';
-import pdfParse from 'pdf-parse';
 import * as XLSX from 'xlsx';
+const require   = createRequire(import.meta.url);
+const pdfParse  = require('pdf-parse');
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR  = existsSync('/data') ? '/data' : __dirname;
