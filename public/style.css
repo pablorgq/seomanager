@@ -1071,6 +1071,24 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
 .gsc-ai-h4 { font-size: 12px; font-weight: 600; color: var(--text-primary); margin: 10px 0 2px; }
 .gsc-ai-body { font-size: 13px; color: var(--text-secondary); line-height: 1.6; }
 .gsc-ai-content > div:first-child { display: none; }
+/* ── INDEXY ── */
+.indexy-form       { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 20px 24px; background: var(--surface-alt); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 20px; }
+.indexy-file-label { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border: 1px dashed var(--border); border-radius: 8px; cursor: pointer; font-size: 13px; color: var(--text-secondary); transition: border-color .15s, color .15s; }
+.indexy-file-label:hover { border-color: var(--accent); color: var(--accent); }
+.indexy-file-label input { display: none; }
+.indexy-note       { font-size: 11px; color: var(--text-muted); }
+.indexy-output     { background: var(--surface-alt); border: 1px solid var(--border); border-radius: 12px; padding: 20px 24px; }
+.indexy-h3         { font-size: 13px; font-weight: 700; color: var(--accent); margin: 16px 0 6px; text-transform: uppercase; letter-spacing: .05em; }
+.indexy-h4         { font-size: 12px; font-weight: 600; color: var(--text-primary); margin: 12px 0 4px; }
+.indexy-list       { list-style: none; padding: 0; margin: 4px 0 12px; }
+.indexy-list li    { padding: 5px 0; font-size: 13px; color: var(--text-secondary); line-height: 1.5; border-bottom: 1px solid var(--border); }
+.indexy-list li:last-child { border-bottom: none; }
+.indexy-list label { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; }
+.indexy-check      { margin-top: 3px; accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
+.indexy-done       { opacity: .5; }
+.indexy-done label { text-decoration: line-through; }
+.indexy-output p   { font-size: 13px; color: var(--text-secondary); line-height: 1.6; margin: 4px 0; }
+
 .gsc-stab-nav  { display: flex; gap: 2px; padding: 4px 0 0; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
 .gsc-stab      { padding: 8px 18px; border: none; background: none; color: var(--text-muted); font-size: 13px; font-weight: 500; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
 .gsc-stab:hover  { color: var(--text-primary); }

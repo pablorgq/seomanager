@@ -4,6 +4,9 @@ import { dirname, join } from 'path';
 import { randomBytes } from 'crypto';
 import { readFileSync, writeFileSync, existsSync, rmSync } from 'fs';
 import { Storage } from '@google-cloud/storage';
+import multer from 'multer';
+import pdfParse from 'pdf-parse';
+import * as XLSX from 'xlsx';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR  = existsSync('/data') ? '/data' : __dirname;
@@ -15,6 +18,40 @@ const PORT = process.env.PORT || 3000;
 ───────────────────────────────────────────── */
 const OPENAI_KEY        = process.env.OPENAI_API_KEY      || null;
 const ANTHROPIC_KEY     = process.env.ANTHROPIC_API_KEY   || null;
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+
+const INDEXY_SYSTEM_PROMPT = `You are a senior SEO project manager. Your job is not to re-analyze or second-guess a third-party SEO audit — it is to read every document provided, extract every recommendation, and turn them into a single, clean, prioritized to-do list the client can act on directly, without needing to re-open the original report or workbook.
+
+You never summarize loosely or skip items to save space. A missed recommendation is a missed task for the client. Completeness beats brevity.
+
+## EXTRACTION PROCESS
+
+1. Read the executive summary first to understand the overall strategic frame.
+2. Find every discrete recommendation/action item wherever it appears: prioritized recommendations, technical findings, content roadmap tables, workbook Implementation Plan rows, on-page/off-page action tables. Merge duplicates rather than listing the same task twice.
+3. For each item, capture:
+   - What the action is (specific enough to execute — include target URL/page name, target keyword, or affected pages where given)
+   - Priority (High/Medium/Low, or equivalent horizon label)
+   - Owner or team responsible, if stated
+   - Why it matters (one line — the rationale/evidence given)
+   - Done-when / completion criteria, if the source specifies one
+4. Capture page-level/URL-level detail separately where the workbook provides it — don't collapse these into vague statements. List the actual URLs or page names.
+5. Capture anything the source explicitly says NOT to do yet (hold items, cannibalization risks, "monitor before creating" items) as a separate watch-list section.
+6. Note data caveats the source discloses (third-party estimates, no GSC/GA4 access, etc.).
+
+## OUTPUT FORMAT
+
+Structure the response as a single markdown to-do list:
+
+1. **One-line context** — client name, audit date, source agency if given, total item count
+2. **🔴 Start Now / High Priority** — checkbox list using - [ ] syntax, most actionable items first
+3. **🟡 Plan Next / Medium Priority** — checkbox list, grouped by type (Technical, Content, Off-page) if enough items
+4. **🟢 Later / Monitor / Low Priority** — checkbox list
+5. **⚠️ Hold / Do Not Do Yet** — watch-list items with reason they are on hold
+6. **Page-level detail appendix** — URL-specific findings that support the items above, listed by URL
+7. **Data caveats** — one short section noting what is estimated vs. verified
+
+Use - [ ] checkboxes for every actionable item. Output only the to-do list — do not ask follow-up questions at the end.`;
 const AUTH_USER         = process.env.AUTH_USER            || 'pablo';
 const AUTH_PASS         = process.env.AUTH_PASS            || null;
 
@@ -624,6 +661,45 @@ app.post('/api/aa', apiGuard, async (req, res) => {
 app.post('/api/openai/text',   apiGuard, (req, res) => proxyOpenAI('https://api.openai.com/v1/responses', req, res));
 app.post('/api/openai/images', apiGuard, (req, res) => proxyOpenAI('https://api.openai.com/v1/images/generations', req, res));
 app.post('/api/openai/chat',   apiGuard, (req, res) => proxyOpenAI('https://api.openai.com/v1/chat/completions', req, res));
+
+app.post('/api/indexy/extract', apiGuard, upload.fields([{ name: 'pdf', maxCount: 1 }, { name: 'xlsx', maxCount: 1 }]), async (req, res) => {
+  if (!ANTHROPIC_KEY) return res.status(503).json({ error: { message: 'ANTHROPIC_API_KEY not configured on server.' } });
+  const pdfFile  = req.files?.pdf?.[0];
+  const xlsxFile = req.files?.xlsx?.[0];
+  if (!pdfFile && !xlsxFile) return res.status(400).json({ error: { message: 'Upload at least one file.' } });
+  try {
+    let pdfText = '';
+    if (pdfFile) {
+      const parsed = await pdfParse(pdfFile.buffer);
+      pdfText = parsed.text;
+    }
+    let xlsxText = '';
+    if (xlsxFile) {
+      const wb = XLSX.read(xlsxFile.buffer, { type: 'buffer' });
+      xlsxText = wb.SheetNames.map(name => {
+        const csv = XLSX.utils.sheet_to_csv(wb.Sheets[name]);
+        return `=== Sheet: ${name} ===\n${csv}`;
+      }).join('\n\n');
+    }
+    const userMessage = [
+      pdfText  && `AUDIT REPORT (PDF):\n${pdfText}`,
+      xlsxText && `WORKBOOK (XLSX):\n${xlsxText}`,
+    ].filter(Boolean).join('\n\n---\n\n');
+    const up = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model:      'claude-haiku-4-5',
+        max_tokens: 6000,
+        system:     INDEXY_SYSTEM_PROMPT,
+        messages:   [{ role: 'user', content: userMessage }],
+      }),
+    });
+    res.status(up.status).json(await up.json());
+  } catch (e) {
+    res.status(502).json({ error: { message: e.message } });
+  }
+});
 
 app.post('/api/claude/chat', apiGuard, async (req, res) => {
   if (!ANTHROPIC_KEY) return res.status(503).json({ error: { message: 'ANTHROPIC_API_KEY not configured on server.' } });

@@ -89,6 +89,7 @@ const TAB_ROUTES = {
   weekly:    '/weekly-tasks',
   brands:    '/blog-brands',
   images:    '/image-generator',
+  indexy:    '/indexy',
 };
 const ROUTE_TABS  = Object.fromEntries(Object.entries(TAB_ROUTES).map(([tab, path]) => [path, tab]));
 const TOOLS_TABS  = new Set(['brands', 'images']);
@@ -103,6 +104,7 @@ function switchTab(tab, { pushState = true } = {}) {
   if (tab === 'gsc') gscRender();
   if (tab === 'log') logTabRender();
   if (tab === 'weekly') weeklyRender();
+  if (tab === 'indexy') indexyRender();
   if (pushState) {
     const path = TAB_ROUTES[tab];
     if (window.location.pathname !== path) history.pushState({ tab }, '', path);
@@ -4746,6 +4748,145 @@ function coraInit() {
       tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none';
     });
   });
+}
+
+/* ── INDEXY ── */
+function indexyRender() {
+  const area = document.getElementById('indexy-upload-area');
+  if (!area || area.dataset.ready) return;
+  area.dataset.ready = '1';
+  area.innerHTML = `
+    <div class="indexy-form">
+      <label class="indexy-file-label">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        <span id="indexy-pdf-name">Audit Report (PDF)</span>
+        <input type="file" id="indexy-pdf" accept=".pdf">
+      </label>
+      <label class="indexy-file-label">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        <span id="indexy-xlsx-name">Workbook (XLSX / CSV)</span>
+        <input type="file" id="indexy-xlsx" accept=".xlsx,.xls,.csv">
+      </label>
+      <button id="indexy-btn" class="btn-sm btn-accent">Extract To-Do List</button>
+      <span class="indexy-note">Upload one or both files — Claude reads all sheets and pages</span>
+    </div>`;
+  document.getElementById('indexy-pdf').addEventListener('change', e => {
+    document.getElementById('indexy-pdf-name').textContent = e.target.files[0]?.name || 'Audit Report (PDF)';
+  });
+  document.getElementById('indexy-xlsx').addEventListener('change', e => {
+    document.getElementById('indexy-xlsx-name').textContent = e.target.files[0]?.name || 'Workbook (XLSX / CSV)';
+  });
+  document.getElementById('indexy-btn').addEventListener('click', indexyExtract);
+}
+
+async function indexyExtract() {
+  const btn       = document.getElementById('indexy-btn');
+  const result    = document.getElementById('indexy-result');
+  const pdfInput  = document.getElementById('indexy-pdf');
+  const xlsxInput = document.getElementById('indexy-xlsx');
+  if (!pdfInput.files.length && !xlsxInput.files.length) {
+    result.innerHTML = '<div class="gsc-msg gsc-error">Upload at least one file first.</div>';
+    return;
+  }
+  btn.disabled = true; btn.textContent = 'Reading files…';
+  result.innerHTML = '';
+  const fd = new FormData();
+  if (pdfInput.files[0])  fd.append('pdf',  pdfInput.files[0]);
+  if (xlsxInput.files[0]) fd.append('xlsx', xlsxInput.files[0]);
+  try {
+    const r = await fetch('/api/indexy/extract', { method: 'POST', body: fd });
+    if (!r.ok) {
+      let msg; try { const d = await r.json(); msg = d.error?.message; } catch {}
+      throw new Error(msg || `HTTP ${r.status}`);
+    }
+    const d    = await r.json();
+    const text = d.content?.find(b => b.type === 'text')?.text || '';
+    if (!text) throw new Error('No content returned — try again.');
+    result.innerHTML = '<div class="indexy-output">' + indexyRenderMd(text) + '</div>';
+    result.querySelectorAll('.indexy-check').forEach(cb => {
+      cb.addEventListener('change', () => cb.closest('li').classList.toggle('indexy-done', cb.checked));
+    });
+  } catch (e) {
+    result.innerHTML = `<div class="gsc-msg gsc-error">Error: ${escHtml(e.message)}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Extract To-Do List';
+  }
+}
+
+function indexyRenderMd(rawText) {
+  const lines  = rawText.split('\n');
+  const out    = [];
+  const inl    = s => escHtml(s).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  let inList   = false;
+  let inTable  = false;
+  let tableLines = [];
+
+  const flushTable = () => {
+    if (!tableLines.length) return;
+    const hdrs = tableLines[0].split('|').slice(1, -1).map(s => s.trim());
+    const rows = tableLines.slice(2).filter(Boolean).map(r => r.split('|').slice(1, -1).map(s => s.trim()));
+    out.push('<table class="gsc-ai-table"><thead><tr>' +
+      hdrs.map(h => `<th>${inl(h)}</th>`).join('') +
+      '</tr></thead><tbody>' +
+      rows.map(r => '<tr>' + r.map(c => `<td>${inl(c)}</td>`).join('') + '</tr>').join('') +
+      '</tbody></table>');
+    tableLines = [];
+    inTable = false;
+  };
+
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+
+    // Table detection
+    if (line.startsWith('|')) {
+      if (inList) { out.push('</ul>'); inList = false; }
+      inTable = true;
+      tableLines.push(line);
+      continue;
+    }
+    if (inTable) { flushTable(); }
+
+    // Headings
+    if (/^#{1,2} /.test(line)) {
+      if (inList) { out.push('</ul>'); inList = false; }
+      out.push(`<h3 class="indexy-h3">${inl(line.replace(/^#{1,2} /, ''))}</h3>`);
+      continue;
+    }
+    if (/^### /.test(line)) {
+      if (inList) { out.push('</ul>'); inList = false; }
+      out.push(`<h4 class="indexy-h4">${inl(line.replace(/^### /, ''))}</h4>`);
+      continue;
+    }
+
+    // Checkbox list items
+    const cbMatch = line.match(/^- \[([ xX])\] (.+)/);
+    if (cbMatch) {
+      if (!inList) { out.push('<ul class="indexy-list">'); inList = true; }
+      const checked = cbMatch[1].toLowerCase() === 'x';
+      out.push(`<li class="${checked ? 'indexy-done' : ''}"><label><input type="checkbox" class="indexy-check"${checked ? ' checked' : ''}> ${inl(cbMatch[2])}</label></li>`);
+      continue;
+    }
+
+    // Regular bullet
+    if (/^- /.test(line)) {
+      if (!inList) { out.push('<ul class="indexy-list">'); inList = true; }
+      out.push(`<li>${inl(line.slice(2))}</li>`);
+      continue;
+    }
+
+    // Close list on non-list line
+    if (inList) { out.push('</ul>'); inList = false; }
+
+    // Blank line
+    if (!line.trim()) { out.push('<br>'); continue; }
+
+    // Plain paragraph
+    out.push(`<p>${inl(line)}</p>`);
+  }
+
+  if (inList)  out.push('</ul>');
+  if (inTable) flushTable();
+  return out.join('');
 }
 
 /* ── START ── */
