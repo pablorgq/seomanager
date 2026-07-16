@@ -2953,7 +2953,7 @@ Work through every section below that you have data for. For each finding, state
 1. **Executive Summary** (3-5 bullets, plain language, client-facing tone)
 2. **Findings by Category** (sections 1-6 above, only include where data supports a finding)
 3. **Priority Action Plan** — table with columns: Finding | Impact (High/Med/Low) | Effort (High/Med/Low) | Recommended Action
-4. **Data Gaps** — note any analysis you couldn't complete due to missing reports (Index Coverage, Links, CWVs, Crawl Stats, etc.) and what GSC export would fill the gap
+4. **Data Gaps** — note any analysis that would benefit from a longer date range or a comparison period, and flag where the query sample size is too small to draw a reliable conclusion
 
 Be direct and specific — cite real numbers, not vague language. Never present an estimate as a fact; label projections as estimates. If the data shows a clearly positive trend, say so.`;
 
