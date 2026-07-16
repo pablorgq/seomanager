@@ -4,12 +4,9 @@ import { dirname, join } from 'path';
 import { randomBytes } from 'crypto';
 import { readFileSync, writeFileSync, existsSync, rmSync } from 'fs';
 import { Storage } from '@google-cloud/storage';
-import { createRequire } from 'module';
 import multer from 'multer';
 import * as XLSX from 'xlsx';
-const _require  = createRequire(import.meta.url);
-const _pdfMod   = _require('pdf-parse');
-const pdfParse  = typeof _pdfMod === 'function' ? _pdfMod : (_pdfMod.default ?? _pdfMod);
+import { extractText, getDocumentProxy } from 'unpdf';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR  = existsSync('/data') ? '/data' : __dirname;
@@ -673,8 +670,9 @@ app.post('/api/indexy/extract', apiGuard, upload.fields([{ name: 'pdf', maxCount
   try {
     let pdfText = '';
     if (pdfFile) {
-      const parsed = await pdfParse(pdfFile.buffer);
-      pdfText = parsed.text;
+      const pdf = await getDocumentProxy(new Uint8Array(pdfFile.buffer));
+      const { text } = await extractText(pdf, { mergePages: true });
+      pdfText = text;
     }
     let xlsxText = '';
     if (xlsxFile) {
