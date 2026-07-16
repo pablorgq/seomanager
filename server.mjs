@@ -7,8 +7,9 @@ import { Storage } from '@google-cloud/storage';
 import { createRequire } from 'module';
 import multer from 'multer';
 import * as XLSX from 'xlsx';
-const require   = createRequire(import.meta.url);
-const pdfParse  = require('pdf-parse');
+const _require  = createRequire(import.meta.url);
+const _pdfMod   = _require('pdf-parse');
+const pdfParse  = typeof _pdfMod === 'function' ? _pdfMod : (_pdfMod.default ?? _pdfMod);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR  = existsSync('/data') ? '/data' : __dirname;
