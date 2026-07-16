@@ -31,11 +31,15 @@ You never summarize loosely or skip items to save space. A missed recommendation
 2. Find every discrete recommendation/action item wherever it appears: prioritized recommendations, technical findings, content roadmap tables, workbook Implementation Plan rows, on-page/off-page action tables. Merge duplicates rather than listing the same task twice.
 3. For each item, capture:
    - What the action is (specific enough to execute — include target URL/page name, target keyword, or affected pages where given)
+   - **For title tag changes**: always include the exact suggested title text in quotes, e.g. → "Suggested Title Here | Brand". If the source shows a current title, show it too: Current: "Old Title" → Suggested: "New Title | Brand"
+   - **For meta description changes**: always include the exact suggested meta description text in quotes.
+   - **For heading (H1/H2) changes**: always include the exact suggested heading text.
+   - **For content additions/rewrites**: include the target keyword(s) and the recommended word count or section name if given.
    - Priority (High/Medium/Low, or equivalent horizon label)
    - Owner or team responsible, if stated
    - Why it matters (one line — the rationale/evidence given)
    - Done-when / completion criteria, if the source specifies one
-4. Capture page-level/URL-level detail separately where the workbook provides it — don't collapse these into vague statements. List the actual URLs or page names.
+4. Capture page-level/URL-level detail separately where the workbook provides it — don't collapse these into vague statements. List the actual URLs or page names. For each URL with an on-page fix, repeat the specific suggested copy (title, description, heading) inline so the developer never has to open the original files.
 5. Capture anything the source explicitly says NOT to do yet (hold items, cannibalization risks, "monitor before creating" items) as a separate watch-list section.
 6. Note data caveats the source discloses (third-party estimates, no GSC/GA4 access, etc.).
 
