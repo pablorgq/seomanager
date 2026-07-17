@@ -806,10 +806,12 @@ Return ONLY a valid JSON array — no text before or after. Each object:
 async function crawlForImages(startUrl, maxPages) {
   let base;
   try { base = new URL(startUrl); } catch { throw new Error('Invalid URL'); }
-  const visited  = new Set();
-  const queue    = [base.href];
-  const images   = [];
-  const TIMEOUT  = 7000;
+  const visited    = new Set();
+  const queue      = [base.href];
+  const images     = [];
+  const debugPages = [];
+  const TIMEOUT    = 8000;
+  const UA         = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
   while (queue.length && visited.size < maxPages) {
     const pageUrl = queue.shift();
@@ -817,43 +819,58 @@ async function crawlForImages(startUrl, maxPages) {
     visited.add(pageUrl);
 
     let html = '';
+    let pageStatus = 'ok';
     try {
       const r = await fetch(pageUrl, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SEO-AltAudit/1.0)' },
+        headers: { 'User-Agent': UA, 'Accept': 'text/html,application/xhtml+xml,*/*', 'Accept-Language': 'en-US,en;q=0.9' },
         signal: AbortSignal.timeout(TIMEOUT),
         redirect: 'follow',
       });
-      if (!r.ok) continue;
+      if (!r.ok) { pageStatus = `http_${r.status}`; debugPages.push({ url: pageUrl, status: pageStatus, imgs: 0 }); continue; }
       const ct = r.headers.get('content-type') || '';
-      if (!ct.includes('html')) continue;
+      if (!ct.includes('html')) { pageStatus = `non_html_${ct}`; debugPages.push({ url: pageUrl, status: pageStatus, imgs: 0 }); continue; }
       html = await r.text();
-    } catch { continue; }
+      // Update base to final URL after redirects (handles http→https, www redirects)
+      if (visited.size === 1) {
+        try { base = new URL(r.url); } catch {}
+      }
+    } catch (e) { debugPages.push({ url: pageUrl, status: `fetch_error: ${e.message}`, imgs: 0 }); continue; }
 
     const title = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.trim() || '';
     const h1    = html.match(/<h1[^>]*>([^<]*)<\/h1>/i)?.[1]?.replace(/<[^>]+>/g,'').trim() || '';
 
-    const imgRe = /<img([^>]+)>/gi;
+    let pageImgCount = 0;
+    const imgRe = /<img([^>\/]+)\/?>/gi;
     let m;
     while ((m = imgRe.exec(html)) !== null) {
       const attrs = m[1];
-      // Support lazy-loaded images (WordPress/Elementor use data-src / data-lazy-src)
       const src   = attrs.match(/\bdata-lazy-src=["']([^"']+)["']/i)?.[1]
                  || attrs.match(/\bdata-src=["']([^"']+)["']/i)?.[1]
+                 || attrs.match(/\bdata-original=["']([^"']+)["']/i)?.[1]
                  || attrs.match(/\bsrc=["']([^"']+)["']/i)?.[1]
                  || '';
       if (!src || src.startsWith('data:') || /\.(svg|ico|gif)$/i.test(src)) continue;
-      const altM  = attrs.match(/\balt=["']([^"']*)["']/i);
-      const alt   = altM ? altM[1].trim() : null;
+      if (/\bwidth=["']?[12]["']?/i.test(attrs) || /\bheight=["']?[12]["']?/i.test(attrs)) continue;
+
+      const altM = attrs.match(/\balt=["']([^"']*)["']/i);
+      const alt  = altM ? altM[1].trim() : null;
       let absUrl;
       try { absUrl = new URL(src, pageUrl).href; } catch { continue; }
-      // Skip tiny images (tracking pixels often have width/height=1)
-      if (/\bwidth=["']?1["']?/i.test(attrs) || /\bheight=["']?1["']?/i.test(attrs)) continue;
 
-      const issue = alt === null ? 'Missing' : alt === '' ? 'Missing' : alt.length < 5 ? 'Vague' : alt.length > 125 ? 'Too long' : 'OK';
-      if (issue === 'OK') continue; // skip images already well-described
+      // Classify: missing, vague (no spaces = probably filename), too long, or OK
+      const isFilename = alt && /^[\w.\-]+$/.test(alt); // no spaces = just a filename slug
+      const issue = alt === null           ? 'Missing'
+                  : alt === ''             ? 'Missing'
+                  : isFilename             ? 'Vague'
+                  : alt.length < 10        ? 'Vague'
+                  : alt.length > 125       ? 'Too long'
+                  : 'OK';
+      if (issue === 'OK') continue;
 
-      images.push({ page: pageUrl, pageTitle: title, h1, src: absUrl, currentAlt: alt ?? '(missing)' });
+      pageImgCount++;
+      images.push({ page: pageUrl, pageTitle: title, h1, src: absUrl, currentAlt: alt ?? '(missing)', issue });
     }
+    debugPages.push({ url: pageUrl, status: 'ok', imgs: pageImgCount });
 
     // Enqueue internal links
     if (visited.size < maxPages) {
@@ -868,7 +885,7 @@ async function crawlForImages(startUrl, maxPages) {
       }
     }
   }
-  return images;
+  return { images, debugPages };
 }
 
 app.post('/api/alttext/scrape', apiGuard, async (req, res) => {
@@ -877,12 +894,16 @@ app.post('/api/alttext/scrape', apiGuard, async (req, res) => {
   if (!url || !/^https?:\/\//i.test(url)) return res.status(400).json({ error: { message: 'Valid http/https URL required.' } });
 
   try {
-    const images = await crawlForImages(url, Math.min(parseInt(maxPages) || 5, 10));
-    if (!images.length) return res.json({ images: [] });
+    const { images, debugPages } = await crawlForImages(url, Math.min(parseInt(maxPages) || 5, 10));
 
-    // Build prompt — batch all images into one call
-    const imgList = images.map((img, i) =>
-      `${i + 1}. src="${img.src}" | page="${img.page}" | pageTitle="${img.pageTitle}" | h1="${img.h1}" | currentAlt="${img.currentAlt}" | brand="${clientName}"`
+    if (!images.length) {
+      return res.json({ images: [], debug: debugPages });
+    }
+
+    // Cap at 60 images to stay within Haiku token budget
+    const batch = images.slice(0, 60);
+    const imgList = batch.map((img, i) =>
+      `${i + 1}. src="${img.src}" | page="${img.page}" | pageTitle="${img.pageTitle}" | h1="${img.h1}" | currentAlt="${img.currentAlt}" | issue="${img.issue}" | brand="${clientName}"`
     ).join('\n');
 
     const up = await fetch('https://api.anthropic.com/v1/messages', {
@@ -892,7 +913,7 @@ app.post('/api/alttext/scrape', apiGuard, async (req, res) => {
         model: 'claude-haiku-4-5',
         max_tokens: 8192,
         system: ALT_TEXT_SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: `Generate alt text for these ${images.length} images:\n\n${imgList}` }],
+        messages: [{ role: 'user', content: `Generate alt text for these ${batch.length} images:\n\n${imgList}` }],
       }),
     });
     const data = await up.json();
@@ -900,7 +921,7 @@ app.post('/api/alttext/scrape', apiGuard, async (req, res) => {
 
     let parsed;
     try { parsed = JSON.parse(text); } catch { parsed = []; }
-    res.json({ images: parsed, pagesScanned: images.length });
+    res.json({ images: parsed, debug: debugPages, totalFound: images.length });
   } catch (e) {
     res.status(502).json({ error: { message: e.message } });
   }

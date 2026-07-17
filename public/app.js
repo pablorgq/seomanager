@@ -4913,8 +4913,14 @@ async function indexyAltTextScrape() {
     if (!r.ok) throw new Error(data.error?.message || `HTTP ${r.status}`);
 
     const images = data.images || [];
+    const debug  = data.debug  || [];
     if (!images.length) {
-      result.innerHTML = '<div class="gsc-msg">No images with missing or vague alt text found — great job!</div>';
+      const debugHtml = debug.length
+        ? '<details class="alttext-debug"><summary>Debug — pages crawled</summary><ul>' +
+          debug.map(p => `<li>${escHtml(p.url)} — <strong>${p.imgs} images found</strong> (${escHtml(p.status)})</li>`).join('') +
+          '</ul></details>'
+        : '';
+      result.innerHTML = `<div class="gsc-msg">No images with missing or vague alt text found.<br><small>If this seems wrong, check the debug info below.</small></div>${debugHtml}`;
       return;
     }
 
