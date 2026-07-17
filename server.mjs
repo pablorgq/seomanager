@@ -906,6 +906,57 @@ app.post('/api/alttext/scrape', apiGuard, async (req, res) => {
   }
 });
 
+/* Push alt text to WordPress via REST API */
+app.post('/api/alttext/push-wp', apiGuard, async (req, res) => {
+  const { siteUrl, username, appPassword, images } = req.body || {};
+  if (!siteUrl || !username || !appPassword || !Array.isArray(images)) {
+    return res.status(400).json({ error: { message: 'siteUrl, username, appPassword and images required.' } });
+  }
+
+  const base64  = Buffer.from(`${username}:${appPassword}`).toString('base64');
+  const headers = { 'Authorization': `Basic ${base64}`, 'Content-Type': 'application/json' };
+  const apiBase = siteUrl.replace(/\/$/, '') + '/wp-json/wp/v2';
+  const results = [];
+
+  for (const img of images) {
+    if (!img.src || !img.recommended) { results.push({ src: img.src, status: 'skipped' }); continue; }
+
+    const filename = img.src.split('/').pop()?.split('?')[0] || '';
+    const searchTerm = filename.replace(/[-_.]/g, ' ').replace(/\.[^.]+$/, '');
+
+    try {
+      // Search media library by filename
+      const searchUrl = `${apiBase}/media?search=${encodeURIComponent(searchTerm)}&per_page=20&_fields=id,source_url,alt_text`;
+      const srRes = await fetch(searchUrl, { headers, signal: AbortSignal.timeout(8000) });
+      if (!srRes.ok) { results.push({ src: img.src, status: 'error', detail: `WP API ${srRes.status}` }); continue; }
+
+      const media = await srRes.json();
+      // Match by source_url ending (ignore CDN domain differences)
+      const match = media.find(m => {
+        const mFile = m.source_url?.split('/').pop()?.split('?')[0];
+        return mFile === filename;
+      });
+
+      if (!match) { results.push({ src: img.src, status: 'not_found', filename }); continue; }
+
+      // Update alt text
+      const patchRes = await fetch(`${apiBase}/media/${match.id}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ alt_text: img.recommended }),
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!patchRes.ok) { results.push({ src: img.src, status: 'error', detail: `PATCH ${patchRes.status}` }); continue; }
+
+      results.push({ src: img.src, status: 'updated', id: match.id });
+    } catch (e) {
+      results.push({ src: img.src, status: 'error', detail: e.message });
+    }
+  }
+
+  res.json({ results });
+});
+
 /* ─────────────────────────────────────────────
    FETCH EXISTING PAGE CONTENT
 ───────────────────────────────────────────── */

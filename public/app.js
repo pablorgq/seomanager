@@ -4890,16 +4890,16 @@ async function indexyAltTextScrape() {
     }
 
     result.innerHTML = indexyAltTextTable(images, url);
-    result.querySelectorAll('.alttext-copy-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        navigator.clipboard.writeText(btn.dataset.text).then(() => {
-          const orig = btn.textContent;
-          btn.textContent = 'Copied!';
-          setTimeout(() => btn.textContent = orig, 1500);
+    result.querySelectorAll('.alttext-copy-btn').forEach(b => {
+      b.addEventListener('click', () => {
+        navigator.clipboard.writeText(b.dataset.text).then(() => {
+          const orig = b.textContent; b.textContent = 'Copied!';
+          setTimeout(() => b.textContent = orig, 1500);
         });
       });
     });
     document.getElementById('alttext-csv-btn')?.addEventListener('click', () => indexyAltTextCsv(images));
+    document.getElementById('alttext-push-btn')?.addEventListener('click', () => indexyAltTextPushWP(images));
   } catch (e) {
     result.innerHTML = `<div class="gsc-msg gsc-error">Error: ${escHtml(e.message)}</div>`;
   } finally {
@@ -4930,16 +4930,88 @@ function indexyAltTextTable(images, siteUrl) {
   return `
     <div class="alttext-toolbar">
       <span class="alttext-count">${images.length} image${images.length !== 1 ? 's' : ''} need attention</span>
-      <button id="alttext-csv-btn" class="btn-sm">Download CSV</button>
+      <div style="display:flex;gap:6px">
+        <button id="alttext-csv-btn" class="btn-sm">Download CSV</button>
+        <button id="alttext-push-btn" class="btn-sm btn-accent">Push to WordPress</button>
+      </div>
+    </div>
+    <div id="alttext-wp-panel" class="alttext-wp-panel" style="display:none">
+      <p class="alttext-wp-help">Go to <strong>WP Admin → Users → Profile → Application Passwords</strong>, create one named "SEOManager", copy it below.</p>
+      <div class="alttext-wp-form">
+        <input id="alttext-wp-url"  type="url"  placeholder="https://example.com (WordPress site URL)" class="indexy-url-input">
+        <input id="alttext-wp-user" type="text" placeholder="WordPress username" class="indexy-url-input" style="max-width:200px">
+        <input id="alttext-wp-pass" type="password" placeholder="Application Password (xxxx xxxx xxxx)" class="indexy-url-input" style="max-width:260px">
+        <button id="alttext-wp-go" class="btn-sm btn-accent">Apply Alt Text to Site</button>
+      </div>
+      <div id="alttext-wp-status"></div>
     </div>
     <div class="gsc-ai-table-wrap">
-      <table class="gsc-ai-table alttext-table">
+      <table class="gsc-ai-table alttext-table" id="alttext-main-table">
         <thead><tr>
-          <th>Page</th><th>Image</th><th>Current Alt</th><th>Issue</th><th>Recommended Alt Text</th>
+          <th>Page</th><th>Image</th><th>Current Alt</th><th>Issue</th><th>Recommended Alt Text</th><th></th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>`;
+}
+
+function indexyAltTextPushWP(images) {
+  const panel = document.getElementById('alttext-wp-panel');
+  if (!panel) return;
+  const isVisible = panel.style.display !== 'none';
+  panel.style.display = isVisible ? 'none' : 'block';
+  if (!isVisible) {
+    document.getElementById('alttext-wp-go').onclick = async () => {
+      const siteUrl    = document.getElementById('alttext-wp-url').value.trim();
+      const username   = document.getElementById('alttext-wp-user').value.trim();
+      const appPassword = document.getElementById('alttext-wp-pass').value.trim();
+      const status     = document.getElementById('alttext-wp-status');
+      if (!siteUrl || !username || !appPassword) {
+        status.innerHTML = '<div class="gsc-msg gsc-error">Fill in all three fields.</div>'; return;
+      }
+      const btn = document.getElementById('alttext-wp-go');
+      btn.disabled = true; btn.textContent = 'Pushing…';
+      status.innerHTML = '<div class="gsc-msg">Connecting to WordPress and updating images…</div>';
+      try {
+        const r = await fetch('/api/alttext/push-wp', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ siteUrl, username, appPassword, images }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error?.message || `HTTP ${r.status}`);
+
+        const results = data.results || [];
+        let updated = 0, notFound = 0, errors = 0;
+        results.forEach(res => {
+          if (res.status === 'updated') updated++;
+          else if (res.status === 'not_found') notFound++;
+          else if (res.status === 'error') errors++;
+
+          // Update status cell in table row
+          const tbl = document.getElementById('alttext-main-table');
+          if (tbl) {
+            tbl.querySelectorAll('tbody tr').forEach(tr => {
+              const copyBtn = tr.querySelector('.alttext-copy-btn');
+              if (copyBtn?.dataset.text === res.recommended || tr.cells[1]?.title?.endsWith(res.src?.split('/').pop()?.split('?')[0])) {
+                const cell = tr.cells[5] || tr.insertCell(5);
+                cell.innerHTML = res.status === 'updated'
+                  ? '<span class="alttext-badge alttext-badge-ok">✓ Updated</span>'
+                  : res.status === 'not_found'
+                  ? '<span class="alttext-badge alttext-badge-yellow">Not found</span>'
+                  : '<span class="alttext-badge alttext-badge-red">Error</span>';
+              }
+            });
+          }
+        });
+        status.innerHTML = `<div class="gsc-msg" style="color:var(--success,#2d9e6b)">✓ ${updated} updated · ${notFound} not found in media library · ${errors} errors</div>`;
+      } catch (e) {
+        status.innerHTML = `<div class="gsc-msg gsc-error">Error: ${escHtml(e.message)}</div>`;
+      } finally {
+        btn.disabled = false; btn.textContent = 'Apply Alt Text to Site';
+      }
+    };
+  }
 }
 
 function indexyAltTextCsv(images) {
