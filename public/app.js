@@ -4772,52 +4772,199 @@ function indexyRender() {
   if (!area || area.dataset.ready) return;
   area.dataset.ready = '1';
 
-  const clients  = rtData?.clients ?? [];
+  const clients    = rtData?.clients ?? [];
   const clientOpts = clients.length
     ? clients.map(c => `<option value="${escHtml(c.id)}">${escHtml(c.name)}</option>`).join('')
     : '<option value="">— no clients yet —</option>';
 
   area.innerHTML = `
-    <div class="indexy-form">
-      <select id="indexy-client" class="indexy-client-select">
-        <option value="">Select client…</option>
-        ${clientOpts}
-      </select>
-      <label class="indexy-file-label">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-        <span id="indexy-pdf-name">Audit Report (PDF)</span>
-        <input type="file" id="indexy-pdf" accept=".pdf">
-      </label>
-      <label class="indexy-file-label">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-        <span id="indexy-xlsx-name">Workbook (XLSX / CSV)</span>
-        <input type="file" id="indexy-xlsx" accept=".xlsx,.xls,.csv">
-      </label>
-      <button id="indexy-btn" class="btn-sm btn-accent">Extract To-Do List</button>
-      <span class="indexy-note">Upload one or both files — Claude reads all sheets and pages</span>
+    <div class="indexy-subnav">
+      <button class="indexy-subbtn active" data-sub="audit">📋 Audit Extractor</button>
+      <button class="indexy-subbtn" data-sub="alttext">🖼️ Alt Text Generator</button>
     </div>
-    <div id="indexy-progress" class="indexy-progress" style="display:none">
-      <div class="indexy-prog-bar"><div id="indexy-prog-fill" class="indexy-prog-fill"></div></div>
-      <span id="indexy-prog-label" class="indexy-prog-label"></span>
+
+    <div id="indexy-sub-audit" class="indexy-subpanel active">
+      <div class="indexy-form">
+        <select id="indexy-client" class="indexy-client-select">
+          <option value="">Select client…</option>
+          ${clientOpts}
+        </select>
+        <label class="indexy-file-label">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          <span id="indexy-pdf-name">Audit Report (PDF)</span>
+          <input type="file" id="indexy-pdf" accept=".pdf">
+        </label>
+        <label class="indexy-file-label">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          <span id="indexy-xlsx-name">Workbook (XLSX / CSV)</span>
+          <input type="file" id="indexy-xlsx" accept=".xlsx,.xls,.csv">
+        </label>
+        <button id="indexy-btn" class="btn-sm btn-accent">Extract To-Do List</button>
+        <span class="indexy-note">Upload one or both files — Claude reads all sheets and pages</span>
+      </div>
+      <div id="indexy-progress" class="indexy-progress" style="display:none">
+        <div class="indexy-prog-bar"><div id="indexy-prog-fill" class="indexy-prog-fill"></div></div>
+        <span id="indexy-prog-label" class="indexy-prog-label"></span>
+      </div>
+    </div>
+
+    <div id="indexy-sub-alttext" class="indexy-subpanel">
+      <div class="indexy-form">
+        <select id="alttext-client" class="indexy-client-select">
+          <option value="">Select client…</option>
+          ${clientOpts}
+        </select>
+        <input id="alttext-url" type="url" placeholder="https://example.com" class="indexy-url-input">
+        <label class="indexy-label-inline">
+          Pages to scan:
+          <select id="alttext-maxpages" class="indexy-select-sm">
+            <option value="1">Homepage only</option>
+            <option value="5" selected>Up to 5 pages</option>
+            <option value="10">Up to 10 pages</option>
+          </select>
+        </label>
+        <button id="alttext-btn" class="btn-sm btn-accent">Scan &amp; Generate Alt Text</button>
+        <span class="indexy-note">Crawls the site, finds images missing or with vague alt text, generates recommendations</span>
+      </div>
+      <div id="alttext-result"></div>
     </div>`;
 
+  // Sub-tab switching
+  area.querySelectorAll('.indexy-subbtn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      area.querySelectorAll('.indexy-subbtn').forEach(b => b.classList.remove('active'));
+      area.querySelectorAll('.indexy-subpanel').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('indexy-sub-' + btn.dataset.sub)?.classList.add('active');
+    });
+  });
+
+  // Audit extractor wiring
   document.getElementById('indexy-pdf').addEventListener('change', e => {
     document.getElementById('indexy-pdf-name').textContent = e.target.files[0]?.name || 'Audit Report (PDF)';
   });
   document.getElementById('indexy-xlsx').addEventListener('change', e => {
     document.getElementById('indexy-xlsx-name').textContent = e.target.files[0]?.name || 'Workbook (XLSX / CSV)';
   });
-  document.getElementById('indexy-client').addEventListener('change', e => {
-    indexyLoadSaved(e.target.value);
-  });
+  document.getElementById('indexy-client').addEventListener('change', e => indexyLoadSaved(e.target.value));
   document.getElementById('indexy-btn').addEventListener('click', indexyExtract);
 
-  // Auto-select first client that has a saved audit
+  // Alt text wiring
+  document.getElementById('alttext-client').addEventListener('change', e => {
+    const c = rtData?.clients?.find(cl => cl.id === e.target.value);
+    if (c) {
+      const domain = c.name.toLowerCase().replace(/\s+/g, '');
+      // Auto-fill URL hint if client name looks like a domain
+    }
+  });
+  document.getElementById('alttext-btn').addEventListener('click', indexyAltTextScrape);
+
+  // Auto-select first client with saved audit
   const firstWithAudit = clients.find(c => auditData[c.id]);
   if (firstWithAudit) {
     document.getElementById('indexy-client').value = firstWithAudit.id;
     indexyLoadSaved(firstWithAudit.id);
   }
+}
+
+async function indexyAltTextScrape() {
+  const btn       = document.getElementById('alttext-btn');
+  const result    = document.getElementById('alttext-result');
+  const url       = document.getElementById('alttext-url').value.trim();
+  const maxPages  = document.getElementById('alttext-maxpages').value;
+  const clientId  = document.getElementById('alttext-client').value;
+  const client    = rtData?.clients?.find(c => c.id === clientId);
+
+  if (!url) { result.innerHTML = '<div class="gsc-msg gsc-error">Enter the website URL first.</div>'; return; }
+
+  btn.disabled = true;
+  btn.textContent = 'Scanning…';
+  result.innerHTML = '<div class="gsc-msg">Crawling site and generating alt text — this may take 20–30 seconds…</div>';
+
+  try {
+    const r = await fetch('/api/alttext/scrape', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ url, maxPages: parseInt(maxPages), clientName: client?.name || '' }),
+    });
+    let data;
+    try { data = await r.json(); } catch { throw new Error(`HTTP ${r.status} — server may be restarting`); }
+    if (!r.ok) throw new Error(data.error?.message || `HTTP ${r.status}`);
+
+    const images = data.images || [];
+    if (!images.length) {
+      result.innerHTML = '<div class="gsc-msg">No images with missing or vague alt text found — great job!</div>';
+      return;
+    }
+
+    result.innerHTML = indexyAltTextTable(images, url);
+    result.querySelectorAll('.alttext-copy-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        navigator.clipboard.writeText(btn.dataset.text).then(() => {
+          const orig = btn.textContent;
+          btn.textContent = 'Copied!';
+          setTimeout(() => btn.textContent = orig, 1500);
+        });
+      });
+    });
+    document.getElementById('alttext-csv-btn')?.addEventListener('click', () => indexyAltTextCsv(images));
+  } catch (e) {
+    result.innerHTML = `<div class="gsc-msg gsc-error">Error: ${escHtml(e.message)}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Scan & Generate Alt Text';
+  }
+}
+
+function indexyAltTextTable(images, siteUrl) {
+  const issueBadge = issue => {
+    const cls = issue === 'Missing' ? 'alttext-badge-red' : issue === 'Vague' ? 'alttext-badge-yellow' : issue === 'Too long' ? 'alttext-badge-yellow' : 'alttext-badge-ok';
+    return `<span class="alttext-badge ${cls}">${escHtml(issue)}</span>`;
+  };
+  const rows = images.map(img => {
+    const pagePath = img.page?.replace(/^https?:\/\/[^/]+/, '') || '/';
+    const imgName  = img.src?.split('/').pop()?.split('?')[0] || img.src || '';
+    return `<tr>
+      <td title="${escHtml(img.page)}">${escHtml(pagePath)}</td>
+      <td class="alttext-img-cell" title="${escHtml(img.src)}">${escHtml(imgName)}</td>
+      <td class="alttext-current">${escHtml(img.currentAlt || '(missing)')}</td>
+      <td>${issueBadge(img.issue)}</td>
+      <td class="alttext-recommended">${escHtml(img.recommended || '')}
+        <button class="alttext-copy-btn" data-text="${escHtml(img.recommended || '')}">Copy</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  return `
+    <div class="alttext-toolbar">
+      <span class="alttext-count">${images.length} image${images.length !== 1 ? 's' : ''} need attention</span>
+      <button id="alttext-csv-btn" class="btn-sm">Download CSV</button>
+    </div>
+    <div class="gsc-ai-table-wrap">
+      <table class="gsc-ai-table alttext-table">
+        <thead><tr>
+          <th>Page</th><th>Image</th><th>Current Alt</th><th>Issue</th><th>Recommended Alt Text</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+function indexyAltTextCsv(images) {
+  const header = ['Page', 'Image', 'Current Alt', 'Issue', 'Recommended Alt Text'];
+  const rows   = images.map(img => [
+    img.page || '',
+    img.src?.split('/').pop()?.split('?')[0] || '',
+    img.currentAlt || '',
+    img.issue || '',
+    img.recommended || '',
+  ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(','));
+  const csv  = [header.join(','), ...rows].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const a    = document.createElement('a');
+  a.href     = URL.createObjectURL(blob);
+  a.download = 'alt-text-audit.csv';
+  a.click();
 }
 
 function indexyLoadSaved(clientId) {

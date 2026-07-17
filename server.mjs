@@ -788,6 +788,121 @@ app.post('/api/claude/chat', apiGuard, async (req, res) => {
 });
 
 /* ─────────────────────────────────────────────
+   ALT TEXT GENERATOR  — crawl site + Claude
+───────────────────────────────────────────── */
+const ALT_TEXT_SYSTEM_PROMPT = `You are an SEO specialist generating image alt text for a website.
+
+For each image provided, write a concise (under 125 characters), descriptive alt text that:
+- Describes what the image shows based on the filename and page context
+- Naturally includes the primary keyword from the page title/H1
+- Includes brand name or city/location where relevant
+- Never starts with "image of", "photo of", or "picture of"
+- For logos: use "{Brand} logo" format
+- For decorative spacers, icons, or tracking pixels: return ""
+
+Return ONLY a valid JSON array — no text before or after. Each object:
+{"src":"<exact src from input>","page":"<page url>","currentAlt":"<current alt>","issue":"<Missing|Vague|Too long|OK>","recommended":"<your alt text>"}`;
+
+async function crawlForImages(startUrl, maxPages) {
+  let base;
+  try { base = new URL(startUrl); } catch { throw new Error('Invalid URL'); }
+  const visited  = new Set();
+  const queue    = [base.href];
+  const images   = [];
+  const TIMEOUT  = 7000;
+
+  while (queue.length && visited.size < maxPages) {
+    const pageUrl = queue.shift();
+    if (visited.has(pageUrl)) continue;
+    visited.add(pageUrl);
+
+    let html = '';
+    try {
+      const r = await fetch(pageUrl, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SEO-AltAudit/1.0)' },
+        signal: AbortSignal.timeout(TIMEOUT),
+        redirect: 'follow',
+      });
+      if (!r.ok) continue;
+      const ct = r.headers.get('content-type') || '';
+      if (!ct.includes('html')) continue;
+      html = await r.text();
+    } catch { continue; }
+
+    const title = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.trim() || '';
+    const h1    = html.match(/<h1[^>]*>([^<]*)<\/h1>/i)?.[1]?.replace(/<[^>]+>/g,'').trim() || '';
+
+    const imgRe = /<img([^>]+)>/gi;
+    let m;
+    while ((m = imgRe.exec(html)) !== null) {
+      const attrs = m[1];
+      const src   = attrs.match(/\bsrc=["']([^"']+)["']/i)?.[1] || '';
+      if (!src || src.startsWith('data:') || /\.(svg|ico|gif)$/i.test(src)) continue;
+      const altM  = attrs.match(/\balt=["']([^"']*)["']/i);
+      const alt   = altM ? altM[1].trim() : null;
+      let absUrl;
+      try { absUrl = new URL(src, pageUrl).href; } catch { continue; }
+      // Skip tiny images (tracking pixels often have width/height=1)
+      if (/\bwidth=["']?1["']?/i.test(attrs) || /\bheight=["']?1["']?/i.test(attrs)) continue;
+
+      const issue = alt === null ? 'Missing' : alt === '' ? 'Missing' : alt.length < 5 ? 'Vague' : alt.length > 125 ? 'Too long' : 'OK';
+      if (issue === 'OK') continue; // skip images already well-described
+
+      images.push({ page: pageUrl, pageTitle: title, h1, src: absUrl, currentAlt: alt ?? '(missing)' });
+    }
+
+    // Enqueue internal links
+    if (visited.size < maxPages) {
+      const linkRe = /href=["']([^"'#?][^"']*?)["']/gi;
+      while ((m = linkRe.exec(html)) !== null) {
+        try {
+          const abs = new URL(m[1], pageUrl);
+          if (abs.hostname === base.hostname && !visited.has(abs.href) && !queue.includes(abs.href)) {
+            queue.push(abs.href);
+          }
+        } catch { /* skip */ }
+      }
+    }
+  }
+  return images;
+}
+
+app.post('/api/alttext/scrape', apiGuard, async (req, res) => {
+  if (!ANTHROPIC_KEY) return res.status(503).json({ error: { message: 'ANTHROPIC_API_KEY not configured.' } });
+  const { url, maxPages = 5, clientName = '' } = req.body || {};
+  if (!url || !/^https?:\/\//i.test(url)) return res.status(400).json({ error: { message: 'Valid http/https URL required.' } });
+
+  try {
+    const images = await crawlForImages(url, Math.min(parseInt(maxPages) || 5, 10));
+    if (!images.length) return res.json({ images: [] });
+
+    // Build prompt — batch all images into one call
+    const imgList = images.map((img, i) =>
+      `${i + 1}. src="${img.src}" | page="${img.page}" | pageTitle="${img.pageTitle}" | h1="${img.h1}" | currentAlt="${img.currentAlt}" | brand="${clientName}"`
+    ).join('\n');
+
+    const up = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5',
+        max_tokens: 8192,
+        system: ALT_TEXT_SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: `Generate alt text for these ${images.length} images:\n\n${imgList}` }],
+      }),
+    });
+    const data = await up.json();
+    const text = data.content?.find(b => b.type === 'text')?.text || '[]';
+
+    let parsed;
+    try { parsed = JSON.parse(text); } catch { parsed = []; }
+    res.json({ images: parsed, pagesScanned: images.length });
+  } catch (e) {
+    res.status(502).json({ error: { message: e.message } });
+  }
+});
+
+/* ─────────────────────────────────────────────
    FETCH EXISTING PAGE CONTENT
 ───────────────────────────────────────────── */
 function htmlToText(html) {
