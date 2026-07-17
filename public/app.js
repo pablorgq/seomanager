@@ -5459,14 +5459,18 @@ async function ahrefsQuery(endpoint, params) {
 }
 
 async function ahrefsPullAll() {
-  const domain  = document.getElementById('ah-domain').value.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  const raw     = document.getElementById('ah-domain').value.trim();
+  const domain  = raw.replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase();
   const country = document.getElementById('ah-country').value;
   const btn     = document.getElementById('ah-pull-btn');
   const status  = document.getElementById('ah-status');
   if (!domain) { status.textContent = 'Enter a domain first.'; return; }
 
+  // Write cleaned domain back to the input
+  document.getElementById('ah-domain').value = domain;
   ahrefsDomain = domain;
   btn.disabled = true;
+  status.style.color = '';
 
   const steps = [
     ['Overview',          'site-explorer/overview',          { target: domain, mode: 'domain', country }],
@@ -5480,14 +5484,40 @@ async function ahrefsPullAll() {
   ];
 
   const data = {};
+  let firstError = null;
   for (const [label, endpoint, params] of steps) {
     status.textContent = `Fetching ${label}…`;
-    try { data[endpoint.split('/').pop()] = await ahrefsQuery(endpoint, params); }
-    catch (e) { data[endpoint.split('/').pop()] = { error: e.message }; }
+    try {
+      const result = await ahrefsQuery(endpoint, params);
+      data[endpoint.split('/').pop()] = result;
+    } catch (e) {
+      const msg = e.message || '';
+      if (!firstError) firstError = msg;
+      // If API key not configured, bail immediately — no point continuing
+      if (msg.includes('AHREFS_API_KEY') || msg.includes('not configured')) {
+        status.style.color = '#dc3c3c';
+        status.textContent = '⚠ AHREFS_API_KEY not set — add it to Railway Variables';
+        btn.disabled = false;
+        document.getElementById('ah-panel-overview').innerHTML =
+          `<div class="ah-error-box">
+            <strong>Ahrefs API key not configured.</strong><br>
+            Go to your Railway dashboard → Variables → add <code>AHREFS_API_KEY</code> with your Ahrefs API key.<br>
+            Find your key at <strong>app.ahrefs.com → Settings → API</strong>.
+          </div>`;
+        return;
+      }
+      data[endpoint.split('/').pop()] = { error: msg };
+    }
   }
 
   ahrefsCache[domain] = data;
-  status.textContent = '✓ Data loaded';
+  if (firstError && Object.values(data).every(v => v?.error)) {
+    status.style.color = '#dc3c3c';
+    status.textContent = `⚠ All requests failed: ${firstError}`;
+  } else {
+    status.style.color = '#2d9e6b';
+    status.textContent = '✓ Data loaded';
+  }
   btn.disabled = false;
   ahrefsRenderAll(data);
 }
