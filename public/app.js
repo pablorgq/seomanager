@@ -104,7 +104,7 @@ function switchTab(tab, { pushState = true } = {}) {
   if (tab === 'gsc') gscRender();
   if (tab === 'log') logTabRender();
   if (tab === 'weekly') weeklyRender();
-  if (tab === 'indexy') indexyRender();
+  if (tab === 'indexy') { indexyRender(); indexySyncClient(); }
   if (pushState) {
     const path = TAB_ROUTES[tab];
     if (window.location.pathname !== path) history.pushState({ tab }, '', path);
@@ -4854,18 +4854,37 @@ function indexyRender() {
   document.getElementById('indexy-xlsx').addEventListener('change', e => {
     document.getElementById('indexy-xlsx-name').textContent = e.target.files[0]?.name || 'Workbook (XLSX / CSV)';
   });
-  document.getElementById('indexy-client').addEventListener('change', e => indexyLoadSaved(e.target.value));
+  document.getElementById('indexy-client').addEventListener('change', e => {
+    const id = e.target.value;
+    rtData.activeClientId = id;
+    rtSave();
+    indexyLoadSaved(id);
+    indexyAltTextPrefill();
+  });
   document.getElementById('indexy-btn').addEventListener('click', indexyExtract);
 
   // Alt text wiring
   document.getElementById('alttext-btn').addEventListener('click', indexyAltTextScrape);
   document.getElementById('indexy-client').addEventListener('change', indexyAltTextPrefill);
 
-  // Auto-select first client with saved audit
-  const firstWithAudit = clients.find(c => auditData[c.id]);
-  if (firstWithAudit) {
-    document.getElementById('indexy-client').value = firstWithAudit.id;
-    indexyLoadSaved(firstWithAudit.id);
+  // Auto-select active RT client, fall back to first with audit
+  const defaultClient = clients.find(c => c.id === rtData.activeClientId)
+    || clients.find(c => auditData[c.id]);
+  if (defaultClient) {
+    document.getElementById('indexy-client').value = defaultClient.id;
+    indexyLoadSaved(defaultClient.id);
+    indexyAltTextPrefill();
+  }
+}
+
+function indexySyncClient() {
+  const sel = document.getElementById('indexy-client');
+  if (!sel) return;
+  const activeId = rtData.activeClientId;
+  if (activeId && sel.value !== activeId) {
+    sel.value = activeId;
+    indexyLoadSaved(activeId);
+    indexyAltTextPrefill();
   }
 }
 
@@ -4968,6 +4987,10 @@ function indexyAltTextTable(images, siteUrl) {
 function indexyAltTextPrefill() {
   const clientId = document.getElementById('indexy-client')?.value;
   const c = rtData?.clients?.find(cl => cl.id === clientId);
+  // Auto-fill scan URL from client's WP site URL
+  const scanUrl = document.getElementById('alttext-url');
+  if (scanUrl && c?.wpUrl) scanUrl.value = c.wpUrl;
+  // Auto-fill WP credentials panel
   const urlEl  = document.getElementById('alttext-wp-url');
   const userEl = document.getElementById('alttext-wp-user');
   const passEl = document.getElementById('alttext-wp-pass');
