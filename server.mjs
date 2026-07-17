@@ -18,6 +18,7 @@ const PORT = process.env.PORT || 3000;
 ───────────────────────────────────────────── */
 const OPENAI_KEY        = process.env.OPENAI_API_KEY      || null;
 const ANTHROPIC_KEY     = process.env.ANTHROPIC_API_KEY   || null;
+const AHREFS_KEY        = process.env.AHREFS_API_KEY      || null;
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
@@ -766,6 +767,48 @@ app.post('/api/indexy/extract', apiGuard, upload.fields([{ name: 'pdf', maxCount
     res.status(up.status).json(await up.json());
   } catch (e) {
     res.status(502).json({ error: { message: e.message } });
+  }
+});
+
+/* ─────────────────────────────────────────────
+   AHREFS API PROXY
+───────────────────────────────────────────── */
+app.post('/api/ahrefs', apiGuard, async (req, res) => {
+  if (!AHREFS_KEY) return res.status(503).json({ error: 'AHREFS_API_KEY not configured on server.' });
+  const { endpoint, params = {} } = req.body || {};
+  if (!endpoint) return res.status(400).json({ error: 'endpoint required' });
+  try {
+    const u = new URL(`https://api.ahrefs.com/v3/${endpoint.replace(/^\/+/, '')}`);
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== null && v !== '') u.searchParams.set(k, v);
+    }
+    const r = await fetch(u.href, {
+      headers: { 'Authorization': `Bearer ${AHREFS_KEY}`, 'Accept': 'application/json' },
+      signal: AbortSignal.timeout(20000),
+    });
+    const text = await r.text();
+    try { res.status(r.status).json(JSON.parse(text)); }
+    catch { res.status(r.status).json({ error: text }); }
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
+app.post('/api/ahrefs/ai', apiGuard, async (req, res) => {
+  if (!ANTHROPIC_KEY) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured.' });
+  const { domain, data } = req.body || {};
+  if (!domain || !data) return res.status(400).json({ error: 'domain and data required' });
+  const system = `You are a senior SEO strategist analyzing Ahrefs data for a website. Give actionable, specific recommendations an SEO expert would act on — not generic advice. Structure your response with clear sections. Use markdown.`;
+  const userMsg = `Analyze this Ahrefs data for ${domain} and provide a comprehensive SEO strategy with specific action items:\n\n${JSON.stringify(data, null, 2)}`;
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'claude-haiku-4-5', max_tokens: 8192, system, messages: [{ role: 'user', content: userMsg }] }),
+    });
+    res.status(r.status).json(await r.json());
+  } catch (e) {
+    res.status(502).json({ error: e.message });
   }
 });
 

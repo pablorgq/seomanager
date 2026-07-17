@@ -1156,6 +1156,38 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
 .gsc-ai-table tbody tr:nth-child(even) { background: var(--surface); }
 .gsc-ai-table tbody tr:hover { background: rgba(99,102,241,.06); }
 
+/* ── Ahrefs SEO Hub ── */
+.ah-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; padding: 12px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+.ah-domain-input { flex: 1; min-width: 180px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text-primary); font-size: 13px; }
+.ah-domain-input:focus { outline: none; border-color: var(--accent); }
+.ah-status { font-size: 12px; color: var(--text-secondary); }
+
+.ah-metrics-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
+.ah-metric { flex: 1; min-width: 120px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; text-align: center; }
+.ah-metric-val { font-size: 22px; font-weight: 700; color: var(--accent); line-height: 1.2; }
+.ah-metric-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); margin-top: 4px; }
+.ah-metric-sub { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+
+.ah-empty { color: var(--text-muted); font-size: 13px; padding: 32px; text-align: center; }
+.ah-info  { font-size: 12px; color: var(--text-secondary); margin: 0 0 8px; }
+
+.ah-link  { color: var(--accent); text-decoration: none; }
+.ah-link:hover { text-decoration: underline; }
+.ah-url   { font-size: 11px; color: var(--text-muted); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ah-anchor { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: italic; }
+.ah-kw    { font-weight: 500; }
+.ah-broken { color: #dc3c3c; }
+
+.ah-pos { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 700; }
+.ah-pos-top  { background: rgba(45,158,107,.15); color: #2d9e6b; }
+.ah-pos-p1   { background: rgba(99,102,241,.12); color: var(--accent); }
+.ah-pos-p2   { background: var(--surface); color: var(--text-muted); border: 1px solid var(--border); }
+
+.ah-follow  { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; background: rgba(45,158,107,.12); color: #2d9e6b; }
+.ah-nf      { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; background: rgba(220,60,60,.1); color: #dc3c3c; }
+
+.gsc-stab-nav { flex-wrap: wrap; }
+
 .gsc-table-wrap { overflow-x: auto; margin-top: 4px; }
 .gsc-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .gsc-table th { background: var(--surface-2); color: var(--text-muted); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); }

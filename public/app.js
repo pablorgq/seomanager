@@ -90,6 +90,7 @@ const TAB_ROUTES = {
   brands:    '/blog-brands',
   images:    '/image-generator',
   indexy:    '/indexy',
+  ahrefs:    '/ahrefs',
 };
 const ROUTE_TABS  = Object.fromEntries(Object.entries(TAB_ROUTES).map(([tab, path]) => [path, tab]));
 const TOOLS_TABS  = new Set(['brands', 'images']);
@@ -105,6 +106,7 @@ function switchTab(tab, { pushState = true } = {}) {
   if (tab === 'log') logTabRender();
   if (tab === 'weekly') weeklyRender();
   if (tab === 'indexy') { indexyRender(); indexySyncClient(); }
+  if (tab === 'ahrefs') ahrefsRender();
   if (pushState) {
     const path = TAB_ROUTES[tab];
     if (window.location.pathname !== path) history.pushState({ tab }, '', path);
@@ -5380,6 +5382,338 @@ function indexyWireTabs(container) {
       output.querySelector('#' + btn.dataset.panel)?.classList.add('active');
     });
   });
+}
+
+/* ══════════════════════════════════════════════════════
+   AHREFS SEO HUB
+══════════════════════════════════════════════════════ */
+let ahrefsCache = {};   // domain → { overview, backlinks, keywords, pages, broken }
+let ahrefsDomain = '';
+
+function ahrefsRender() {
+  const root = document.getElementById('ahrefs-root');
+  if (!root) return;
+
+  // Sync domain from active client's wpUrl
+  const c = rtActiveClient();
+  const domainFromClient = c?.wpUrl ? (() => { try { return new URL(c.wpUrl).hostname; } catch { return ''; } })() : '';
+  if (!ahrefsDomain && domainFromClient) ahrefsDomain = domainFromClient;
+
+  root.innerHTML = `
+    <div class="db-header" style="margin-bottom:0">
+      <h2 class="db-title">Ahrefs SEO Hub</h2>
+      <p class="db-sub">Pull live data from Ahrefs and get AI-powered strategy recommendations.</p>
+    </div>
+    <div class="ah-toolbar">
+      <input id="ah-domain" type="text" class="ah-domain-input" placeholder="example.com" value="${escHtml(ahrefsDomain)}">
+      <select id="ah-country" class="indexy-select-sm">
+        <option value="us">US</option><option value="ca">CA</option><option value="gb">GB</option>
+        <option value="au">AU</option><option value="global">Global</option>
+      </select>
+      <button id="ah-pull-btn" class="btn-sm btn-accent">Pull Data</button>
+      <span id="ah-status" class="ah-status"></span>
+    </div>
+
+    <div class="gsc-stab-nav" id="ah-tab-nav">
+      <button class="gsc-stab active" data-ahtab="overview">📊 Overview</button>
+      <button class="gsc-stab" data-ahtab="backlinks">🔗 Backlinks</button>
+      <button class="gsc-stab" data-ahtab="keywords">🔑 Keywords</button>
+      <button class="gsc-stab" data-ahtab="pages">📄 Top Pages</button>
+      <button class="gsc-stab" data-ahtab="opportunities">⚡ Opportunities</button>
+      <button class="gsc-stab" data-ahtab="strategy">🤖 AI Strategy</button>
+    </div>
+
+    <div id="ah-panel-overview"      class="gsc-stab-panel active"><div class="ah-empty">Pull data to see overview.</div></div>
+    <div id="ah-panel-backlinks"     class="gsc-stab-panel"><div class="ah-empty">Pull data to see backlinks.</div></div>
+    <div id="ah-panel-keywords"      class="gsc-stab-panel"><div class="ah-empty">Pull data to see keywords.</div></div>
+    <div id="ah-panel-pages"         class="gsc-stab-panel"><div class="ah-empty">Pull data to see top pages.</div></div>
+    <div id="ah-panel-opportunities" class="gsc-stab-panel"><div class="ah-empty">Pull data to see opportunities.</div></div>
+    <div id="ah-panel-strategy"      class="gsc-stab-panel"><div class="ah-empty">Pull data first, then click "Generate Strategy".</div></div>`;
+
+  // Tab switching
+  root.querySelectorAll('.gsc-stab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      root.querySelectorAll('.gsc-stab').forEach(b => b.classList.remove('active'));
+      root.querySelectorAll('.gsc-stab-panel').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('ah-panel-' + btn.dataset.ahtab)?.classList.add('active');
+    });
+  });
+
+  document.getElementById('ah-pull-btn').addEventListener('click', ahrefsPullAll);
+
+  // If we have cached data for this domain, restore it
+  const cached = ahrefsCache[ahrefsDomain];
+  if (cached) ahrefsRenderAll(cached);
+}
+
+async function ahrefsQuery(endpoint, params) {
+  const r = await fetch('/api/ahrefs', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ endpoint, params }),
+  });
+  const d = await r.json();
+  if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
+  return d;
+}
+
+async function ahrefsPullAll() {
+  const domain  = document.getElementById('ah-domain').value.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  const country = document.getElementById('ah-country').value;
+  const btn     = document.getElementById('ah-pull-btn');
+  const status  = document.getElementById('ah-status');
+  if (!domain) { status.textContent = 'Enter a domain first.'; return; }
+
+  ahrefsDomain = domain;
+  btn.disabled = true;
+
+  const steps = [
+    ['Overview',          'site-explorer/overview',          { target: domain, mode: 'domain', country }],
+    ['Domain Rating',     'site-explorer/domain-rating',     { target: domain }],
+    ['Backlinks',         'site-explorer/backlinks',         { target: domain, mode: 'domain', limit: 100, order_by: 'domain_rating_source:desc' }],
+    ['Referring Domains', 'site-explorer/refdomains',        { target: domain, mode: 'domain', limit: 100, order_by: 'domain_rating:desc' }],
+    ['Keywords',          'site-explorer/organic-keywords',  { target: domain, mode: 'domain', limit: 100, country, order_by: 'traffic:desc' }],
+    ['Top Pages',         'site-explorer/top-pages',         { target: domain, mode: 'domain', limit: 50,  country }],
+    ['Broken Backlinks',  'site-explorer/broken-backlinks',  { target: domain, mode: 'domain', limit: 100 }],
+    ['Best by Links',     'site-explorer/best-by-links',     { target: domain, mode: 'domain', limit: 50 }],
+  ];
+
+  const data = {};
+  for (const [label, endpoint, params] of steps) {
+    status.textContent = `Fetching ${label}…`;
+    try { data[endpoint.split('/').pop()] = await ahrefsQuery(endpoint, params); }
+    catch (e) { data[endpoint.split('/').pop()] = { error: e.message }; }
+  }
+
+  ahrefsCache[domain] = data;
+  status.textContent = '✓ Data loaded';
+  btn.disabled = false;
+  ahrefsRenderAll(data);
+}
+
+function ahrefsRenderAll(data) {
+  ahrefsRenderOverview(data);
+  ahrefsRenderBacklinks(data);
+  ahrefsRenderKeywords(data);
+  ahrefsRenderPages(data);
+  ahrefsRenderOpportunities(data);
+  // Strategy panel gets a button to trigger Claude
+  document.getElementById('ah-panel-strategy').innerHTML = `
+    <button id="ah-strategy-btn" class="btn-sm btn-accent" style="margin-bottom:16px">🤖 Generate AI Strategy</button>
+    <div id="ah-strategy-result"></div>`;
+  document.getElementById('ah-strategy-btn').addEventListener('click', ahrefsGenerateStrategy);
+}
+
+function ahMetric(label, value, sub = '') {
+  return `<div class="ah-metric"><div class="ah-metric-val">${escHtml(String(value ?? '—'))}</div><div class="ah-metric-label">${label}</div>${sub ? `<div class="ah-metric-sub">${sub}</div>` : ''}</div>`;
+}
+
+function ahrefsRenderOverview(data) {
+  const ov = data.overview || {};
+  const dr = data['domain-rating'] || {};
+  const panel = document.getElementById('ah-panel-overview');
+  if (!panel) return;
+
+  const metrics = `<div class="ah-metrics-row">
+    ${ahMetric('Domain Rating', dr.domain?.domain_rating ?? ov.domain_rating ?? '—')}
+    ${ahMetric('Backlinks', (ov.backlinks ?? ov.metrics?.backlinks ?? '—').toLocaleString?.() ?? '—')}
+    ${ahMetric('Referring Domains', (ov.refdomains ?? ov.metrics?.refdomains ?? '—').toLocaleString?.() ?? '—')}
+    ${ahMetric('Organic Traffic', (ov.org_traffic ?? ov.metrics?.org_traffic ?? '—').toLocaleString?.() ?? '—', 'est. monthly visits')}
+    ${ahMetric('Organic Keywords', (ov.org_keywords ?? ov.metrics?.org_keywords ?? '—').toLocaleString?.() ?? '—')}
+    ${ahMetric('Paid Traffic', (ov.paid_traffic ?? ov.metrics?.paid_traffic ?? 0).toLocaleString?.() ?? '0')}
+  </div>`;
+
+  // Top refdomains preview
+  const refs = data.refdomains?.refdomains ?? [];
+  const refsTable = refs.length ? `
+    <h4 class="indexy-h4">Top Referring Domains</h4>
+    <div class="gsc-ai-table-wrap"><table class="gsc-ai-table">
+      <thead><tr><th>Domain</th><th>DR</th><th>Links</th><th>Traffic</th></tr></thead>
+      <tbody>${refs.slice(0, 10).map(r => `<tr>
+        <td>${escHtml(r.refdomains ?? r.domain ?? '')}</td>
+        <td>${r.domain_rating ?? '—'}</td>
+        <td>${(r.backlinks ?? 0).toLocaleString()}</td>
+        <td>${(r.org_traffic ?? 0).toLocaleString()}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>` : '';
+
+  panel.innerHTML = metrics + refsTable;
+}
+
+function ahrefsRenderBacklinks(data) {
+  const panel = document.getElementById('ah-panel-backlinks');
+  if (!panel) return;
+  const bls = data.backlinks?.backlinks ?? [];
+  if (!bls.length) { panel.innerHTML = '<div class="ah-empty">No backlinks data.</div>'; return; }
+  panel.innerHTML = `
+    <p class="ah-info">${bls.length} backlinks loaded (sorted by DR)</p>
+    <div class="gsc-ai-table-wrap"><table class="gsc-ai-table">
+      <thead><tr><th>Source</th><th>DR</th><th>Anchor</th><th>Target URL</th><th>Type</th><th>First seen</th></tr></thead>
+      <tbody>${bls.map(b => `<tr>
+        <td><a href="${escHtml(b.url_from??'')}" target="_blank" class="ah-link">${escHtml((b.domain_from??b.url_from??'').replace(/^https?:\/\//, '').split('/')[0])}</a></td>
+        <td>${b.domain_rating_source ?? '—'}</td>
+        <td class="ah-anchor">${escHtml(b.anchor ?? '—')}</td>
+        <td class="ah-url" title="${escHtml(b.url_to??'')}">${escHtml((b.url_to??'').replace(/^https?:\/\/[^/]+/,'').slice(0,40)||'/')}</td>
+        <td>${b.link_type === 'nofollow' ? '<span class="ah-nf">nofollow</span>' : '<span class="ah-follow">dofollow</span>'}</td>
+        <td>${b.first_seen?.slice(0,10) ?? '—'}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`;
+}
+
+function ahrefsRenderKeywords(data) {
+  const panel = document.getElementById('ah-panel-keywords');
+  if (!panel) return;
+  const kws = data['organic-keywords']?.keywords ?? [];
+  if (!kws.length) { panel.innerHTML = '<div class="ah-empty">No keywords data.</div>'; return; }
+  panel.innerHTML = `
+    <p class="ah-info">${kws.length} keywords loaded (sorted by traffic)</p>
+    <div class="gsc-ai-table-wrap"><table class="gsc-ai-table">
+      <thead><tr><th>Keyword</th><th>Position</th><th>Volume</th><th>Traffic</th><th>KD</th><th>URL</th></tr></thead>
+      <tbody>${kws.map(k => {
+        const pos = k.pos ?? k.position ?? 0;
+        const posCls = pos <= 3 ? 'ah-pos-top' : pos <= 10 ? 'ah-pos-p1' : 'ah-pos-p2';
+        return `<tr>
+          <td class="ah-kw">${escHtml(k.keyword ?? '')}</td>
+          <td><span class="ah-pos ${posCls}">${pos}</span></td>
+          <td>${(k.volume ?? 0).toLocaleString()}</td>
+          <td>${(k.traffic ?? 0).toLocaleString()}</td>
+          <td>${k.difficulty ?? k.kd ?? '—'}</td>
+          <td class="ah-url" title="${escHtml(k.url??'')}">${escHtml((k.url??'').replace(/^https?:\/\/[^/]+/,'').slice(0,35)||'/')}</td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table></div>`;
+}
+
+function ahrefsRenderPages(data) {
+  const panel = document.getElementById('ah-panel-pages');
+  if (!panel) return;
+  const pages = data['top-pages']?.pages ?? [];
+  const bestByLinks = data['best-by-links']?.pages ?? [];
+  if (!pages.length && !bestByLinks.length) { panel.innerHTML = '<div class="ah-empty">No pages data.</div>'; return; }
+
+  const topTraffic = pages.length ? `
+    <h4 class="indexy-h4">Top Pages by Organic Traffic</h4>
+    <div class="gsc-ai-table-wrap"><table class="gsc-ai-table">
+      <thead><tr><th>URL</th><th>Traffic</th><th>Keywords</th><th>Top Keyword</th></tr></thead>
+      <tbody>${pages.slice(0, 30).map(p => `<tr>
+        <td class="ah-url"><a href="${escHtml(p.url??'')}" target="_blank" class="ah-link">${escHtml((p.url??'').replace(/^https?:\/\/[^/]+/,'').slice(0,50)||'/')}</a></td>
+        <td>${(p.traffic ?? 0).toLocaleString()}</td>
+        <td>${(p.keywords ?? 0).toLocaleString()}</td>
+        <td class="ah-kw">${escHtml(p.top_keyword ?? '—')}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>` : '';
+
+  const topLinks = bestByLinks.length ? `
+    <h4 class="indexy-h4" style="margin-top:20px">Pages with Most Backlinks</h4>
+    <div class="gsc-ai-table-wrap"><table class="gsc-ai-table">
+      <thead><tr><th>URL</th><th>Backlinks</th><th>Ref Domains</th></tr></thead>
+      <tbody>${bestByLinks.slice(0, 20).map(p => `<tr>
+        <td class="ah-url"><a href="${escHtml(p.url??'')}" target="_blank" class="ah-link">${escHtml((p.url??'').replace(/^https?:\/\/[^/]+/,'').slice(0,50)||'/')}</a></td>
+        <td>${(p.backlinks ?? 0).toLocaleString()}</td>
+        <td>${(p.refdomains ?? 0).toLocaleString()}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>` : '';
+
+  panel.innerHTML = topTraffic + topLinks;
+}
+
+function ahrefsRenderOpportunities(data) {
+  const panel = document.getElementById('ah-panel-opportunities');
+  if (!panel) return;
+  const broken  = data['broken-backlinks']?.backlinks ?? [];
+  const kws     = data['organic-keywords']?.keywords ?? [];
+
+  // Broken backlinks = link reclamation opportunities
+  const brokenHtml = broken.length ? `
+    <h4 class="indexy-h4">🔗 Broken Backlinks — Reclaim These Links (${broken.length})</h4>
+    <p class="ah-info">These sites link to your 404 pages. Fix the URLs or set up redirects to reclaim the link equity.</p>
+    <div class="gsc-ai-table-wrap"><table class="gsc-ai-table">
+      <thead><tr><th>Source</th><th>DR</th><th>Broken URL</th><th>Anchor</th></tr></thead>
+      <tbody>${broken.slice(0, 50).map(b => `<tr>
+        <td><a href="${escHtml(b.url_from??'')}" target="_blank" class="ah-link">${escHtml((b.domain_from??b.url_from??'').replace(/^https?:\/\//,'').split('/')[0])}</a></td>
+        <td>${b.domain_rating_source ?? '—'}</td>
+        <td class="ah-url ah-broken">${escHtml((b.url_to??'').replace(/^https?:\/\/[^/]+/,'').slice(0,50))}</td>
+        <td>${escHtml(b.anchor ?? '—')}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>` : '<p class="ah-info" style="color:var(--success,#2d9e6b)">✓ No broken backlinks found.</p>';
+
+  // Low-hanging keywords: positions 4–20 with decent volume = quick wins
+  const quickWins = kws.filter(k => { const p = k.pos ?? k.position ?? 99; return p >= 4 && p <= 20 && (k.volume ?? 0) >= 100; });
+  const quickWinsHtml = quickWins.length ? `
+    <h4 class="indexy-h4" style="margin-top:24px">🚀 Quick Win Keywords — Positions 4–20 with Volume (${quickWins.length})</h4>
+    <p class="ah-info">These keywords are close to page 1 or top-3. A content refresh or on-page optimization could move them up fast.</p>
+    <div class="gsc-ai-table-wrap"><table class="gsc-ai-table">
+      <thead><tr><th>Keyword</th><th>Position</th><th>Volume</th><th>Traffic</th><th>URL</th></tr></thead>
+      <tbody>${quickWins.slice(0, 50).map(k => `<tr>
+        <td class="ah-kw">${escHtml(k.keyword ?? '')}</td>
+        <td><span class="ah-pos ${(k.pos??k.position??99)<=10?'ah-pos-p1':'ah-pos-p2'}">${k.pos ?? k.position}</span></td>
+        <td>${(k.volume ?? 0).toLocaleString()}</td>
+        <td>${(k.traffic ?? 0).toLocaleString()}</td>
+        <td class="ah-url">${escHtml((k.url??'').replace(/^https?:\/\/[^/]+/,'').slice(0,40)||'/')}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>` : '';
+
+  // Pages with traffic but few backlinks = link building targets
+  const pages = data['top-pages']?.pages ?? [];
+  const linkTargets = pages.filter(p => (p.traffic ?? 0) > 100 && (p.refdomains ?? 0) < 5);
+  const linkTargetsHtml = linkTargets.length ? `
+    <h4 class="indexy-h4" style="margin-top:24px">🎯 Link Building Targets — High Traffic, Low Links (${linkTargets.length})</h4>
+    <p class="ah-info">These pages already get organic traffic but have few referring domains. Building links to them would amplify their performance.</p>
+    <div class="gsc-ai-table-wrap"><table class="gsc-ai-table">
+      <thead><tr><th>URL</th><th>Traffic</th><th>Ref Domains</th><th>Top Keyword</th></tr></thead>
+      <tbody>${linkTargets.slice(0, 20).map(p => `<tr>
+        <td class="ah-url"><a href="${escHtml(p.url??'')}" target="_blank" class="ah-link">${escHtml((p.url??'').replace(/^https?:\/\/[^/]+/,'').slice(0,50)||'/')}</a></td>
+        <td>${(p.traffic ?? 0).toLocaleString()}</td>
+        <td>${p.refdomains ?? 0}</td>
+        <td class="ah-kw">${escHtml(p.top_keyword ?? '—')}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>` : '';
+
+  panel.innerHTML = brokenHtml + quickWinsHtml + linkTargetsHtml ||
+    '<div class="ah-empty">No opportunity data available. Pull data first.</div>';
+}
+
+async function ahrefsGenerateStrategy() {
+  const btn    = document.getElementById('ah-strategy-btn');
+  const result = document.getElementById('ah-strategy-result');
+  const domain = ahrefsDomain || document.getElementById('ah-domain')?.value.trim();
+  const data   = ahrefsCache[domain];
+  if (!data) { result.innerHTML = '<div class="gsc-msg gsc-error">Pull Ahrefs data first.</div>'; return; }
+
+  btn.disabled = true; btn.textContent = 'Generating…';
+  result.innerHTML = '<div class="gsc-msg">Claude is analyzing your Ahrefs data…</div>';
+
+  // Build a compact summary to stay within tokens
+  const summary = {
+    domain,
+    domainRating: data['domain-rating']?.domain?.domain_rating,
+    overview: data.overview?.metrics ?? data.overview,
+    topRefdomains: (data.refdomains?.refdomains ?? []).slice(0, 20).map(r => ({ domain: r.refdomains ?? r.domain, dr: r.domain_rating, links: r.backlinks })),
+    brokenBacklinks: (data['broken-backlinks']?.backlinks ?? []).slice(0, 30).map(b => ({ from: b.domain_from ?? b.url_from, dr: b.domain_rating_source, brokenUrl: b.url_to, anchor: b.anchor })),
+    quickWinKeywords: (data['organic-keywords']?.keywords ?? []).filter(k => { const p = k.pos??k.position??99; return p>=4&&p<=20&&(k.volume??0)>=50; }).slice(0,30).map(k=>({ keyword:k.keyword, pos:k.pos??k.position, volume:k.volume, url:k.url })),
+    topPages: (data['top-pages']?.pages ?? []).slice(0,20).map(p=>({ url:p.url, traffic:p.traffic, keywords:p.keywords, topKw:p.top_keyword })),
+    pagesNeedingLinks: (data['top-pages']?.pages ?? []).filter(p=>(p.traffic??0)>100&&(p.refdomains??0)<5).slice(0,15).map(p=>({ url:p.url, traffic:p.traffic, refdomains:p.refdomains })),
+  };
+
+  try {
+    const r = await fetch('/api/ahrefs/ai', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ domain, data: summary }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    const text = d.content?.find(b => b.type === 'text')?.text || '';
+    if (!text) throw new Error('No response from Claude');
+
+    // Render markdown
+    result.innerHTML = '<div class="gsc-ai-result">' + gscRenderMd(text) + '</div>';
+  } catch (e) {
+    result.innerHTML = `<div class="gsc-msg gsc-error">Error: ${escHtml(e.message)}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = '🤖 Generate AI Strategy';
+  }
 }
 
 /* ── START ── */
