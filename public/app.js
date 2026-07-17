@@ -3285,6 +3285,9 @@ function rtShowAddClient() {
   document.getElementById('rt-modalTitle').textContent     = 'Add Client';
   document.getElementById('rt-clientName').value           = '';
   document.getElementById('rt-campaignId').value           = '';
+  document.getElementById('rt-wpUrl').value                = '';
+  document.getElementById('rt-wpUser').value               = '';
+  document.getElementById('rt-wpPass').value               = '';
   document.getElementById('rt-deleteClientBtn').classList.add('hidden');
   document.getElementById('rt-saveClientBtn').dataset.mode = 'add';
   if (hasAA) rtLoadCampaigns();
@@ -3298,6 +3301,9 @@ function rtShowEditClient() {
   document.getElementById('rt-modalTitle').textContent     = 'Edit Client';
   document.getElementById('rt-clientName').value           = c.name;
   document.getElementById('rt-campaignId').value           = c.aaCampaignId || '';
+  document.getElementById('rt-wpUrl').value                = c.wpUrl  || '';
+  document.getElementById('rt-wpUser').value               = c.wpUser || '';
+  document.getElementById('rt-wpPass').value               = c.wpPass || '';
   document.getElementById('rt-deleteClientBtn').classList.remove('hidden');
   document.getElementById('rt-saveClientBtn').dataset.mode = 'edit';
   if (hasAA) rtLoadCampaigns(c.aaCampaignId);
@@ -3306,17 +3312,20 @@ function rtShowEditClient() {
 }
 
 function rtSaveClient() {
-  const name  = document.getElementById('rt-clientName').value.trim();
-  const cid   = document.getElementById('rt-campaignId').value.trim();
-  const mode  = document.getElementById('rt-saveClientBtn').dataset.mode;
+  const name   = document.getElementById('rt-clientName').value.trim();
+  const cid    = document.getElementById('rt-campaignId').value.trim();
+  const wpUrl  = document.getElementById('rt-wpUrl').value.trim();
+  const wpUser = document.getElementById('rt-wpUser').value.trim();
+  const wpPass = document.getElementById('rt-wpPass').value.trim();
+  const mode   = document.getElementById('rt-saveClientBtn').dataset.mode;
   if (!name) return;
   if (mode === 'add') {
-    const client = { id: rtUid(), name, aaCampaignId: cid, keywords: [] };
+    const client = { id: rtUid(), name, aaCampaignId: cid, wpUrl, wpUser, wpPass, keywords: [] };
     rtData.clients.push(client);
     rtData.activeClientId = client.id;
   } else {
     const c = rtActiveClient();
-    if (c) { c.name = name; c.aaCampaignId = cid; }
+    if (c) { c.name = name; c.aaCampaignId = cid; c.wpUrl = wpUrl; c.wpUser = wpUser; c.wpPass = wpPass; }
   }
   rtSave();
   rtRender();
@@ -4850,6 +4859,7 @@ function indexyRender() {
 
   // Alt text wiring
   document.getElementById('alttext-btn').addEventListener('click', indexyAltTextScrape);
+  document.getElementById('indexy-client').addEventListener('change', indexyAltTextPrefill);
 
   // Auto-select first client with saved audit
   const firstWithAudit = clients.find(c => auditData[c.id]);
@@ -4955,9 +4965,23 @@ function indexyAltTextTable(images, siteUrl) {
     </div>`;
 }
 
+function indexyAltTextPrefill() {
+  const clientId = document.getElementById('indexy-client')?.value;
+  const c = rtData?.clients?.find(cl => cl.id === clientId);
+  const urlEl  = document.getElementById('alttext-wp-url');
+  const userEl = document.getElementById('alttext-wp-user');
+  const passEl = document.getElementById('alttext-wp-pass');
+  if (!urlEl) return;
+  if (c?.wpUrl)  urlEl.value  = c.wpUrl;
+  if (c?.wpUser) userEl.value = c.wpUser;
+  if (c?.wpPass) passEl.value = c.wpPass;
+}
+
 function indexyAltTextPushWP(images) {
   const panel = document.getElementById('alttext-wp-panel');
   if (!panel) return;
+  // Pre-fill from saved client credentials before toggling
+  indexyAltTextPrefill();
   const isVisible = panel.style.display !== 'none';
   panel.style.display = isVisible ? 'none' : 'block';
   if (!isVisible) {
