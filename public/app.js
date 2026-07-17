@@ -4778,6 +4778,13 @@ function indexyRender() {
     : '<option value="">— no clients yet —</option>';
 
   area.innerHTML = `
+    <div class="indexy-top-row">
+      <select id="indexy-client" class="indexy-client-select">
+        <option value="">Select client…</option>
+        ${clientOpts}
+      </select>
+    </div>
+
     <div class="indexy-subnav">
       <button class="indexy-subbtn active" data-sub="audit">📋 Audit Extractor</button>
       <button class="indexy-subbtn" data-sub="alttext">🖼️ Alt Text Generator</button>
@@ -4785,10 +4792,6 @@ function indexyRender() {
 
     <div id="indexy-sub-audit" class="indexy-subpanel active">
       <div class="indexy-form">
-        <select id="indexy-client" class="indexy-client-select">
-          <option value="">Select client…</option>
-          ${clientOpts}
-        </select>
         <label class="indexy-file-label">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
           <span id="indexy-pdf-name">Audit Report (PDF)</span>
@@ -4810,10 +4813,6 @@ function indexyRender() {
 
     <div id="indexy-sub-alttext" class="indexy-subpanel">
       <div class="indexy-form">
-        <select id="alttext-client" class="indexy-client-select">
-          <option value="">Select client…</option>
-          ${clientOpts}
-        </select>
         <input id="alttext-url" type="url" placeholder="https://example.com" class="indexy-url-input">
         <label class="indexy-label-inline">
           Pages to scan:
@@ -4850,13 +4849,6 @@ function indexyRender() {
   document.getElementById('indexy-btn').addEventListener('click', indexyExtract);
 
   // Alt text wiring
-  document.getElementById('alttext-client').addEventListener('change', e => {
-    const c = rtData?.clients?.find(cl => cl.id === e.target.value);
-    if (c) {
-      const domain = c.name.toLowerCase().replace(/\s+/g, '');
-      // Auto-fill URL hint if client name looks like a domain
-    }
-  });
   document.getElementById('alttext-btn').addEventListener('click', indexyAltTextScrape);
 
   // Auto-select first client with saved audit
@@ -4872,7 +4864,7 @@ async function indexyAltTextScrape() {
   const result    = document.getElementById('alttext-result');
   const url       = document.getElementById('alttext-url').value.trim();
   const maxPages  = document.getElementById('alttext-maxpages').value;
-  const clientId  = document.getElementById('alttext-client').value;
+  const clientId  = document.getElementById('indexy-client').value;
   const client    = rtData?.clients?.find(c => c.id === clientId);
 
   if (!url) { result.innerHTML = '<div class="gsc-msg gsc-error">Enter the website URL first.</div>'; return; }

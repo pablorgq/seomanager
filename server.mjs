@@ -836,7 +836,11 @@ async function crawlForImages(startUrl, maxPages) {
     let m;
     while ((m = imgRe.exec(html)) !== null) {
       const attrs = m[1];
-      const src   = attrs.match(/\bsrc=["']([^"']+)["']/i)?.[1] || '';
+      // Support lazy-loaded images (WordPress/Elementor use data-src / data-lazy-src)
+      const src   = attrs.match(/\bdata-lazy-src=["']([^"']+)["']/i)?.[1]
+                 || attrs.match(/\bdata-src=["']([^"']+)["']/i)?.[1]
+                 || attrs.match(/\bsrc=["']([^"']+)["']/i)?.[1]
+                 || '';
       if (!src || src.startsWith('data:') || /\.(svg|ico|gif)$/i.test(src)) continue;
       const altM  = attrs.match(/\balt=["']([^"']*)["']/i);
       const alt   = altM ? altM[1].trim() : null;

@@ -1099,7 +1099,9 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
 .indexy-rt-added     { border-color: var(--success, #2d9e6b); color: var(--success, #2d9e6b); cursor: default; }
 .indexy-rt-added:hover { background: transparent; color: var(--success, #2d9e6b); }
 
-/* Indexy sub-tabs (Audit / Alt Text) */
+/* Indexy shared client row + sub-tabs */
+.indexy-top-row   { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.indexy-top-row .indexy-client-select { max-width: 260px; }
 .indexy-subnav    { display: flex; gap: 6px; margin-bottom: 16px; }
 .indexy-subbtn    { padding: 7px 16px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text-muted); font-size: 13px; font-weight: 500; cursor: pointer; }
 .indexy-subbtn:hover  { border-color: var(--accent); color: var(--accent); }
