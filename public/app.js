@@ -5084,10 +5084,11 @@ function indexyRenderMd(rawText, checkedItems = []) {
 }
 
 function indexyAddToRT(kw, vol) {
-  const c = rtActiveClient();
-  if (!c) { alert('Select a client in Rank Tracker first, then come back to add keywords.'); return false; }
+  const clientId = document.getElementById('indexy-client')?.value;
+  const c = rtData?.clients?.find(cl => cl.id === clientId);
+  if (!c) { alert('Select a client in the Indexy dropdown first.'); return false; }
   const exists = c.keywords.some(k => k.keyword.toLowerCase() === kw.toLowerCase());
-  if (exists) { alert(`"${kw}" is already in Rank Tracker.`); return false; }
+  if (exists) { alert(`"${kw}" is already in Rank Tracker for ${c.name}.`); return false; }
   c.keywords.push({ id: rtUid(), url: '', keyword: kw, volume: vol ? parseInt(vol) || null : null, note: 'Added from Indexy', popStatus: '', popDate: '', rank: null, prevRank: null, lastCheck: null });
   rtSave();
   return true;
