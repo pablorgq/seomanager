@@ -2283,6 +2283,9 @@ const SEONEO_STRATEGIES = [
   { id: 'zero-hero',   name: 'Zero To Hero',             type: 'organic', desc: 'Starting strategy for brand-new websites. Run 4–5 campaigns in month 1.' },
   { id: 'gbp-blast',   name: 'GBP Blast',                type: 'gbp',     desc: 'Google Business Profile — broad blast campaign to boost GBP rankings.' },
   { id: 'gbp-sniper',  name: 'GBP Sniper',               type: 'gbp',     desc: 'Google Business Profile — precision targeting for competitive GBP keywords.' },
+  { id: 'citation',    name: 'Citation',                  type: 'citation', desc: 'Build consistent NAP citations across directories to strengthen local authority and trust signals.' },
+  { id: 'net-agg',     name: 'Network Aggregator',        type: 'citation', desc: 'Submit to data aggregators (Foursquare, Localeze, etc.) to distribute business info across the citation network.' },
+  { id: 'cit-net-agg', name: 'Citation + Network Aggregator', type: 'citation', desc: 'Combined approach — manual citations plus aggregator submission for maximum local citation coverage.' },
 ];
 
 function opgSuggestStrategies(kw) {
