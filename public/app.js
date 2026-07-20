@@ -1777,6 +1777,15 @@ function rtActiveClient() {
   return rtData?.clients?.find(c => c.id === rtData.activeClientId) || null;
 }
 
+function populateGlobalClientSelect() {
+  const sel = document.getElementById('global-client-select');
+  if (!sel || !rtData) return;
+  const active = rtData.activeClientId;
+  sel.innerHTML = (rtData.clients || [])
+    .map(c => `<option value="${escHtml(c.id)}"${c.id === active ? ' selected' : ''}>${escHtml(c.name)}</option>`)
+    .join('') || '<option value="">No clients yet</option>';
+}
+
 function rtRankBadge(rank, prev) {
   if (!rank && rank !== 0) return `<span class="rt-badge rt-na">—</span>`;
   const cls = rank <= 5 ? 'rt-green' : rank <= 10 ? 'rt-orange' : 'rt-red';
@@ -1806,6 +1815,7 @@ function rtRender() {
   sel.innerHTML = rtData.clients.map(c =>
     `<option value="${escHtml(c.id)}"${c.id === rtData.activeClientId ? ' selected' : ''}>${escHtml(c.name)}</option>`
   ).join('');
+  populateGlobalClientSelect();
 
   const noClient  = document.getElementById('rt-noClient');
   const tableWrap = document.getElementById('rt-tableWrap');
@@ -3108,6 +3118,21 @@ async function rtInit() {
     rtData.activeClientId = e.target.value;
     rtSave();
     rtRender();
+    const gs = document.getElementById('global-client-select');
+    if (gs) gs.value = e.target.value;
+  });
+
+  // Global client selector (header bar) — wire change event here since rtData is loaded
+  document.getElementById('global-client-select')?.addEventListener('change', e => {
+    if (!rtData) return;
+    rtData.activeClientId = e.target.value;
+    rtSave();
+    const rtSel = document.getElementById('rt-clientSelect');
+    if (rtSel) rtSel.value = e.target.value;
+    const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
+    if (activeTab === 'ranks') rtRender();
+    if (activeTab === 'ahrefs') ahrefsRender();
+    if (activeTab === 'indexy') { indexyLoadSaved(e.target.value); indexyAltTextPrefill(); }
   });
   document.getElementById('rt-addClientBtn').addEventListener('click', () => rtShowAddClient());
   document.getElementById('rt-editClientBtn').addEventListener('click', () => rtShowEditClient());
@@ -3331,6 +3356,7 @@ function rtSaveClient() {
   }
   rtSave();
   rtRender();
+  populateGlobalClientSelect();
   rtCloseModal('rt-clientModal');
 }
 
@@ -3341,6 +3367,7 @@ function rtDeleteClient() {
   rtData.activeClientId = rtData.clients[0]?.id || null;
   rtSave();
   rtRender();
+  populateGlobalClientSelect();
   rtCloseModal('rt-clientModal');
 }
 
@@ -4783,19 +4810,7 @@ function indexyRender() {
   if (!area || area.dataset.ready) return;
   area.dataset.ready = '1';
 
-  const clients    = rtData?.clients ?? [];
-  const clientOpts = clients.length
-    ? clients.map(c => `<option value="${escHtml(c.id)}">${escHtml(c.name)}</option>`).join('')
-    : '<option value="">— no clients yet —</option>';
-
   area.innerHTML = `
-    <div class="indexy-top-row">
-      <select id="indexy-client" class="indexy-client-select">
-        <option value="">Select client…</option>
-        ${clientOpts}
-      </select>
-    </div>
-
     <div class="indexy-subnav">
       <button class="indexy-subbtn active" data-sub="audit">📋 Audit Extractor</button>
       <button class="indexy-subbtn" data-sub="alttext">🖼️ Alt Text Generator</button>
@@ -4856,38 +4871,15 @@ function indexyRender() {
   document.getElementById('indexy-xlsx').addEventListener('change', e => {
     document.getElementById('indexy-xlsx-name').textContent = e.target.files[0]?.name || 'Workbook (XLSX / CSV)';
   });
-  document.getElementById('indexy-client').addEventListener('change', e => {
-    const id = e.target.value;
-    rtData.activeClientId = id;
-    rtSave();
-    indexyLoadSaved(id);
-    indexyAltTextPrefill();
-  });
   document.getElementById('indexy-btn').addEventListener('click', indexyExtract);
 
   // Alt text wiring
   document.getElementById('alttext-btn').addEventListener('click', indexyAltTextScrape);
-  document.getElementById('indexy-client').addEventListener('change', indexyAltTextPrefill);
-
-  // Auto-select active RT client, fall back to first with audit
-  const defaultClient = clients.find(c => c.id === rtData.activeClientId)
-    || clients.find(c => auditData[c.id]);
-  if (defaultClient) {
-    document.getElementById('indexy-client').value = defaultClient.id;
-    indexyLoadSaved(defaultClient.id);
-    indexyAltTextPrefill();
-  }
 }
 
 function indexySyncClient() {
-  const sel = document.getElementById('indexy-client');
-  if (!sel) return;
-  const activeId = rtData.activeClientId;
-  if (activeId && sel.value !== activeId) {
-    sel.value = activeId;
-    indexyLoadSaved(activeId);
-    indexyAltTextPrefill();
-  }
+  indexyLoadSaved(rtData.activeClientId);
+  indexyAltTextPrefill();
 }
 
 async function indexyAltTextScrape() {
@@ -4895,7 +4887,7 @@ async function indexyAltTextScrape() {
   const result    = document.getElementById('alttext-result');
   const url       = document.getElementById('alttext-url').value.trim();
   const maxPages  = document.getElementById('alttext-maxpages').value;
-  const clientId  = document.getElementById('indexy-client').value;
+  const clientId  = rtData.activeClientId;
   const client    = rtData?.clients?.find(c => c.id === clientId);
 
   if (!url) { result.innerHTML = '<div class="gsc-msg gsc-error">Enter the website URL first.</div>'; return; }
@@ -4993,7 +4985,7 @@ function indexyAltTextTable(images, siteUrl) {
 }
 
 function indexyAltTextPrefill() {
-  const clientId = document.getElementById('indexy-client')?.value;
+  const clientId = rtData.activeClientId;
   const c = rtData?.clients?.find(cl => cl.id === clientId);
   // Auto-fill scan URL from client's WP site URL
   const scanUrl = document.getElementById('alttext-url');
@@ -5174,7 +5166,7 @@ async function indexyExtract() {
   const result    = document.getElementById('indexy-result');
   const pdfInput  = document.getElementById('indexy-pdf');
   const xlsxInput = document.getElementById('indexy-xlsx');
-  const clientId  = document.getElementById('indexy-client')?.value || '';
+  const clientId  = rtData.activeClientId || '';
   if (!pdfInput.files.length && !xlsxInput.files.length) {
     result.innerHTML = '<div class="gsc-msg gsc-error">Upload at least one file first.</div>';
     return;
@@ -5350,9 +5342,9 @@ function indexyRenderMd(rawText, checkedItems = []) {
 }
 
 function indexyAddToRT(kw, vol) {
-  const clientId = document.getElementById('indexy-client')?.value;
+  const clientId = rtData.activeClientId;
   const c = rtData?.clients?.find(cl => cl.id === clientId);
-  if (!c) { alert('Select a client in the Indexy dropdown first.'); return false; }
+  if (!c) { alert('Select a client first (header dropdown).'); return false; }
   const exists = c.keywords.some(k => k.keyword.toLowerCase() === kw.toLowerCase());
   if (exists) { alert(`"${kw}" is already in Rank Tracker for ${c.name}.`); return false; }
   c.keywords.push({ id: rtUid(), url: '', keyword: kw, volume: vol ? parseInt(vol) || null : null, note: 'Added from Indexy', popStatus: '', popDate: '', rank: null, prevRank: null, lastCheck: null });

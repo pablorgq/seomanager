@@ -1190,6 +1190,11 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
 .ah-error-box { background: rgba(220,60,60,.08); border: 1px solid rgba(220,60,60,.3); border-radius: 8px; padding: 16px 20px; color: var(--text-primary); font-size: 13px; line-height: 1.6; max-width: 560px; }
 .ah-error-box code { background: var(--surface); padding: 1px 5px; border-radius: 3px; font-size: 12px; }
 
+/* ── Global client selector (header) ── */
+.global-client-wrap { display: flex; align-items: center; }
+.global-client-select { padding: 5px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text-primary); font-size: 13px; font-weight: 500; cursor: pointer; min-width: 140px; max-width: 220px; height: 32px; }
+.global-client-select:focus { outline: none; border-color: var(--accent); }
+
 .gsc-table-wrap { overflow-x: auto; margin-top: 4px; }
 .gsc-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .gsc-table th { background: var(--surface-2); color: var(--text-muted); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); }
