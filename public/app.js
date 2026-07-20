@@ -2591,6 +2591,15 @@ function weeklyRender() {
       weeklySetStatus(sel.dataset.client, sel.dataset.category, sel.dataset.item, sel.value);
       const meta = WEEKLY_STATUSES.find(s => s.key === sel.value);
       sel.className = 'wk-status-select ' + (meta?.cls || '');
+      // Collapse off-page accordion when marked Done
+      if (sel.value === 'done' && sel.dataset.category === 'offPage') {
+        const accordion = document.getElementById('wk-opg-' + sel.dataset.item);
+        if (accordion) {
+          accordion.classList.remove('wk-opg-open');
+          const toggleBtn = accordion.closest('.wk-item-offpage')?.querySelector('.wk-opg-toggle');
+          if (toggleBtn) toggleBtn.textContent = '▸';
+        }
+      }
     });
   });
 
