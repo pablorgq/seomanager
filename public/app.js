@@ -2102,7 +2102,7 @@ async function rtPopScoreCheck(kwId) {
 
     const r2 = await popPost('/expose/create-report/', {
       prepareId, variations, lsaPhrases,
-      pageNotBuiltYet: false, considerOverOptimization: true, googleNlpCalculation: gnl,
+      pageNotBuiltYet: 0, considerOverOptimization: 1, googleNlpCalculation: gnl ? 1 : 0,
     });
     const tid2 = r2.taskId || r2.task_id || r2.id;
     if (!tid2) throw new Error('No taskId from create-report — ' + JSON.stringify(r2).slice(0, 200));
