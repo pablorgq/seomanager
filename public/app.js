@@ -2075,7 +2075,8 @@ async function rtPopScoreCheck(kwId) {
       await new Promise(r => setTimeout(r, 4000));
       setStatus(`Generating terms… (${i}/40)`);
       const d = await fetch(`${base}/task/${taskId}/results/`).then(r => r.json());
-      if (d.status === 'FAILURE') throw new Error('get-terms task failed');
+      console.log(`[POP terms poll ${i}]`, JSON.stringify(d).slice(0, 300));
+      if (d.status === 'FAILURE') throw new Error('get-terms task failed: ' + JSON.stringify(d).slice(0, 200));
       if (d.prepareId) return d;
     }
     throw new Error('get-terms timed out');
@@ -2087,7 +2088,8 @@ async function rtPopScoreCheck(kwId) {
       await new Promise(r => setTimeout(r, 4000));
       setStatus(`Comparing with page… (${i}/40)`);
       const d = await fetch(`${base}/task/${taskId}/results/`).then(r => r.json());
-      if (d.status === 'FAILURE') throw new Error('create-report task failed');
+      console.log(`[POP report poll ${i}]`, JSON.stringify(d).slice(0, 300));
+      if (d.status === 'FAILURE') throw new Error('create-report task failed: ' + JSON.stringify(d).slice(0, 200));
       if (d.report && d.report.id) return d;
     }
     throw new Error('create-report timed out');

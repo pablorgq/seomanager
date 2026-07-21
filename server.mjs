@@ -686,13 +686,18 @@ app.post('/api/weeklydata', apiGuard, (req, res) => {
 app.use('/api/pop', apiGuard, async (req, res) => {
   if (!POP_KEY) return res.status(503).json({ error: { message: 'POP_API_KEY not configured on this server.' } });
   const popPath = req.path.replace(/^\//, '');
-  const url     = `${POP_BASE}/${popPath}`;
+  let url = `${POP_BASE}/${popPath}`;
   try {
     let opts = { method: req.method, headers: { 'Content-Type': 'application/json' } };
     if (req.method === 'POST') {
       // Inject server API key; remove any client-supplied key to prevent leakage in logs
       const { apiKey: _dropped, ...rest } = sanitizeBody(req.body) || {};
       opts.body = JSON.stringify({ ...rest, apiKey: POP_KEY });
+    } else {
+      // GET polling endpoints require apiKey as a query parameter
+      const u = new URL(url);
+      u.searchParams.set('apiKey', POP_KEY);
+      url = u.toString();
     }
     const r = await fetch(url, opts);
     res.status(r.status).json(await r.json());
