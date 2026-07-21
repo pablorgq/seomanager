@@ -2117,31 +2117,43 @@ async function rtPopScoreCheck(kwId) {
     const report = await pollReport(tid2);
 
     const rep = report.report;
-    console.log('[POP score] full report.report:', JSON.stringify(rep).slice(0, 1000));
-    console.log('[POP score] cleanedContentBrief:', JSON.stringify(rep?.cleanedContentBrief).slice(0, 500));
 
-    // POP returns score as cleanedContentBrief.pageScore (an object or number).
-    // If the object has pageScore:0 but pScore or pageScoreValue holds the real value, we catch all paths.
+    // Scan all numeric leaves in the report to find where ~74 lives
+    (function scanScore(obj, path) {
+      if (!obj || typeof obj !== 'object') return;
+      for (const [k, v] of Object.entries(obj)) {
+        const p = `${path}.${k}`;
+        if (typeof v === 'number') {
+          console.log(`[POP field] ${p} = ${v}`);
+        } else if (v && typeof v === 'object' && !Array.isArray(v)) {
+          scanScore(v, p);
+        }
+      }
+    })(rep, 'report');
+
+    console.log('[POP score] keys at report.report:', Object.keys(rep || {}).join(', '));
+    console.log('[POP score] cleanedContentBrief keys:', Object.keys(rep?.cleanedContentBrief || {}).join(', '));
+    console.log('[POP score] cb.pageScore raw:', JSON.stringify(rep?.cleanedContentBrief?.pageScore));
+
     const cb = rep?.cleanedContentBrief;
     const rawScore = cb?.pageScore ?? cb?.pScore ?? cb?.score
       ?? rep?.pageScore ?? rep?.pageScoreValue ?? rep?.pScore ?? rep?.score;
 
     let score = null;
     if (rawScore != null && typeof rawScore === 'object') {
-      // try every known numeric field inside the object
-      const candidate = rawScore.pageScoreValue ?? rawScore.pScore ?? rawScore.pageScore
-        ?? rawScore.current ?? rawScore.value ?? rawScore.score ?? rawScore.percent;
-      score = candidate != null ? Number(candidate) : null;
+      // pageScoreValue may be "" (empty string) — skip it if so; prefer numeric pageScore
+      const numVal = rawScore.pageScore ?? rawScore.pScore ?? rawScore.current ?? rawScore.value ?? rawScore.score ?? rawScore.percent;
+      const strVal = (rawScore.pageScoreValue && rawScore.pageScoreValue !== '') ? Number(rawScore.pageScoreValue) : null;
+      score = (numVal != null) ? Number(numVal) : strVal;
     } else if (rawScore != null) {
       score = Number(rawScore);
     }
-    // POP sometimes returns score as 0–1 ratio (e.g. 0.742 = 74.2), sometimes 0–100
     if (score != null && !isNaN(score)) {
-      if (score > 0 && score <= 5) score = Math.round(score * 100);
-      else if (score > 0 && score < 1) score = Math.round(score * 100);
+      if (score > 0 && score < 1) score = Math.round(score * 100);
+      else if (score > 0 && score <= 5) score = Math.round(score * 100);
       else score = Math.round(score);
     }
-    console.log('[POP score] rawScore:', rawScore, '→ final:', score);
+    console.log('[POP score] rawScore:', JSON.stringify(rawScore), '→ final:', score);
 
     kw.popScore     = score;
     kw.popScoreDate = new Date().toISOString().slice(0, 10);
