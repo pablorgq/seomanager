@@ -2018,13 +2018,86 @@ ${rep.articleHtml || `<p>${escHtml(rep.articleText || '')}</p>`}
 }
 
 function rtPopCell(kw) {
-  if (!kw.popStatus) {
-    const kw64 = encodeURIComponent(kw.keyword || '');
-    const url64 = encodeURIComponent(kw.targetUrl || kw.url || '');
-    return `<button class="rt-run-pop-btn" data-kw="${escHtml(kw.keyword||'')}" data-url="${escHtml(kw.targetUrl || kw.url||'')}" title="Run POP analysis">Run POP</button>`;
+  const scoreBadge = kw.popScore != null
+    ? `<span class="rt-pop-score-badge ${kw.popScore >= 80 ? 'pop-green' : kw.popScore >= 60 ? 'pop-yellow' : 'pop-red'}">${kw.popScore}/100</span> `
+    : '';
+  const scoreDate = kw.popScoreDate
+    ? `<span class="rt-pop-date">${escHtml(kw.popScoreDate)}</span>` : '';
+  const scoreBtn = `<button class="rt-pop-score-btn" data-kwid="${escHtml(kw.id)}" title="Score existing page in POP">Score</button>`;
+  const optimBtn = `<button class="rt-run-pop-btn" data-kw="${escHtml(kw.keyword||'')}" data-url="${escHtml(kw.targetUrl||kw.url||'')}" title="Open in Article Generator">Optimize</button>`;
+  return `${scoreBadge}${scoreDate}${scoreBadge || scoreDate ? '<br>' : ''}${scoreBtn} ${optimBtn}`;
+}
+
+async function rtPopScoreCheck(kwId) {
+  let kw;
+  for (const c of rtData.clients || []) {
+    const found = c.keywords?.find(k => k.id === kwId);
+    if (found) { kw = found; break; }
   }
-  const date = kw.popDate ? ` <span class="rt-pop-date">${escHtml(kw.popDate)}</span>` : '';
-  return `<span class="rt-pop-badge">POP ✓</span>${date}<br><span style="font-size:10px;color:var(--text-muted)">${escHtml(kw.popStatus)}</span>`;
+  if (!kw) return;
+
+  const targetUrl = kw.targetUrl || kw.url || '';
+  const keyword   = kw.keyword || '';
+  if (!targetUrl) { alert('Add a Target URL for this keyword first (click the Target URL cell to edit).'); return; }
+
+  const cell = document.querySelector(`tr[data-id="${escHtml(kwId)}"] .rt-td-pop`);
+  if (cell) cell.innerHTML = '<span class="rt-pop-checking">Checking… (may take ~60s)</span>';
+
+  const base   = hasPop ? POP_API_PROXY : POP_API_DIRECT;
+  const apiKey = hasPop ? '' : (document.getElementById('ag-popKey')?.value || '');
+
+  async function popPost(path, body) {
+    if (!hasPop && apiKey) body.apiKey = apiKey;
+    const r = await fetch(`${base}${path}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return r.json();
+  }
+
+  async function popPoll(taskId) {
+    for (let i = 0; i < 40; i++) {
+      await new Promise(r => setTimeout(r, 3000));
+      const r = await fetch(`${base}/task/${taskId}/results/`);
+      const d = await r.json();
+      if (d.status === 'SUCCESS') return d;
+      if (d.status === 'FAILURE') throw new Error('POP task failed');
+    }
+    throw new Error('POP timed out after 2 minutes');
+  }
+
+  try {
+    const t1 = await popPost('/expose/get-terms/', {
+      keyword, targetUrl, locationName: 'United States', targetLanguage: 'English',
+    });
+    if (!t1.taskId) throw new Error(t1.error || t1.detail || 'No taskId from get-terms');
+    const terms = await popPoll(t1.taskId);
+
+    const prepareId  = terms.result?.prepareId || terms.prepareId;
+    const variations = (terms.result?.lsaTerms || []).slice(0, 5).map(t => t.term);
+    const lsaPhrases = (terms.result?.lsaPhrases || []).slice(0, 5).map(p => p.phrase);
+
+    const t2 = await popPost('/expose/create-report/', {
+      prepareId, variations, lsaPhrases,
+      pageNotBuiltYet: false, considerOverOptimization: true, googleNlpCalculation: false,
+    });
+    if (!t2.taskId) throw new Error(t2.error || t2.detail || 'No taskId from create-report');
+    const report = await popPoll(t2.taskId);
+
+    const ps = report.result?.report?.cleanedContentBrief?.pageScore;
+    let score = ps?.pageScoreValue ?? ps?.pageScore ?? null;
+    if (score !== null) score = score <= 5 ? Math.round(score * 20) : Math.round(score);
+
+    kw.popScore     = score;
+    kw.popScoreDate = new Date().toISOString().slice(0, 10);
+    rtSave();
+
+    if (cell) cell.outerHTML = `<td class="rt-td-pop">${rtPopCell(kw)}</td>`;
+  } catch (e) {
+    if (cell) cell.innerHTML =
+      `<span class="rt-pop-err" title="${escHtml(e.message)}">Error ✕</span><br>` +
+      `<button class="rt-pop-score-btn" data-kwid="${escHtml(kwId)}">Retry</button>`;
+  }
 }
 
 /* ── Dashboard ── */
@@ -3225,6 +3298,9 @@ async function rtInit() {
       }
       return;
     }
+
+    const scoreBtn = e.target.closest('.rt-pop-score-btn');
+    if (scoreBtn) { rtPopScoreCheck(scoreBtn.dataset.kwid); return; }
 
     const popBtn = e.target.closest('.rt-run-pop-btn');
     if (popBtn) {

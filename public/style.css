@@ -1366,13 +1366,23 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
   background: var(--accent); border-color: var(--accent); color: #fff;
 }
 
-/* Run POP button */
+/* Run POP / Optimize button */
 .rt-run-pop-btn {
-  font-size: 10px; font-weight: 600; padding: 2px 9px; border-radius: 20px;
-  border: 1px solid var(--accent); color: var(--accent); background: transparent;
+  font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 20px;
+  border: 1px solid var(--border); color: var(--text-secondary); background: transparent;
   cursor: pointer; white-space: nowrap; transition: background .15s;
 }
-.rt-run-pop-btn:hover { background: rgba(67,97,238,.1); }
+.rt-run-pop-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* POP score badge + inline Score button */
+.rt-pop-score-badge { display:inline-block; padding:2px 7px; border-radius:4px; font-size:11px; font-weight:700; }
+.pop-green  { background:rgba(45,158,107,.15);  color:#2d9e6b; }
+.pop-yellow { background:rgba(232,168,56,.15);   color:#c48a00; }
+.pop-red    { background:rgba(220,60,60,.12);    color:#dc3c3c; }
+.rt-pop-score-btn { font-size:10px; font-weight:600; padding:2px 7px; border-radius:20px; border:1px solid var(--accent); color:var(--accent); background:transparent; cursor:pointer; white-space:nowrap; }
+.rt-pop-score-btn:hover { background:rgba(67,97,238,.1); }
+.rt-pop-checking { font-size:11px; color:var(--text-muted); font-style:italic; }
+.rt-pop-err { font-size:10px; color:#dc3c3c; }
 
 /* rank_badge alias used by local badge */
 .rt-rank-badge {
