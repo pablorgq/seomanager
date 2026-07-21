@@ -2049,7 +2049,8 @@ async function rtPopScoreCheck(kwId) {
   }
 
   const cell = document.querySelector(`tr[data-id="${CSS.escape(kwId)}"] .rt-td-pop`);
-  if (cell) cell.innerHTML = '<span class="rt-pop-checking">Checking… (~60s)</span>';
+  const setStatus = msg => { if (cell) cell.innerHTML = `<span class="rt-pop-checking">${msg}</span>`; };
+  setStatus('Requesting terms…');
 
   const base   = hasPop ? POP_API_PROXY : POP_API_DIRECT;
   const apiKey = hasPop ? '' : (document.getElementById('ag-popKey')?.value || '');
@@ -2070,8 +2071,9 @@ async function rtPopScoreCheck(kwId) {
 
   // get-terms poll: done when d.prepareId is set
   async function pollTerms(taskId) {
-    for (let i = 0; i < 40; i++) {
+    for (let i = 1; i <= 40; i++) {
       await new Promise(r => setTimeout(r, 4000));
+      setStatus(`Generating terms… (${i}/40)`);
       const d = await fetch(`${base}/task/${taskId}/results/`).then(r => r.json());
       if (d.status === 'FAILURE') throw new Error('get-terms task failed');
       if (d.prepareId) return d;
@@ -2081,8 +2083,9 @@ async function rtPopScoreCheck(kwId) {
 
   // create-report poll: done when d.report.id is set (top-level, not nested under result)
   async function pollReport(taskId) {
-    for (let i = 0; i < 40; i++) {
+    for (let i = 1; i <= 40; i++) {
       await new Promise(r => setTimeout(r, 4000));
+      setStatus(`Comparing with page… (${i}/40)`);
       const d = await fetch(`${base}/task/${taskId}/results/`).then(r => r.json());
       if (d.status === 'FAILURE') throw new Error('create-report task failed');
       if (d.report && d.report.id) return d;
@@ -2096,13 +2099,16 @@ async function rtPopScoreCheck(kwId) {
     if (!tid1) throw new Error('No taskId from get-terms — ' + JSON.stringify(r1).slice(0, 200));
     const terms = await pollTerms(tid1);
 
+    // variations = array of strings; lsaPhrases = full objects (POP requires objects, not strings)
     const prepareId  = terms.prepareId;
-    const variations = (terms.lsaTerms   || []).slice(0, 5).map(t => t.term);
-    const lsaPhrases = (terms.lsaPhrases || []).slice(0, 5).map(p => p.phrase);
+    const variations = (terms.variations || []).slice(0, 10).map(v => typeof v === 'string' ? v : (v.phrase || v.variation || String(v)));
+    const lsaPhrases = (terms.lsaPhrases || []).slice(0, 10);
 
+    setStatus('Creating report…');
     const r2 = await popPost('/expose/create-report/', {
       prepareId, variations, lsaPhrases,
-      pageNotBuiltYet: 0, considerOverOptimization: 1, googleNlpCalculation: gnl ? 1 : 0,
+      pageNotBuiltYet: 0, considerOverOptimization: 1,
+      googleNlpCalculation: gnl ? 1 : 0, specialLanguageSupport: 0,
     });
     const tid2 = r2.taskId || r2.task_id || r2.id;
     if (!tid2) throw new Error('No taskId from create-report — ' + JSON.stringify(r2).slice(0, 200));
@@ -2110,8 +2116,13 @@ async function rtPopScoreCheck(kwId) {
 
     const rep = report.report;
     const rawScore = rep?.cleanedContentBrief?.pageScore ?? rep?.pageScore ?? rep?.pageScoreValue ?? rep?.score;
-    let score = (rawScore != null && typeof rawScore === 'object') ? (rawScore.pageScoreValue ?? rawScore.pageScore ?? null) : (rawScore ?? null);
-    if (score !== null && score !== undefined) score = Number(score) <= 5 ? Math.round(Number(score) * 20) : Math.round(Number(score));
+    let score = (rawScore != null && typeof rawScore === 'object')
+      ? (rawScore.pageScore ?? rawScore.current ?? rawScore.value ?? rawScore.score ?? null)
+      : (rawScore ?? null);
+    if (score !== null && score !== undefined) {
+      score = Number(score);
+      score = score > 0 && score <= 5 ? Math.round(score * 100) : Math.round(score);
+    }
 
     kw.popScore     = score;
     kw.popScoreDate = new Date().toISOString().slice(0, 10);
