@@ -2043,14 +2043,16 @@ async function rtPopScoreCheck(kwId) {
   const gnl        = !!client?.popGnl;
 
   if (!targetUrl) { alert('Add a Target URL for this keyword first (click the Target URL cell to edit).'); return; }
+  if (!locName) { alert('Add a Target Location for this client first (Edit Client → POP Settings).'); return; }
   if (!hasPop && !document.getElementById('ag-popKey')?.value) {
     alert('No POP API key configured. Add it in Settings or ask your admin to set POP_API_KEY on the server.');
     return;
   }
 
   const cell = document.querySelector(`tr[data-id="${CSS.escape(kwId)}"] .rt-td-pop`);
+  const kwLabel = keyword ? `"${keyword}"` : 'keyword';
   const setStatus = msg => { if (cell) cell.innerHTML = `<span class="rt-pop-checking">${msg}</span>`; };
-  setStatus('Requesting terms…');
+  setStatus(`Requesting terms for ${kwLabel}…`);
 
   const base   = hasPop ? POP_API_PROXY : POP_API_DIRECT;
   const apiKey = hasPop ? '' : (document.getElementById('ag-popKey')?.value || '');
@@ -2073,7 +2075,7 @@ async function rtPopScoreCheck(kwId) {
   async function pollTerms(taskId) {
     for (let i = 1; i <= 40; i++) {
       await new Promise(r => setTimeout(r, 4000));
-      setStatus(`Generating terms… (${i}/40)`);
+      setStatus(`Generating terms for ${kwLabel}… (${i}/40)`);
       const d = await fetch(`${base}/task/${taskId}/results/`).then(r => r.json());
       console.log(`[POP terms poll ${i}]`, JSON.stringify(d).slice(0, 300));
       if (d.status === 'FAILURE') throw new Error('get-terms task failed: ' + JSON.stringify(d).slice(0, 200));
@@ -2086,7 +2088,7 @@ async function rtPopScoreCheck(kwId) {
   async function pollReport(taskId) {
     for (let i = 1; i <= 40; i++) {
       await new Promise(r => setTimeout(r, 4000));
-      setStatus(`Comparing with page… (${i}/40)`);
+      setStatus(`Analysing ${kwLabel}… (${i}/40)`);
       const d = await fetch(`${base}/task/${taskId}/results/`).then(r => r.json());
       console.log(`[POP report poll ${i}]`, JSON.stringify(d).slice(0, 300));
       if (d.status === 'FAILURE') throw new Error('create-report task failed: ' + JSON.stringify(d).slice(0, 200));
@@ -2106,7 +2108,7 @@ async function rtPopScoreCheck(kwId) {
     const variations = (terms.variations || []).slice(0, 10).map(v => typeof v === 'string' ? v : (v.phrase || v.variation || String(v)));
     const lsaPhrases = (terms.lsaPhrases || []).slice(0, 10);
 
-    setStatus('Creating report…');
+    setStatus(`Creating report for ${kwLabel}…`);
     const r2 = await popPost('/expose/create-report/', {
       prepareId, variations, lsaPhrases,
       pageNotBuiltYet: 0, considerOverOptimization: 1,
@@ -3470,7 +3472,7 @@ function rtShowAddClient() {
   document.getElementById('rt-wpUrl').value                = '';
   document.getElementById('rt-wpUser').value               = '';
   document.getElementById('rt-wpPass').value               = '';
-  document.getElementById('rt-popLocation').value          = 'United States';
+  document.getElementById('rt-popLocation').value          = '';
   document.getElementById('rt-popLanguage').value          = 'english';
   document.getElementById('rt-popGnl').checked             = false;
   document.getElementById('rt-deleteClientBtn').classList.add('hidden');
@@ -3489,7 +3491,7 @@ function rtShowEditClient() {
   document.getElementById('rt-wpUrl').value                = c.wpUrl  || '';
   document.getElementById('rt-wpUser').value               = c.wpUser || '';
   document.getElementById('rt-wpPass').value               = c.wpPass || '';
-  document.getElementById('rt-popLocation').value          = c.popLocation || 'United States';
+  document.getElementById('rt-popLocation').value          = c.popLocation || '';
   document.getElementById('rt-popLanguage').value          = c.popLanguage || 'english';
   document.getElementById('rt-popGnl').checked             = !!c.popGnl;
   document.getElementById('rt-deleteClientBtn').classList.remove('hidden');
