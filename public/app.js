@@ -2117,14 +2117,31 @@ async function rtPopScoreCheck(kwId) {
     const report = await pollReport(tid2);
 
     const rep = report.report;
-    const rawScore = rep?.cleanedContentBrief?.pageScore ?? rep?.pageScore ?? rep?.pageScoreValue ?? rep?.score;
-    let score = (rawScore != null && typeof rawScore === 'object')
-      ? (rawScore.pageScore ?? rawScore.current ?? rawScore.value ?? rawScore.score ?? null)
-      : (rawScore ?? null);
-    if (score !== null && score !== undefined) {
-      score = Number(score);
-      score = score > 0 && score <= 5 ? Math.round(score * 100) : Math.round(score);
+    console.log('[POP score] full report.report:', JSON.stringify(rep).slice(0, 1000));
+    console.log('[POP score] cleanedContentBrief:', JSON.stringify(rep?.cleanedContentBrief).slice(0, 500));
+
+    // POP returns score as cleanedContentBrief.pageScore (an object or number).
+    // If the object has pageScore:0 but pScore or pageScoreValue holds the real value, we catch all paths.
+    const cb = rep?.cleanedContentBrief;
+    const rawScore = cb?.pageScore ?? cb?.pScore ?? cb?.score
+      ?? rep?.pageScore ?? rep?.pageScoreValue ?? rep?.pScore ?? rep?.score;
+
+    let score = null;
+    if (rawScore != null && typeof rawScore === 'object') {
+      // try every known numeric field inside the object
+      const candidate = rawScore.pageScoreValue ?? rawScore.pScore ?? rawScore.pageScore
+        ?? rawScore.current ?? rawScore.value ?? rawScore.score ?? rawScore.percent;
+      score = candidate != null ? Number(candidate) : null;
+    } else if (rawScore != null) {
+      score = Number(rawScore);
     }
+    // POP sometimes returns score as 0–1 ratio (e.g. 0.742 = 74.2), sometimes 0–100
+    if (score != null && !isNaN(score)) {
+      if (score > 0 && score <= 5) score = Math.round(score * 100);
+      else if (score > 0 && score < 1) score = Math.round(score * 100);
+      else score = Math.round(score);
+    }
+    console.log('[POP score] rawScore:', rawScore, '→ final:', score);
 
     kw.popScore     = score;
     kw.popScoreDate = new Date().toISOString().slice(0, 10);
