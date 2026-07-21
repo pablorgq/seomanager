@@ -2079,13 +2079,13 @@ async function rtPopScoreCheck(kwId) {
     throw new Error('get-terms timed out');
   }
 
-  // create-report poll: done when d.result.report exists
+  // create-report poll: done when d.report.id is set (top-level, not nested under result)
   async function pollReport(taskId) {
     for (let i = 0; i < 40; i++) {
       await new Promise(r => setTimeout(r, 4000));
       const d = await fetch(`${base}/task/${taskId}/results/`).then(r => r.json());
       if (d.status === 'FAILURE') throw new Error('create-report task failed');
-      if (d.result?.report) return d;
+      if (d.report && d.report.id) return d;
     }
     throw new Error('create-report timed out');
   }
@@ -2108,9 +2108,10 @@ async function rtPopScoreCheck(kwId) {
     if (!tid2) throw new Error('No taskId from create-report — ' + JSON.stringify(r2).slice(0, 200));
     const report = await pollReport(tid2);
 
-    const ps = report.result?.report?.cleanedContentBrief?.pageScore;
-    let score = ps?.pageScoreValue ?? ps?.pageScore ?? null;
-    if (score !== null) score = score <= 5 ? Math.round(score * 20) : Math.round(score);
+    const rep = report.report;
+    const rawScore = rep?.cleanedContentBrief?.pageScore ?? rep?.pageScore ?? rep?.pageScoreValue ?? rep?.score;
+    let score = (rawScore != null && typeof rawScore === 'object') ? (rawScore.pageScoreValue ?? rawScore.pageScore ?? null) : (rawScore ?? null);
+    if (score !== null && score !== undefined) score = Number(score) <= 5 ? Math.round(Number(score) * 20) : Math.round(Number(score));
 
     kw.popScore     = score;
     kw.popScoreDate = new Date().toISOString().slice(0, 10);
