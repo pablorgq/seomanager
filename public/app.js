@@ -2029,19 +2029,27 @@ function rtPopCell(kw) {
 }
 
 async function rtPopScoreCheck(kwId) {
-  let kw;
+  let kw, client;
   for (const c of rtData.clients || []) {
     const found = c.keywords?.find(k => k.id === kwId);
-    if (found) { kw = found; break; }
+    if (found) { kw = found; client = c; break; }
   }
   if (!kw) return;
 
-  const targetUrl = kw.targetUrl || kw.url || '';
-  const keyword   = kw.keyword || '';
-  if (!targetUrl) { alert('Add a Target URL for this keyword first (click the Target URL cell to edit).'); return; }
+  const targetUrl  = kw.targetUrl || kw.url || '';
+  const keyword    = kw.keyword || '';
+  const locName    = client?.popLocation || 'United States';
+  const targLang   = client?.popLanguage || 'english';
+  const gnl        = !!client?.popGnl;
 
-  const cell = document.querySelector(`tr[data-id="${escHtml(kwId)}"] .rt-td-pop`);
-  if (cell) cell.innerHTML = '<span class="rt-pop-checking">Checking… (may take ~60s)</span>';
+  if (!targetUrl) { alert('Add a Target URL for this keyword first (click the Target URL cell to edit).'); return; }
+  if (!hasPop && !document.getElementById('ag-popKey')?.value) {
+    alert('No POP API key configured. Add it in Settings or ask your admin to set POP_API_KEY on the server.');
+    return;
+  }
+
+  const cell = document.querySelector(`tr[data-id="${CSS.escape(kwId)}"] .rt-td-pop`);
+  if (cell) cell.innerHTML = '<span class="rt-pop-checking">Checking… (~60s)</span>';
 
   const base   = hasPop ? POP_API_PROXY : POP_API_DIRECT;
   const apiKey = hasPop ? '' : (document.getElementById('ag-popKey')?.value || '');
@@ -2052,37 +2060,53 @@ async function rtPopScoreCheck(kwId) {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
-    return r.json();
+    const j = await r.json();
+    if (!r.ok || j.error || j.detail) {
+      const toStr = v => !v ? '' : typeof v === 'string' ? v : JSON.stringify(v);
+      throw new Error(toStr(j.error) || toStr(j.detail) || toStr(j.message) || JSON.stringify(j).slice(0, 300));
+    }
+    return j;
   }
 
-  async function popPoll(taskId) {
+  // get-terms poll: done when d.prepareId is set
+  async function pollTerms(taskId) {
     for (let i = 0; i < 40; i++) {
-      await new Promise(r => setTimeout(r, 3000));
-      const r = await fetch(`${base}/task/${taskId}/results/`);
-      const d = await r.json();
-      if (d.status === 'SUCCESS') return d;
-      if (d.status === 'FAILURE') throw new Error('POP task failed');
+      await new Promise(r => setTimeout(r, 4000));
+      const d = await fetch(`${base}/task/${taskId}/results/`).then(r => r.json());
+      if (d.status === 'FAILURE') throw new Error('get-terms task failed');
+      if (d.prepareId) return d;
     }
-    throw new Error('POP timed out after 2 minutes');
+    throw new Error('get-terms timed out');
+  }
+
+  // create-report poll: done when d.result.report exists
+  async function pollReport(taskId) {
+    for (let i = 0; i < 40; i++) {
+      await new Promise(r => setTimeout(r, 4000));
+      const d = await fetch(`${base}/task/${taskId}/results/`).then(r => r.json());
+      if (d.status === 'FAILURE') throw new Error('create-report task failed');
+      if (d.result?.report) return d;
+    }
+    throw new Error('create-report timed out');
   }
 
   try {
-    const t1 = await popPost('/expose/get-terms/', {
-      keyword, targetUrl, locationName: 'United States', targetLanguage: 'English',
-    });
-    if (!t1.taskId) throw new Error(t1.error || t1.detail || 'No taskId from get-terms');
-    const terms = await popPoll(t1.taskId);
+    const r1 = await popPost('/expose/get-terms/', { keyword, targetUrl, locationName: locName, targetLanguage: targLang });
+    const tid1 = r1.taskId || r1.task_id || r1.id;
+    if (!tid1) throw new Error('No taskId from get-terms — ' + JSON.stringify(r1).slice(0, 200));
+    const terms = await pollTerms(tid1);
 
-    const prepareId  = terms.result?.prepareId || terms.prepareId;
-    const variations = (terms.result?.lsaTerms || []).slice(0, 5).map(t => t.term);
-    const lsaPhrases = (terms.result?.lsaPhrases || []).slice(0, 5).map(p => p.phrase);
+    const prepareId  = terms.prepareId;
+    const variations = (terms.lsaTerms   || []).slice(0, 5).map(t => t.term);
+    const lsaPhrases = (terms.lsaPhrases || []).slice(0, 5).map(p => p.phrase);
 
-    const t2 = await popPost('/expose/create-report/', {
+    const r2 = await popPost('/expose/create-report/', {
       prepareId, variations, lsaPhrases,
-      pageNotBuiltYet: false, considerOverOptimization: true, googleNlpCalculation: false,
+      pageNotBuiltYet: false, considerOverOptimization: true, googleNlpCalculation: gnl,
     });
-    if (!t2.taskId) throw new Error(t2.error || t2.detail || 'No taskId from create-report');
-    const report = await popPoll(t2.taskId);
+    const tid2 = r2.taskId || r2.task_id || r2.id;
+    if (!tid2) throw new Error('No taskId from create-report — ' + JSON.stringify(r2).slice(0, 200));
+    const report = await pollReport(tid2);
 
     const ps = report.result?.report?.cleanedContentBrief?.pageScore;
     let score = ps?.pageScoreValue ?? ps?.pageScore ?? null;
@@ -2095,7 +2119,7 @@ async function rtPopScoreCheck(kwId) {
     if (cell) cell.outerHTML = `<td class="rt-td-pop">${rtPopCell(kw)}</td>`;
   } catch (e) {
     if (cell) cell.innerHTML =
-      `<span class="rt-pop-err" title="${escHtml(e.message)}">Error ✕</span><br>` +
+      `<span class="rt-pop-err" title="${escHtml(e.message)}">⚠ ${escHtml(e.message.slice(0, 60))}</span><br>` +
       `<button class="rt-pop-score-btn" data-kwid="${escHtml(kwId)}">Retry</button>`;
   }
 }
@@ -3403,6 +3427,9 @@ function rtShowAddClient() {
   document.getElementById('rt-wpUrl').value                = '';
   document.getElementById('rt-wpUser').value               = '';
   document.getElementById('rt-wpPass').value               = '';
+  document.getElementById('rt-popLocation').value          = 'United States';
+  document.getElementById('rt-popLanguage').value          = 'english';
+  document.getElementById('rt-popGnl').checked             = false;
   document.getElementById('rt-deleteClientBtn').classList.add('hidden');
   document.getElementById('rt-saveClientBtn').dataset.mode = 'add';
   if (hasAA) rtLoadCampaigns();
@@ -3419,6 +3446,9 @@ function rtShowEditClient() {
   document.getElementById('rt-wpUrl').value                = c.wpUrl  || '';
   document.getElementById('rt-wpUser').value               = c.wpUser || '';
   document.getElementById('rt-wpPass').value               = c.wpPass || '';
+  document.getElementById('rt-popLocation').value          = c.popLocation || 'United States';
+  document.getElementById('rt-popLanguage').value          = c.popLanguage || 'english';
+  document.getElementById('rt-popGnl').checked             = !!c.popGnl;
   document.getElementById('rt-deleteClientBtn').classList.remove('hidden');
   document.getElementById('rt-saveClientBtn').dataset.mode = 'edit';
   if (hasAA) rtLoadCampaigns(c.aaCampaignId);
@@ -3427,20 +3457,23 @@ function rtShowEditClient() {
 }
 
 function rtSaveClient() {
-  const name   = document.getElementById('rt-clientName').value.trim();
-  const cid    = document.getElementById('rt-campaignId').value.trim();
-  const wpUrl  = document.getElementById('rt-wpUrl').value.trim();
-  const wpUser = document.getElementById('rt-wpUser').value.trim();
-  const wpPass = document.getElementById('rt-wpPass').value.trim();
-  const mode   = document.getElementById('rt-saveClientBtn').dataset.mode;
+  const name        = document.getElementById('rt-clientName').value.trim();
+  const cid         = document.getElementById('rt-campaignId').value.trim();
+  const wpUrl       = document.getElementById('rt-wpUrl').value.trim();
+  const wpUser      = document.getElementById('rt-wpUser').value.trim();
+  const wpPass      = document.getElementById('rt-wpPass').value.trim();
+  const popLocation = document.getElementById('rt-popLocation').value;
+  const popLanguage = document.getElementById('rt-popLanguage').value;
+  const popGnl      = document.getElementById('rt-popGnl').checked;
+  const mode        = document.getElementById('rt-saveClientBtn').dataset.mode;
   if (!name) return;
   if (mode === 'add') {
-    const client = { id: rtUid(), name, aaCampaignId: cid, wpUrl, wpUser, wpPass, keywords: [] };
+    const client = { id: rtUid(), name, aaCampaignId: cid, wpUrl, wpUser, wpPass, popLocation, popLanguage, popGnl, keywords: [] };
     rtData.clients.push(client);
     rtData.activeClientId = client.id;
   } else {
     const c = rtActiveClient();
-    if (c) { c.name = name; c.aaCampaignId = cid; c.wpUrl = wpUrl; c.wpUser = wpUser; c.wpPass = wpPass; }
+    if (c) { c.name = name; c.aaCampaignId = cid; c.wpUrl = wpUrl; c.wpUser = wpUser; c.wpPass = wpPass; c.popLocation = popLocation; c.popLanguage = popLanguage; c.popGnl = popGnl; }
   }
   rtSave();
   rtRender();
