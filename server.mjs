@@ -7,9 +7,19 @@ import { Storage } from '@google-cloud/storage';
 import multer from 'multer';
 import * as XLSX from 'xlsx';
 import { extractText, getDocumentProxy } from 'unpdf';
+import { execSync } from 'child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR  = existsSync('/data') ? '/data' : __dirname;
+
+/* Short SHA of the running build — shown in the top bar so we can see what's live.
+   Railway injects RAILWAY_GIT_COMMIT_SHA; fall back to local git for dev. */
+const GIT_COMMIT = (() => {
+  const env = process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_COMMIT || process.env.SOURCE_VERSION;
+  if (env) return String(env).slice(0, 7);
+  try { return execSync('git rev-parse --short HEAD', { cwd: __dirname }).toString().trim(); }
+  catch { return 'dev'; }
+})();
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
@@ -621,6 +631,7 @@ app.get('/api/config', (req, res) => res.json({
   hasGcs:       !!(gcs && GCS_BUCKET),
   hasAA:        !!AA_KEY,
   hasPop:       !!POP_KEY,
+  commit:       GIT_COMMIT,
 }));
 
 /* ─────────────────────────────────────────────

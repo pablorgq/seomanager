@@ -124,6 +124,14 @@ async function init() {
   hasGcs       = !!cfg.hasGcs;
   hasAA        = !!cfg.hasAA;
   hasPop       = !!cfg.hasPop;
+  if (cfg.commit) {
+    const el = document.getElementById('build-commit');
+    if (el) {
+      el.textContent = '#' + cfg.commit;
+      if (/^[0-9a-f]{7,}$/i.test(cfg.commit)) el.href = 'https://github.com/pablorgq/seomanager/commit/' + cfg.commit;
+      el.style.display = 'inline-block';
+    }
+  }
   if (hasServerKey) {
     document.getElementById('settingsToggle').style.display = 'none';
   } else {
