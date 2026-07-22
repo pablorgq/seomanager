@@ -2372,7 +2372,7 @@ async function rtPopScoreCheck(kwId) {
     if (reportId) {
       try {
         setStatus(`Getting recommendations for ${kwLabel}…`);
-        const recResp = await popPost('/expose/get-custom-recommendations/', { reportId, strategy, approach });
+        const recResp = await popPost('/expose/get-custom-recommendations/', { reportId, strategy });
         recommendations = recResp.recommendations || null;
       } catch { /* non-fatal */ }
     }
