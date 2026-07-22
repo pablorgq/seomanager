@@ -1381,6 +1381,8 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
 .pop-red    { background:rgba(220,60,60,.12);    color:#dc3c3c; }
 .rt-pop-score-btn { font-size:10px; font-weight:600; padding:2px 7px; border-radius:20px; border:1px solid var(--accent); color:var(--accent); background:transparent; cursor:pointer; white-space:nowrap; }
 .rt-pop-score-btn:hover { background:rgba(67,97,238,.1); }
+.rt-pop-detail-btn { font-size:10px; padding:2px 7px; border-radius:20px; border:1px solid var(--border); color:var(--text-secondary); background:transparent; cursor:pointer; white-space:nowrap; }
+.rt-pop-detail-btn:hover { border-color:var(--accent); color:var(--accent); }
 .rt-pop-checking { font-size:11px; color:var(--text-muted); font-style:italic; }
 .rt-pop-err { font-size:10px; color:#dc3c3c; }
 

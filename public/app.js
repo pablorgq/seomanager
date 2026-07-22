@@ -2019,13 +2019,97 @@ ${rep.articleHtml || `<p>${escHtml(rep.articleText || '')}</p>`}
 
 function rtPopCell(kw) {
   const scoreBadge = kw.popScore != null
-    ? `<span class="rt-pop-score-badge ${kw.popScore >= 80 ? 'pop-green' : kw.popScore >= 60 ? 'pop-yellow' : 'pop-red'}">${kw.popScore}/100</span> `
+    ? `<span class="rt-pop-score-badge ${kw.popScore >= 80 ? 'pop-green' : kw.popScore >= 60 ? 'pop-yellow' : 'pop-red'}">${kw.popScore}/100</span>`
     : '';
-  const scoreDate = kw.popScoreDate
-    ? `<span class="rt-pop-date">${escHtml(kw.popScoreDate)}</span>` : '';
+  const scoreDate = kw.popScoreDate ? `<span class="rt-pop-date"> ${escHtml(kw.popScoreDate)}</span>` : '';
+  const detailBtn = kw.popReport
+    ? ` <button class="rt-pop-detail-btn" data-kwid="${escHtml(kw.id)}" title="View content brief breakdown">Details</button>`
+    : '';
   const scoreBtn = `<button class="rt-pop-score-btn" data-kwid="${escHtml(kw.id)}" title="Score existing page in POP">Score</button>`;
   const optimBtn = `<button class="rt-run-pop-btn" data-kw="${escHtml(kw.keyword||'')}" data-url="${escHtml(kw.targetUrl||kw.url||'')}" title="Open in Article Generator">Optimize</button>`;
-  return `${scoreBadge}${scoreDate}${scoreBadge || scoreDate ? '<br>' : ''}${scoreBtn} ${optimBtn}`;
+  return `${scoreBadge}${scoreDate}${detailBtn}${scoreBadge || scoreDate ? '<br>' : ''}${scoreBtn} ${optimBtn}`;
+}
+
+function rtPopShowDetails(kwId) {
+  let kw;
+  for (const c of rtData.clients || []) {
+    const found = c.keywords?.find(k => k.id === kwId);
+    if (found) { kw = found; break; }
+  }
+  if (!kw?.popReport) return;
+  const pr = kw.popReport;
+  const score = kw.popScore;
+  const scoreColor = score >= 80 ? '#2d9e6b' : score >= 60 ? '#c48a00' : '#dc3c3c';
+
+  function termRows(terms) {
+    if (!terms?.length) return '<tr><td colspan="4" style="color:var(--text-secondary);font-size:11px;padding:4px 0">No data</td></tr>';
+    return terms.map(t => {
+      const inRange = t.current >= t.min && (t.max === 0 || t.current <= t.max);
+      const over    = t.max > 0 && t.current > t.max;
+      const icon = inRange ? '✓' : over ? '↑' : '✗';
+      const col  = inRange ? '#2d9e6b' : over ? '#c48a00' : '#dc3c3c';
+      return `<tr>
+        <td style="width:14px;font-size:11px;color:${col};vertical-align:top">${icon}</td>
+        <td style="font-size:11px;padding:2px 6px">${escHtml(t.phrase)}</td>
+        <td style="font-size:11px;text-align:center;width:50px">${t.current}</td>
+        <td style="font-size:11px;text-align:center;width:70px;color:var(--text-secondary)">${t.min}–${t.max}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  function sectionBlock(title, terms) {
+    if (!terms?.length) return '';
+    const okCount = terms.filter(t => t.current >= t.min && (t.max === 0 || t.current <= t.max)).length;
+    const badgeCol = okCount === terms.length ? '#2d9e6b' : okCount >= terms.length * 0.6 ? '#c48a00' : '#dc3c3c';
+    return `<div style="margin-bottom:14px">
+      <div style="font-size:12px;font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:6px">
+        ${title}
+        <span style="font-size:10px;font-weight:400;padding:1px 6px;border-radius:3px;background:rgba(0,0,0,.07);color:${badgeCol}">${okCount}/${terms.length} in range</span>
+      </div>
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr style="font-size:10px;color:var(--text-secondary)">
+          <th></th><th style="text-align:left;padding:2px 6px">Term</th>
+          <th style="width:50px">Current</th><th style="width:70px">Target</th>
+        </tr></thead>
+        <tbody>${termRows(terms)}</tbody>
+      </table>
+    </div>`;
+  }
+
+  const wcHtml = pr.wordCountTarget != null
+    ? `<div style="font-size:11px;margin-top:2px">Word count: <strong>${pr.wordCountCurrent != null ? Number(pr.wordCountCurrent).toLocaleString() : '?'}</strong> / target <strong>${Number(pr.wordCountTarget).toLocaleString()}</strong></div>`
+    : '';
+
+  const body = `
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+      <div style="font-size:44px;font-weight:800;color:${scoreColor};line-height:1">${score ?? '?'}</div>
+      <div>
+        <div style="font-size:13px;font-weight:600">${escHtml(kw.keyword || '')}</div>
+        <div style="font-size:11px;color:var(--text-secondary)">${escHtml(kw.targetUrl || kw.url || '')} · ${kw.popScoreDate || ''}</div>
+        ${wcHtml}
+      </div>
+    </div>
+    ${sectionBlock('Search Engine Title', pr.sections?.searchEngineTitle)}
+    ${sectionBlock('Page Title', pr.sections?.pageTitle)}
+    ${sectionBlock('Sub-headings', pr.sections?.subHeadings)}
+    ${sectionBlock('Main Content', pr.sections?.mainContent)}`;
+
+  let modal = document.getElementById('rt-pop-detail-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'rt-pop-detail-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:16px';
+    modal.innerHTML = `<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:20px;max-width:580px;width:100%;max-height:85vh;overflow-y:auto;position:relative">
+      <button id="rt-pop-detail-close" style="position:absolute;top:10px;right:14px;background:none;border:none;font-size:22px;cursor:pointer;color:var(--text-secondary);line-height:1">×</button>
+      <h3 style="margin:0 0 14px;font-size:14px">POP Content Brief</h3>
+      <div id="rt-pop-detail-body"></div>
+    </div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', e => { if (e.target === modal) modal.style.display = 'none'; });
+    document.getElementById('rt-pop-detail-close').addEventListener('click', () => { modal.style.display = 'none'; });
+  }
+  document.getElementById('rt-pop-detail-body').innerHTML = body;
+  modal.style.display = 'flex';
 }
 
 async function rtPopScoreCheck(kwId) {
@@ -2169,6 +2253,26 @@ async function rtPopScoreCheck(kwId) {
       else score = Math.round(score);                                   // already 0–100
     }
     console.log('[POP score] rawScore:', JSON.stringify(rawScore), '→ final:', score);
+
+    // Extract section-level term data for the Details panel
+    function extractTerms(arr) {
+      return (arr || []).map(t => ({
+        phrase: t.term?.phrase || '',
+        current: t.contentBrief?.current ?? 0,
+        min: t.contentBrief?.targetMin ?? t.contentBrief?.min ?? 0,
+        max: t.contentBrief?.targetMax ?? t.contentBrief?.max ?? t.contentBrief?.target ?? 0,
+      }));
+    }
+    kw.popReport = {
+      wordCountCurrent: rep?.wordCount?.current ?? rep?.wordCount?.total ?? null,
+      wordCountTarget:  rep?.wordCount?.target ?? null,
+      sections: {
+        searchEngineTitle: extractTerms(cb?.metaTitle || cb?.searchEngineTitle),
+        pageTitle:         extractTerms(cb?.pageTitle),
+        subHeadings:       extractTerms(cb?.subHeadings),
+        mainContent:       extractTerms(cb?.p).slice(0, 50),
+      },
+    };
 
     kw.popScore     = score;
     kw.popScoreDate = new Date().toISOString().slice(0, 10);
@@ -3383,6 +3487,9 @@ async function rtInit() {
 
     const scoreBtn = e.target.closest('.rt-pop-score-btn');
     if (scoreBtn) { rtPopScoreCheck(scoreBtn.dataset.kwid); return; }
+
+    const detailBtn = e.target.closest('.rt-pop-detail-btn');
+    if (detailBtn) { rtPopShowDetails(detailBtn.dataset.kwid); return; }
 
     const popBtn = e.target.closest('.rt-run-pop-btn');
     if (popBtn) {
