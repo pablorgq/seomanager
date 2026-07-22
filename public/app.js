@@ -2117,16 +2117,39 @@ function rtPopShowDetails(kwId) {
     </div>`;
   }
 
+  const strategyPickerHtml = `<div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
+    <span style="font-size:11px;color:var(--text-secondary)">Strategy for next run:</span>
+    <select id="rt-pop-strategy-sel" style="font-size:11px;padding:2px 6px;border-radius:4px;border:1px solid var(--border);background:var(--surface);color:var(--text)">
+      <option value="target">Target – all competitors</option>
+      <option value="adjusted">Adjusted – by word count</option>
+      <option value="focus">Focus – top 3 competitors</option>
+      <option value="max">Max – highest signal</option>
+    </select>
+    <span style="font-size:10px;color:var(--text-muted)">(applied on next Score run)</span>
+  </div>`;
+
+  const scrapedHtml = pr.scrapedContent
+    ? `<details style="margin-bottom:14px">
+        <summary style="font-size:12px;font-weight:600;cursor:pointer;padding:4px 0;user-select:none">Scraped content preview (from POP)</summary>
+        <div style="margin-top:6px;max-height:200px;overflow-y:auto;font-size:10px;font-family:monospace;white-space:pre-wrap;word-break:break-word;background:var(--bg);padding:8px;border-radius:4px;border:1px solid var(--border)">${escHtml(String(pr.scrapedContent).slice(0, 3000))}${String(pr.scrapedContent).length > 3000 ? '\n… (truncated)' : ''}</div>
+      </details>`
+    : '';
+
   const body = `
-    <div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)">
-      <div style="font-size:44px;font-weight:800;color:${scoreColor};line-height:1">${score ?? '?'}</div>
-      <div>
+    <div style="display:flex;align-items:flex-start;gap:16px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+      <div style="font-size:44px;font-weight:800;color:${scoreColor};line-height:1;flex-shrink:0">${score ?? '?'}</div>
+      <div style="flex:1;min-width:0">
         <div style="font-size:13px;font-weight:600">${escHtml(kw.keyword || '')}</div>
         <div style="font-size:11px;color:var(--text-secondary)">${escHtml(kw.targetUrl || kw.url || '')} · ${kw.popScoreDate || ''}</div>
         ${wcHtml}
+        ${strategyPickerHtml}
       </div>
     </div>
     ${competitorsBlock(pr.competitors)}
+    <div style="font-size:10px;color:var(--text-secondary);margin-bottom:10px">
+      Terms &amp; targets from Page Optimizer Pro · strategy used: <strong>${escHtml(pr.strategy || 'focus')}</strong>
+    </div>
+    ${scrapedHtml}
     ${sectionBlock('Search Engine Title', pr.sections?.searchEngineTitle)}
     ${sectionBlock('Page Title', pr.sections?.pageTitle)}
     ${sectionBlock('Sub-headings', pr.sections?.subHeadings)}
@@ -2148,6 +2171,13 @@ function rtPopShowDetails(kwId) {
   }
   document.getElementById('rt-pop-detail-body').innerHTML = body;
   modal.style.display = 'flex';
+
+  // Wire strategy select
+  const strategySel = document.getElementById('rt-pop-strategy-sel');
+  if (strategySel) {
+    strategySel.value = kw.popStrategy || 'focus';
+    strategySel.addEventListener('change', () => { kw.popStrategy = strategySel.value; rtSave(); });
+  }
 
   // Wire the "Edit / Add SERP picks" button inside the freshly-rendered body
   document.getElementById('rt-pop-detail-body').querySelector('.rt-pop-set-comp-btn')
@@ -2289,11 +2319,13 @@ async function rtPopScoreCheck(kwId) {
     const variations = (terms.variations || []).map(v => typeof v === 'string' ? v : (v.phrase || v.variation || String(v)));
     const lsaPhrases = (terms.lsaPhrases || []);
 
+    const strategy = kw.popStrategy || 'focus';
     setStatus(`Creating report for ${kwLabel}…`);
     const r2 = await popPost('/expose/create-report/', {
       prepareId, variations, lsaPhrases,
       pageNotBuiltYet: 0, considerOverOptimization: 1,
       googleNlpCalculation: gnl ? 1 : 0, specialLanguageSupport: 0,
+      approach: strategy,
     });
     const tid2 = r2.taskId || r2.task_id || r2.id;
     if (!tid2) throw new Error('No taskId from create-report — ' + JSON.stringify(r2).slice(0, 200));
@@ -2380,6 +2412,9 @@ async function rtPopScoreCheck(kwId) {
       wordCountCurrent: rep?.wordCount?.current ?? rep?.wordCount?.total ?? null,
       wordCountTarget:  rep?.wordCount?.target ?? null,
       competitors:      allCompsList,
+      strategy,
+      scrapedContent:   rep?.pageContent || rep?.pageText || rep?.contentHtml
+                        || rep?.htmlContent || rep?.textContent || null,
       sections: {
         searchEngineTitle: extractTerms(cb?.metaTitle || cb?.searchEngineTitle),
         pageTitle:         extractTerms(cb?.pageTitle),
