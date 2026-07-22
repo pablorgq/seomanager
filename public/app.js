@@ -2080,27 +2080,39 @@ function rtPopShowDetails(kwId) {
     ? `<div style="font-size:11px;margin-top:2px">Word count: <strong>${pr.wordCountCurrent != null ? Number(pr.wordCountCurrent).toLocaleString() : '?'}</strong> / target <strong>${Number(pr.wordCountTarget).toLocaleString()}</strong></div>`
     : '';
 
+  const customComps = kw.customCompetitors || [];
+
   function competitorsBlock(focus, all) {
-    const focusUrls = focus || [];
-    const allUrls   = (all || []).filter(u => !focusUrls.includes(u));
-    if (!focusUrls.length && !allUrls.length) return '';
-    const row = (url, isFocus) => {
+    const focusUrls  = focus || [];
+    const popUrls    = (all  || []).filter(u => !focusUrls.includes(u));
+    const hasAny     = focusUrls.length || popUrls.length || customComps.length;
+    if (!hasAny) {
+      return `<div style="margin-bottom:14px">
+        <div style="font-size:12px;font-weight:600;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between">
+          Competitors
+          <button class="rt-pop-set-comp-btn" data-kwid="${escHtml(kwId)}" style="font-size:10px;padding:2px 8px;border-radius:12px;border:1px solid var(--border);background:transparent;cursor:pointer;color:var(--text-secondary)">+ Add your SERP picks</button>
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);font-style:italic">No competitor data yet — run Score to detect POP's picks, or add yours manually.</div>
+      </div>`;
+    }
+    const row = (url, badge, badgeStyle) => {
       const host = (() => { try { return new URL(url.startsWith('http') ? url : 'https://' + url).hostname; } catch { return url; } })();
       return `<div style="display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid var(--border)">
-        ${isFocus ? '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(67,97,238,.12);color:var(--accent);font-weight:600">Focus</span>' : '<span style="width:37px"></span>'}
+        <span style="font-size:9px;padding:1px 5px;border-radius:3px;white-space:nowrap;${badgeStyle}">${badge}</span>
         <a href="${escHtml(url.startsWith('http') ? url : 'https://' + url)}" target="_blank" rel="noopener"
            style="font-size:11px;color:var(--accent);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1"
            title="${escHtml(url)}">${escHtml(host)}</a>
-        <span style="font-size:10px;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px">${escHtml(url.replace(/^https?:\/\/[^/]+/, ''))}</span>
+        <span style="font-size:10px;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px">${escHtml(url.replace(/^https?:\/\/[^/]+/, '') || '/')}</span>
       </div>`;
     };
     return `<div style="margin-bottom:14px">
-      <div style="font-size:12px;font-weight:600;margin-bottom:4px">
-        Competitors
-        <span style="font-size:10px;font-weight:400;color:var(--text-secondary)">${focusUrls.length} focus · ${focusUrls.length + allUrls.length} total</span>
+      <div style="font-size:12px;font-weight:600;margin-bottom:4px;display:flex;align-items:center;justify-content:space-between">
+        <span>Competitors <span style="font-size:10px;font-weight:400;color:var(--text-secondary)">${focusUrls.length} POP focus · ${popUrls.length} other · ${customComps.length} custom</span></span>
+        <button class="rt-pop-set-comp-btn" data-kwid="${escHtml(kwId)}" style="font-size:10px;padding:2px 8px;border-radius:12px;border:1px solid var(--border);background:transparent;cursor:pointer;color:var(--text-secondary)">✏ Edit</button>
       </div>
-      ${focusUrls.map(u => row(u, true)).join('')}
-      ${allUrls.map(u => row(u, false)).join('')}
+      ${focusUrls.map(u  => row(u, 'POP Focus', 'background:rgba(67,97,238,.12);color:var(--accent);font-weight:600')).join('')}
+      ${popUrls.map(u    => row(u, 'POP', 'background:rgba(0,0,0,.06);color:var(--text-secondary)')).join('')}
+      ${customComps.map(u => row(u, 'Custom', 'background:rgba(45,158,107,.12);color:#2d9e6b;font-weight:600')).join('')}
     </div>`;
   }
 
@@ -2135,6 +2147,55 @@ function rtPopShowDetails(kwId) {
   }
   document.getElementById('rt-pop-detail-body').innerHTML = body;
   modal.style.display = 'flex';
+
+  // Wire the "Edit / Add SERP picks" button inside the freshly-rendered body
+  document.getElementById('rt-pop-detail-body').querySelector('.rt-pop-set-comp-btn')
+    ?.addEventListener('click', () => rtPopEditCompetitors(kwId));
+}
+
+function rtPopEditCompetitors(kwId) {
+  let kw;
+  for (const c of rtData.clients || []) {
+    const found = c.keywords?.find(k => k.id === kwId);
+    if (found) { kw = found; break; }
+  }
+  if (!kw) return;
+
+  let modal = document.getElementById('rt-pop-comp-edit-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'rt-pop-comp-edit-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1100;display:flex;align-items:center;justify-content:center;padding:16px';
+    modal.innerHTML = `<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:20px;max-width:500px;width:100%;position:relative">
+      <button id="rt-pop-comp-edit-close" style="position:absolute;top:10px;right:14px;background:none;border:none;font-size:22px;cursor:pointer;color:var(--text-secondary);line-height:1">×</button>
+      <h3 style="margin:0 0 6px;font-size:14px">Your SERP Competitor Picks</h3>
+      <p style="margin:0 0 10px;font-size:11px;color:var(--text-secondary)">Search Google for your keyword in your target city, then paste the top competitor URLs below — one per line. These are shown in your Details report alongside POP's auto-detected picks.</p>
+      <textarea id="rt-pop-comp-edit-ta" rows="10" style="width:100%;box-sizing:border-box;font-size:11px;font-family:monospace;padding:8px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);resize:vertical" placeholder="https://competitor1.com/commercial-renovations&#10;https://competitor2.com/page&#10;https://competitor3.com"></textarea>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
+        <button id="rt-pop-comp-edit-clear" style="padding:6px 14px;border-radius:6px;border:1px solid var(--border);background:transparent;cursor:pointer;font-size:12px;color:var(--text-secondary)">Clear</button>
+        <button id="rt-pop-comp-edit-save" style="padding:6px 16px;border-radius:6px;border:none;background:var(--accent);color:#fff;cursor:pointer;font-size:12px;font-weight:600">Save</button>
+      </div>
+    </div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', e => { if (e.target === modal) modal.style.display = 'none'; });
+    document.getElementById('rt-pop-comp-edit-close').addEventListener('click', () => modal.style.display = 'none');
+    document.getElementById('rt-pop-comp-edit-clear').addEventListener('click', () => {
+      document.getElementById('rt-pop-comp-edit-ta').value = '';
+    });
+    document.getElementById('rt-pop-comp-edit-save').addEventListener('click', () => {
+      const lines = document.getElementById('rt-pop-comp-edit-ta').value
+        .split('\n').map(l => l.trim()).filter(l => l.length > 0);
+      kw.customCompetitors = lines;
+      rtSave();
+      modal.style.display = 'none';
+      // Refresh Details modal if open
+      if (document.getElementById('rt-pop-detail-modal')?.style.display !== 'none') {
+        rtPopShowDetails(kwId);
+      }
+    });
+  }
+  document.getElementById('rt-pop-comp-edit-ta').value = (kw.customCompetitors || []).join('\n');
+  modal.style.display = 'flex';
 }
 
 async function rtPopScoreCheck(kwId) {
@@ -2161,7 +2222,7 @@ async function rtPopScoreCheck(kwId) {
   const cell = document.querySelector(`tr[data-id="${CSS.escape(kwId)}"] .rt-td-pop`);
   const kwLabel = keyword ? `"${keyword}"` : 'keyword';
   const setStatus = msg => { if (cell) cell.innerHTML = `<span class="rt-pop-checking">${msg}</span>`; };
-  setStatus(`Requesting terms for ${kwLabel}…`);
+  setStatus(`Requesting terms for ${kwLabel} [${locName}]…`);
 
   const base   = hasPop ? POP_API_PROXY : POP_API_DIRECT;
   const apiKey = hasPop ? '' : (document.getElementById('ag-popKey')?.value || '');
