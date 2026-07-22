@@ -2038,12 +2038,12 @@ async function rtPopScoreCheck(kwId) {
 
   const targetUrl  = kw.targetUrl || kw.url || '';
   const keyword    = kw.keyword || '';
-  const locName    = client?.popLocation || 'United States';
+  const locName    = client?.popLocation || '';
   const targLang   = client?.popLanguage || 'english';
   const gnl        = !!client?.popGnl;
 
   if (!targetUrl) { alert('Add a Target URL for this keyword first (click the Target URL cell to edit).'); return; }
-  if (!locName) { alert('Add a Target Location for this client first (Edit Client → POP Settings).'); return; }
+  if (!locName) { alert('Add a Target Location for this client first.\n\nEdit Client → POP Settings → Target Location\nExample: "Winnipeg, Manitoba" or "Dallas, TX"'); return; }
   if (!hasPop && !document.getElementById('ag-popKey')?.value) {
     alert('No POP API key configured. Add it in Settings or ask your admin to set POP_API_KEY on the server.');
     return;
@@ -2103,10 +2103,11 @@ async function rtPopScoreCheck(kwId) {
     if (!tid1) throw new Error('No taskId from get-terms — ' + JSON.stringify(r1).slice(0, 200));
     const terms = await pollTerms(tid1);
 
-    // variations = array of strings; lsaPhrases = full objects (POP requires objects, not strings)
+    // variations = strings; lsaPhrases = full objects (POP requires objects, not strings)
+    // Pass ALL terms — same as POP's "Pro run" which includes everything
     const prepareId  = terms.prepareId;
-    const variations = (terms.variations || []).slice(0, 10).map(v => typeof v === 'string' ? v : (v.phrase || v.variation || String(v)));
-    const lsaPhrases = (terms.lsaPhrases || []).slice(0, 10);
+    const variations = (terms.variations || []).map(v => typeof v === 'string' ? v : (v.phrase || v.variation || String(v)));
+    const lsaPhrases = (terms.lsaPhrases || []);
 
     setStatus(`Creating report for ${kwLabel}…`);
     const r2 = await popPost('/expose/create-report/', {
