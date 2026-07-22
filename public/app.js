@@ -2118,14 +2118,18 @@ function rtPopShowDetails(kwId) {
   }
 
   const strategyPickerHtml = `<div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
-    <span style="font-size:11px;color:var(--text-secondary)">Strategy for next run:</span>
+    <span style="font-size:11px;color:var(--text-secondary)">Next run:</span>
     <select id="rt-pop-strategy-sel" style="font-size:11px;padding:2px 6px;border-radius:4px;border:1px solid var(--border);background:var(--surface);color:var(--text)">
       <option value="target">Target – all competitors</option>
       <option value="adjusted">Adjusted – by word count</option>
       <option value="focus">Focus – top 3 competitors</option>
       <option value="max">Max – highest signal</option>
     </select>
-    <span style="font-size:10px;color:var(--text-muted)">(applied on next Score run)</span>
+    <select id="rt-pop-approach-sel" style="font-size:11px;padding:2px 6px;border-radius:4px;border:1px solid var(--border);background:var(--surface);color:var(--text)">
+      <option value="regular">Regular</option>
+      <option value="conservative">Conservative</option>
+      <option value="aggressive">Aggressive</option>
+    </select>
   </div>`;
 
   const scrapedHtml = pr.scrapedContent
@@ -2134,6 +2138,29 @@ function rtPopShowDetails(kwId) {
         <div style="margin-top:6px;max-height:200px;overflow-y:auto;font-size:10px;font-family:monospace;white-space:pre-wrap;word-break:break-word;background:var(--bg);padding:8px;border-radius:4px;border:1px solid var(--border)">${escHtml(String(pr.scrapedContent).slice(0, 3000))}${String(pr.scrapedContent).length > 3000 ? '\n… (truncated)' : ''}</div>
       </details>`
     : '';
+
+  function recsBlock(recs) {
+    if (!recs) return '';
+    const groups = [
+      { label: 'Exact keyword', key: 'exactKeyword', col: 'var(--accent)' },
+      { label: 'LSI terms', key: 'lsi', col: '#2d9e6b' },
+      { label: 'Variations', key: 'variations', col: '#c48a00' },
+    ].filter(g => (recs[g.key] || []).length > 0);
+    if (!groups.length) return '';
+    return `<details style="margin-bottom:14px">
+      <summary style="font-size:12px;font-weight:600;cursor:pointer;padding:4px 0;user-select:none">
+        POP Recommendations <span style="font-size:10px;font-weight:400;color:var(--text-secondary)">(strategy: ${escHtml(pr.strategy||'focus')} · ${escHtml(pr.approach||'regular')})</span>
+      </summary>
+      <div style="margin-top:8px;display:flex;flex-direction:column;gap:8px">
+        ${groups.map(g => `<div>
+          <div style="font-size:10px;font-weight:600;color:${g.col};margin-bottom:3px">${g.label}</div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px">
+            ${(recs[g.key]||[]).slice(0,30).map(t => `<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:var(--bg);border:1px solid var(--border)">${escHtml(typeof t === 'string' ? t : (t.phrase||t.term||JSON.stringify(t)))}</span>`).join('')}
+          </div>
+        </div>`).join('')}
+      </div>
+    </details>`;
+  }
 
   const body = `
     <div style="display:flex;align-items:flex-start;gap:16px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)">
@@ -2147,8 +2174,9 @@ function rtPopShowDetails(kwId) {
     </div>
     ${competitorsBlock(pr.competitors)}
     <div style="font-size:10px;color:var(--text-secondary);margin-bottom:10px">
-      Terms &amp; targets from Page Optimizer Pro · strategy used: <strong>${escHtml(pr.strategy || 'focus')}</strong>
+      Terms &amp; targets from Page Optimizer Pro · strategy: <strong>${escHtml(pr.strategy || 'focus')}</strong> · approach: <strong>${escHtml(pr.approach || 'regular')}</strong>
     </div>
+    ${recsBlock(pr.recommendations)}
     ${scrapedHtml}
     ${sectionBlock('Search Engine Title', pr.sections?.searchEngineTitle)}
     ${sectionBlock('Page Title', pr.sections?.pageTitle)}
@@ -2172,11 +2200,16 @@ function rtPopShowDetails(kwId) {
   document.getElementById('rt-pop-detail-body').innerHTML = body;
   modal.style.display = 'flex';
 
-  // Wire strategy select
+  // Wire strategy + approach selects
   const strategySel = document.getElementById('rt-pop-strategy-sel');
   if (strategySel) {
     strategySel.value = kw.popStrategy || 'focus';
     strategySel.addEventListener('change', () => { kw.popStrategy = strategySel.value; rtSave(); });
+  }
+  const approachSel = document.getElementById('rt-pop-approach-sel');
+  if (approachSel) {
+    approachSel.value = kw.popApproach || 'regular';
+    approachSel.addEventListener('change', () => { kw.popApproach = approachSel.value; rtSave(); });
   }
 
   // Wire the "Edit / Add SERP picks" button inside the freshly-rendered body
@@ -2320,18 +2353,29 @@ async function rtPopScoreCheck(kwId) {
     const lsaPhrases = (terms.lsaPhrases || []);
 
     const strategy = kw.popStrategy || 'focus';
+    const approach = kw.popApproach || 'regular';
     setStatus(`Creating report for ${kwLabel}…`);
     const r2 = await popPost('/expose/create-report/', {
       prepareId, variations, lsaPhrases,
       pageNotBuiltYet: 0, considerOverOptimization: 1,
       googleNlpCalculation: gnl ? 1 : 0, specialLanguageSupport: 0,
-      approach: strategy,
     });
     const tid2 = r2.taskId || r2.task_id || r2.id;
     if (!tid2) throw new Error('No taskId from create-report — ' + JSON.stringify(r2).slice(0, 200));
     const report = await pollReport(tid2);
 
     const rep = report.report;
+
+    // Fetch recommendations (non-fatal — strategy + approach apply here, not create-report)
+    let recommendations = null;
+    const reportId = rep?.id;
+    if (reportId) {
+      try {
+        setStatus(`Getting recommendations for ${kwLabel}…`);
+        const recResp = await popPost('/expose/get-custom-recommendations/', { reportId, strategy, approach });
+        recommendations = recResp.recommendations || null;
+      } catch { /* non-fatal */ }
+    }
 
     // Scan all numeric leaves in the report to find where ~74 lives
     (function scanScore(obj, path) {
@@ -2413,6 +2457,8 @@ async function rtPopScoreCheck(kwId) {
       wordCountTarget:  rep?.wordCount?.target ?? null,
       competitors:      allCompsList,
       strategy,
+      approach,
+      recommendations,
       scrapedContent:   rep?.pageContent || rep?.pageText || rep?.contentHtml
                         || rep?.htmlContent || rep?.textContent || null,
       sections: {
