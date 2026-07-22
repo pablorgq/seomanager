@@ -2138,22 +2138,34 @@ async function rtPopScoreCheck(kwId) {
     console.log('[POP score] cb.pageScore raw:', JSON.stringify(rep?.cleanedContentBrief?.pageScore));
 
     const cb = rep?.cleanedContentBrief;
-    const rawScore = cb?.pageScore ?? cb?.pScore ?? cb?.score
-      ?? rep?.pageScore ?? rep?.pageScoreValue ?? rep?.pScore ?? rep?.score;
 
-    let score = null;
-    if (rawScore != null && typeof rawScore === 'object') {
-      // pageScoreValue may be "" (empty string) — skip it if so; prefer numeric pageScore
-      const numVal = rawScore.pageScore ?? rawScore.pScore ?? rawScore.current ?? rawScore.value ?? rawScore.score ?? rawScore.percent;
-      const strVal = (rawScore.pageScoreValue && rawScore.pageScoreValue !== '') ? Number(rawScore.pageScoreValue) : null;
-      score = (numVal != null) ? Number(numVal) : strVal;
-    } else if (rawScore != null) {
-      score = Number(rawScore);
+    // Try every known score field. ?? keeps 0 as valid — use || to skip zeros
+    // so we fall through to string fields like pageScoreValue when numeric is 0.
+    // Also check cb.pTotal (referenced in Article Generator alongside pageScore).
+    function pickScore(obj) {
+      if (!obj) return null;
+      if (typeof obj === 'number') return obj || null;
+      if (typeof obj === 'string') { const n = parseFloat(obj); return (!isNaN(n) && n > 0) ? n : null; }
+      if (typeof obj !== 'object') return null;
+      // prefer non-zero numeric field; fall back to string
+      const num = [obj.pageScore, obj.pScore, obj.pTotal, obj.current, obj.value, obj.score, obj.percent]
+        .map(Number).find(n => !isNaN(n) && n > 0);
+      if (num != null) return num;
+      const str = [obj.pageScoreValue, obj.pScoreValue].find(s => s && String(s).trim() !== '');
+      return str ? (parseFloat(str) || null) : null;
     }
+
+    const scoreChain = [
+      cb?.pageScore, cb?.pTotal, cb?.pScore, cb?.score,
+      rep?.pageScore, rep?.pTotal, rep?.pageScoreValue, rep?.pScore, rep?.score,
+    ];
+    let rawScore = scoreChain.find(v => v != null && v !== 0 && v !== '');
+    let score = pickScore(rawScore);
+
     if (score != null && !isNaN(score)) {
-      if (score > 0 && score < 1) score = Math.round(score * 100);
-      else if (score > 0 && score <= 5) score = Math.round(score * 100);
-      else score = Math.round(score);
+      if (score > 0 && score < 1)  score = Math.round(score * 100);  // 0–1 ratio
+      else if (score > 0 && score <= 5) score = Math.round(score * 100); // 0–5 scale
+      else score = Math.round(score);                                   // already 0–100
     }
     console.log('[POP score] rawScore:', JSON.stringify(rawScore), '→ final:', score);
 
