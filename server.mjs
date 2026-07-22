@@ -683,6 +683,19 @@ app.post('/api/weeklydata', apiGuard, (req, res) => {
    POST routes inject apiKey from server env.
    GET routes (polling) forward as-is.
 ───────────────────────────────────────────── */
+/* Public POP locations list — no auth needed, cache in memory */
+let popLocationsCache = null;
+app.get('/api/pop-locations', apiGuard, async (_req, res) => {
+  if (popLocationsCache) return res.json(popLocationsCache);
+  try {
+    const r = await fetch(`${POP_BASE}/google-search-locations/`);
+    popLocationsCache = await r.json();
+    res.json(popLocationsCache);
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
 app.use('/api/pop', apiGuard, async (req, res) => {
   if (!POP_KEY) return res.status(503).json({ error: { message: 'POP_API_KEY not configured on this server.' } });
   const popPath = req.path.replace(/^\//, '');

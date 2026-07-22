@@ -565,7 +565,8 @@
           <div style="display:flex;gap:8px;margin-bottom:14px">
             <div class="form-group" style="flex:2;margin-bottom:0">
               <label class="form-label">Target Location</label>
-              <input type="text" id="rt-popLocation" class="form-input" placeholder="e.g. Dallas, TX" />
+              <input type="text" id="rt-popLocation" class="form-input" list="pop-locations-list" placeholder="Type to search (e.g. Winnipeg)" autocomplete="off" />
+              <datalist id="pop-locations-list"></datalist>
             </div>
             <div class="form-group" style="flex:1;margin-bottom:0">
               <label class="form-label">Language</label>

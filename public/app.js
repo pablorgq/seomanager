@@ -3585,6 +3585,20 @@ async function rtLoadCampaigns(preselectId) {
   sel.disabled = false;
 }
 
+/* Load POP locations into datalist once, cache in memory */
+let _popLocations = null;
+async function rtLoadPopLocations() {
+  const dl = document.getElementById('pop-locations-list');
+  if (!dl || dl.children.length > 0) return; // already populated
+  try {
+    if (!_popLocations) {
+      const r = await fetch('/api/pop-locations');
+      _popLocations = await r.json();
+    }
+    dl.innerHTML = (_popLocations || []).map(l => `<option value="${escHtml(l)}">`).join('');
+  } catch { /* silently skip — user can still type manually */ }
+}
+
 function rtShowAddClient() {
   document.getElementById('rt-modalTitle').textContent     = 'Add Client';
   document.getElementById('rt-clientName').value           = '';
@@ -3599,6 +3613,7 @@ function rtShowAddClient() {
   document.getElementById('rt-saveClientBtn').dataset.mode = 'add';
   if (hasAA) rtLoadCampaigns();
   else document.getElementById('rt-campaignPickWrap').classList.add('hidden');
+  rtLoadPopLocations();
   rtOpenModal('rt-clientModal');
 }
 
@@ -3618,6 +3633,7 @@ function rtShowEditClient() {
   document.getElementById('rt-saveClientBtn').dataset.mode = 'edit';
   if (hasAA) rtLoadCampaigns(c.aaCampaignId);
   else document.getElementById('rt-campaignPickWrap').classList.add('hidden');
+  rtLoadPopLocations();
   rtOpenModal('rt-clientModal');
 }
 
