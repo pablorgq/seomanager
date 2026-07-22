@@ -2080,6 +2080,30 @@ function rtPopShowDetails(kwId) {
     ? `<div style="font-size:11px;margin-top:2px">Word count: <strong>${pr.wordCountCurrent != null ? Number(pr.wordCountCurrent).toLocaleString() : '?'}</strong> / target <strong>${Number(pr.wordCountTarget).toLocaleString()}</strong></div>`
     : '';
 
+  function competitorsBlock(focus, all) {
+    const focusUrls = focus || [];
+    const allUrls   = (all || []).filter(u => !focusUrls.includes(u));
+    if (!focusUrls.length && !allUrls.length) return '';
+    const row = (url, isFocus) => {
+      const host = (() => { try { return new URL(url.startsWith('http') ? url : 'https://' + url).hostname; } catch { return url; } })();
+      return `<div style="display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid var(--border)">
+        ${isFocus ? '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(67,97,238,.12);color:var(--accent);font-weight:600">Focus</span>' : '<span style="width:37px"></span>'}
+        <a href="${escHtml(url.startsWith('http') ? url : 'https://' + url)}" target="_blank" rel="noopener"
+           style="font-size:11px;color:var(--accent);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1"
+           title="${escHtml(url)}">${escHtml(host)}</a>
+        <span style="font-size:10px;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px">${escHtml(url.replace(/^https?:\/\/[^/]+/, ''))}</span>
+      </div>`;
+    };
+    return `<div style="margin-bottom:14px">
+      <div style="font-size:12px;font-weight:600;margin-bottom:4px">
+        Competitors
+        <span style="font-size:10px;font-weight:400;color:var(--text-secondary)">${focusUrls.length} focus · ${focusUrls.length + allUrls.length} total</span>
+      </div>
+      ${focusUrls.map(u => row(u, true)).join('')}
+      ${allUrls.map(u => row(u, false)).join('')}
+    </div>`;
+  }
+
   const body = `
     <div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)">
       <div style="font-size:44px;font-weight:800;color:${scoreColor};line-height:1">${score ?? '?'}</div>
@@ -2089,6 +2113,7 @@ function rtPopShowDetails(kwId) {
         ${wcHtml}
       </div>
     </div>
+    ${competitorsBlock(pr.focusCompetitors, pr.competitors)}
     ${sectionBlock('Search Engine Title', pr.sections?.searchEngineTitle)}
     ${sectionBlock('Page Title', pr.sections?.pageTitle)}
     ${sectionBlock('Sub-headings', pr.sections?.subHeadings)}
@@ -2263,9 +2288,25 @@ async function rtPopScoreCheck(kwId) {
         max: t.contentBrief?.targetMax ?? t.contentBrief?.max ?? t.contentBrief?.target ?? 0,
       }));
     }
+
+    // Competitors — try all known field names POP uses
+    const allComps = rep?.competitorUrls || rep?.competitors || rep?.competitorPages
+      || rep?.topCompetitors || rep?.urls || [];
+    const focusComps = rep?.focusCompetitors || rep?.focusCompetitorUrls
+      || rep?.topFocusCompetitors || [];
+    console.log('[POP competitors] all:', JSON.stringify(allComps).slice(0, 500));
+    console.log('[POP competitors] focus:', JSON.stringify(focusComps).slice(0, 300));
+
+    // Normalise: each entry may be a string URL or an object with a url field
+    function normUrls(arr) {
+      return (arr || []).map(c => (typeof c === 'string' ? c : (c?.url || c?.competitorUrl || c?.domain || JSON.stringify(c)))).filter(Boolean);
+    }
+
     kw.popReport = {
       wordCountCurrent: rep?.wordCount?.current ?? rep?.wordCount?.total ?? null,
       wordCountTarget:  rep?.wordCount?.target ?? null,
+      competitors:      normUrls(allComps),
+      focusCompetitors: normUrls(focusComps),
       sections: {
         searchEngineTitle: extractTerms(cb?.metaTitle || cb?.searchEngineTitle),
         pageTitle:         extractTerms(cb?.pageTitle),
