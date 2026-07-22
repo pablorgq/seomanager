@@ -2212,6 +2212,15 @@ async function rtPopScoreCheck(kwId) {
     if (!tid1) throw new Error('No taskId from get-terms — ' + JSON.stringify(r1).slice(0, 200));
     const terms = await pollTerms(tid1);
 
+    // Log all top-level keys so we can find the competitor field name
+    console.log('[POP terms keys]', Object.keys(terms).join(', '));
+    const termsCompUrls = terms?.urls || terms?.competitors || terms?.competitorUrls
+      || terms?.competitorPages || terms?.topCompetitorUrls || terms?.competitorList || [];
+    const termsFocusUrls = terms?.focusCompetitors || terms?.focusUrls
+      || terms?.topCompetitors || terms?.focusCompetitorUrls || [];
+    console.log('[POP terms competitors]', JSON.stringify(termsCompUrls).slice(0, 600));
+    console.log('[POP terms focus]', JSON.stringify(termsFocusUrls).slice(0, 300));
+
     // variations = strings; lsaPhrases = full objects (POP requires objects, not strings)
     // Pass ALL terms — same as POP's "Pro run" which includes everything
     const prepareId  = terms.prepareId;
@@ -2302,11 +2311,15 @@ async function rtPopScoreCheck(kwId) {
       return (arr || []).map(c => (typeof c === 'string' ? c : (c?.url || c?.competitorUrl || c?.domain || JSON.stringify(c)))).filter(Boolean);
     }
 
+    // Prefer competitors from get-terms (POP's own SERP picks), fall back to report-level
+    const finalAllComps   = normUrls(termsCompUrls).length  ? normUrls(termsCompUrls)  : normUrls(allComps);
+    const finalFocusComps = normUrls(termsFocusUrls).length ? normUrls(termsFocusUrls) : normUrls(focusComps);
+
     kw.popReport = {
       wordCountCurrent: rep?.wordCount?.current ?? rep?.wordCount?.total ?? null,
       wordCountTarget:  rep?.wordCount?.target ?? null,
-      competitors:      normUrls(allComps),
-      focusCompetitors: normUrls(focusComps),
+      competitors:      finalAllComps,
+      focusCompetitors: finalFocusComps,
       sections: {
         searchEngineTitle: extractTerms(cb?.metaTitle || cb?.searchEngineTitle),
         pageTitle:         extractTerms(cb?.pageTitle),
