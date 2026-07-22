@@ -2132,21 +2132,19 @@ function rtPopShowDetails(kwId) {
     </select>
   </div>`;
 
-  const scrapedHtml = pr.scrapedContent
-    ? `<details style="margin-bottom:14px">
-        <summary style="font-size:12px;font-weight:600;cursor:pointer;padding:4px 0;user-select:none">Scraped content preview (from POP)</summary>
-        <div style="margin-top:6px;max-height:200px;overflow-y:auto;font-size:10px;font-family:monospace;white-space:pre-wrap;word-break:break-word;background:var(--bg);padding:8px;border-radius:4px;border:1px solid var(--border)">${escHtml(String(pr.scrapedContent).slice(0, 3000))}${String(pr.scrapedContent).length > 3000 ? '\n… (truncated)' : ''}</div>
-      </details>`
-    : '';
-
   function recsBlock(recs) {
     if (!recs) return '';
     const groups = [
       { label: 'Exact keyword', key: 'exactKeyword', col: 'var(--accent)' },
       { label: 'LSI terms', key: 'lsi', col: '#2d9e6b' },
       { label: 'Variations', key: 'variations', col: '#c48a00' },
+      { label: 'Page structure', key: 'pageStructure', col: '#8a63d2' },
     ].filter(g => (recs[g.key] || []).length > 0);
     if (!groups.length) return '';
+    // POP items may be plain strings or rich objects ({signal, comment, target, …})
+    const recLabel = t => typeof t === 'string'
+      ? t
+      : (t.phrase || t.term || t.keyword || t.signal || t.comment || '');
     return `<details style="margin-bottom:14px">
       <summary style="font-size:12px;font-weight:600;cursor:pointer;padding:4px 0;user-select:none">
         POP Recommendations <span style="font-size:10px;font-weight:400;color:var(--text-secondary)">(strategy: ${escHtml(pr.strategy||'focus')} · ${escHtml(pr.approach||'regular')})</span>
@@ -2155,7 +2153,7 @@ function rtPopShowDetails(kwId) {
         ${groups.map(g => `<div>
           <div style="font-size:10px;font-weight:600;color:${g.col};margin-bottom:3px">${g.label}</div>
           <div style="display:flex;flex-wrap:wrap;gap:4px">
-            ${(recs[g.key]||[]).slice(0,30).map(t => `<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:var(--bg);border:1px solid var(--border)">${escHtml(typeof t === 'string' ? t : (t.phrase||t.term||JSON.stringify(t)))}</span>`).join('')}
+            ${(recs[g.key]||[]).slice(0,30).map(recLabel).filter(Boolean).map(lbl => `<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:var(--bg);border:1px solid var(--border)">${escHtml(lbl)}</span>`).join('')}
           </div>
         </div>`).join('')}
       </div>
@@ -2177,7 +2175,6 @@ function rtPopShowDetails(kwId) {
       Terms &amp; targets from Page Optimizer Pro · strategy: <strong>${escHtml(pr.strategy || 'focus')}</strong> · approach: <strong>${escHtml(pr.approach || 'regular')}</strong>
     </div>
     ${recsBlock(pr.recommendations)}
-    ${scrapedHtml}
     ${sectionBlock('Search Engine Title', pr.sections?.searchEngineTitle)}
     ${sectionBlock('Page Title', pr.sections?.pageTitle)}
     ${sectionBlock('Sub-headings', pr.sections?.subHeadings)}
@@ -2420,9 +2417,9 @@ async function rtPopScoreCheck(kwId) {
     let score = pickScore(rawScore);
 
     if (score != null && !isNaN(score)) {
-      if (score > 0 && score < 1)  score = Math.round(score * 100);  // 0–1 ratio
-      else if (score > 0 && score <= 5) score = Math.round(score * 100); // 0–5 scale
-      else score = Math.round(score);                                   // already 0–100
+      if (score > 0 && score < 1) score = score * 100;  // 0–1 ratio → percent
+      // POP otherwise returns 0–100 directly (e.g. 29.77); clamp to guard bad data
+      score = Math.min(100, Math.round(score));
     }
     console.log('[POP score] rawScore:', JSON.stringify(rawScore), '→ final:', score);
 
@@ -2459,8 +2456,6 @@ async function rtPopScoreCheck(kwId) {
       strategy,
       approach,
       recommendations,
-      scrapedContent:   rep?.pageContent || rep?.pageText || rep?.contentHtml
-                        || rep?.htmlContent || rep?.textContent || null,
       sections: {
         searchEngineTitle: extractTerms(cb?.metaTitle || cb?.searchEngineTitle),
         pageTitle:         extractTerms(cb?.pageTitle),
