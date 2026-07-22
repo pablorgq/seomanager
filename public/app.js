@@ -2034,7 +2034,7 @@ function rtPopCell(kw) {
     ? ` <button class="rt-pop-detail-btn" data-kwid="${escHtml(kw.id)}" title="View content brief breakdown">Details</button>`
     : '';
   const scoreBtn = `<button class="rt-pop-score-btn" data-kwid="${escHtml(kw.id)}" title="Score existing page in POP">Score</button>`;
-  const optimBtn = `<button class="rt-run-pop-btn" data-kw="${escHtml(kw.keyword||'')}" data-url="${escHtml(kw.targetUrl||kw.url||'')}" title="Open in Article Generator">Optimize</button>`;
+  const optimBtn = `<button class="rt-run-pop-btn" data-kwid="${escHtml(kw.id)}" data-kw="${escHtml(kw.keyword||'')}" data-url="${escHtml(kw.targetUrl||kw.url||'')}" title="Improve this page in the Article Generator using its POP score">Optimize</button>`;
   return `${scoreBadge}${scoreDate}${detailBtn}${scoreBadge || scoreDate ? '<br>' : ''}${scoreBtn} ${optimBtn}`;
 }
 
@@ -2273,6 +2273,68 @@ function rtPopShowDetails(kwId) {
   // Wire the "Edit / Add SERP picks" button inside the freshly-rendered body
   document.getElementById('rt-pop-detail-body').querySelector('.rt-pop-set-comp-btn')
     ?.addEventListener('click', () => rtPopEditCompetitors(kwId));
+}
+
+/* Open the Article Generator pre-loaded with everything from this keyword's POP
+   score (keyword, URL, location, language, strategy, approach, competitors),
+   auto-fetch the current page, and kick off the improve flow so the article is
+   rewritten against POP's recommendations. */
+async function rtOptimizeInAG(kwId) {
+  let kw, client;
+  for (const c of rtData.clients || []) {
+    const found = c.keywords?.find(k => k.id === kwId);
+    if (found) { kw = found; client = c; break; }
+  }
+  if (!kw) return;
+
+  const setSelect = (id, val) => {
+    const sel = document.getElementById(id);
+    if (!sel || !val) return;
+    if (![...sel.options].some(o => o.value === val)) {
+      const opt = document.createElement('option');
+      opt.value = val; opt.textContent = val;
+      sel.appendChild(opt);
+    }
+    sel.value = val;
+  };
+
+  switchTab('article');
+
+  // Core identity
+  document.getElementById('ag-keyword').value   = kw.keyword || '';
+  document.getElementById('ag-targetUrl').value = kw.targetUrl || kw.url || '';
+
+  // Location + language come from the client's POP settings (same source as Score)
+  setSelect('ag-locationName',   client?.popLocation);
+  setSelect('ag-targetLanguage', String(client?.popLanguage || 'english').toLowerCase());
+
+  // Strategy + approach carry over from the score's chosen settings
+  setSelect('ag-strategy', kw.popStrategy || 'focus');
+  setSelect('ag-approach', kw.popApproach || 'regular');
+
+  // Competitors: POP's picks from the score + the user's own SERP picks (deduped)
+  const comps = [...new Set([...(kw.popReport?.competitors || []), ...(kw.customCompetitors || [])])];
+  document.getElementById('ag-competitors').value = comps.join('\n');
+
+  // We're improving an existing page → ensure "page not built" is off and the
+  // existing-content box is shown, then auto-fetch the live copy.
+  const pnb = document.getElementById('ag-pageNotBuilt');
+  if (pnb) { pnb.checked = false; pnb.dispatchEvent(new Event('change')); }
+
+  // Flash the pre-filled fields so it's clear what was carried over
+  ['ag-keyword','ag-targetUrl','ag-locationName','ag-targetLanguage','ag-strategy','ag-approach','ag-competitors'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.add('ag-prefill-flash');
+    setTimeout(() => el.classList.remove('ag-prefill-flash'), 1200);
+  });
+
+  // Auto-fetch the current page content, then start the POP improve flow
+  const url = (kw.targetUrl || kw.url || '').trim();
+  if (url && /^https?:\/\//i.test(url)) {
+    try { await agFetchPageContent(); } catch { /* non-fatal — user can paste/fetch manually */ }
+  }
+  agStartFlow();
 }
 
 function rtPopEditCompetitors(kwId) {
@@ -3793,18 +3855,7 @@ async function rtInit() {
 
     const popBtn = e.target.closest('.rt-run-pop-btn');
     if (popBtn) {
-      const kw  = popBtn.dataset.kw;
-      const url = popBtn.dataset.url;
-      // Pre-fill generator fields and switch to article tab
-      document.getElementById('ag-keyword').value   = kw;
-      document.getElementById('ag-targetUrl').value = url;
-      switchTab('article');
-      ['ag-keyword','ag-targetUrl'].forEach(id => {
-        const el = document.getElementById(id);
-        el.classList.add('ag-prefill-flash');
-        setTimeout(() => el.classList.remove('ag-prefill-flash'), 1200);
-      });
-      document.getElementById('ag-keyword').focus();
+      rtOptimizeInAG(popBtn.dataset.kwid);
       return;
     }
 
