@@ -2082,10 +2082,11 @@ function rtPopShowDetails(kwId) {
 
   const customComps = kw.customCompetitors || [];
 
-  function competitorsBlock(focus, all) {
-    const focusUrls  = focus || [];
-    const popUrls    = (all  || []).filter(u => !focusUrls.includes(u));
-    const hasAny     = focusUrls.length || popUrls.length || customComps.length;
+  function competitorsBlock(all) {
+    const popComps   = all || [];
+    const focusUrls  = popComps.slice(0, 3);
+    const otherUrls  = popComps.slice(3);
+    const hasAny     = popComps.length || customComps.length;
     if (!hasAny) {
       return `<div style="margin-bottom:14px">
         <div style="font-size:12px;font-weight:600;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between">
@@ -2107,12 +2108,12 @@ function rtPopShowDetails(kwId) {
     };
     return `<div style="margin-bottom:14px">
       <div style="font-size:12px;font-weight:600;margin-bottom:4px;display:flex;align-items:center;justify-content:space-between">
-        <span>Competitors <span style="font-size:10px;font-weight:400;color:var(--text-secondary)">${focusUrls.length} POP focus · ${popUrls.length} other · ${customComps.length} custom</span></span>
-        <button class="rt-pop-set-comp-btn" data-kwid="${escHtml(kwId)}" style="font-size:10px;padding:2px 8px;border-radius:12px;border:1px solid var(--border);background:transparent;cursor:pointer;color:var(--text-secondary)">✏ Edit</button>
+        <span>Competitors <span style="font-size:10px;font-weight:400;color:var(--text-secondary)">${focusUrls.length} focus · ${otherUrls.length} other · ${customComps.length} custom</span></span>
+        <button class="rt-pop-set-comp-btn" data-kwid="${escHtml(kwId)}" style="font-size:10px;padding:2px 8px;border-radius:12px;border:1px solid var(--border);background:transparent;cursor:pointer;color:var(--text-secondary)">✏ My picks</button>
       </div>
-      ${focusUrls.map(u  => row(u, 'POP Focus', 'background:rgba(67,97,238,.12);color:var(--accent);font-weight:600')).join('')}
-      ${popUrls.map(u    => row(u, 'POP', 'background:rgba(0,0,0,.06);color:var(--text-secondary)')).join('')}
-      ${customComps.map(u => row(u, 'Custom', 'background:rgba(45,158,107,.12);color:#2d9e6b;font-weight:600')).join('')}
+      ${focusUrls.map(u  => row(u, 'Focus', 'background:rgba(67,97,238,.12);color:var(--accent);font-weight:600')).join('')}
+      ${otherUrls.map(u  => row(u, 'POP',   'background:rgba(0,0,0,.06);color:var(--text-secondary)')).join('')}
+      ${customComps.map(u => row(u, 'Mine',  'background:rgba(45,158,107,.12);color:#2d9e6b;font-weight:600')).join('')}
     </div>`;
   }
 
@@ -2125,7 +2126,7 @@ function rtPopShowDetails(kwId) {
         ${wcHtml}
       </div>
     </div>
-    ${competitorsBlock(pr.focusCompetitors, pr.competitors)}
+    ${competitorsBlock(pr.competitors)}
     ${sectionBlock('Search Engine Title', pr.sections?.searchEngineTitle)}
     ${sectionBlock('Page Title', pr.sections?.pageTitle)}
     ${sectionBlock('Sub-headings', pr.sections?.subHeadings)}
@@ -2372,15 +2373,13 @@ async function rtPopScoreCheck(kwId) {
       return (arr || []).map(c => (typeof c === 'string' ? c : (c?.url || c?.competitorUrl || c?.domain || JSON.stringify(c)))).filter(Boolean);
     }
 
-    // Prefer competitors from get-terms (POP's own SERP picks), fall back to report-level
-    const finalAllComps   = normUrls(termsCompUrls).length  ? normUrls(termsCompUrls)  : normUrls(allComps);
-    const finalFocusComps = normUrls(termsFocusUrls).length ? normUrls(termsFocusUrls) : normUrls(focusComps);
+    // First 3 competitors are always POP's focus competitors
+    const allCompsList = normUrls(termsCompUrls).length ? normUrls(termsCompUrls) : normUrls(allComps);
 
     kw.popReport = {
       wordCountCurrent: rep?.wordCount?.current ?? rep?.wordCount?.total ?? null,
       wordCountTarget:  rep?.wordCount?.target ?? null,
-      competitors:      finalAllComps,
-      focusCompetitors: finalFocusComps,
+      competitors:      allCompsList,
       sections: {
         searchEngineTitle: extractTerms(cb?.metaTitle || cb?.searchEngineTitle),
         pageTitle:         extractTerms(cb?.pageTitle),
