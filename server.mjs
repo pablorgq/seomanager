@@ -696,6 +696,19 @@ app.get('/api/pop-locations', apiGuard, async (_req, res) => {
   }
 });
 
+/* Public POP languages list — case-sensitive values POP accepts, cache in memory */
+let popLanguagesCache = null;
+app.get('/api/pop-languages', apiGuard, async (_req, res) => {
+  if (popLanguagesCache) return res.json(popLanguagesCache);
+  try {
+    const r = await fetch(`${POP_BASE}/available-languages/`);
+    popLanguagesCache = await r.json();
+    res.json(popLanguagesCache);
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
 app.use('/api/pop', apiGuard, async (req, res) => {
   if (!POP_KEY) return res.status(503).json({ error: { message: 'POP_API_KEY not configured on this server.' } });
   const popPath = req.path.replace(/^\//, '');

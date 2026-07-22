@@ -2132,6 +2132,58 @@ function rtPopShowDetails(kwId) {
     </select>
   </div>`;
 
+  // What POP's crawler read from the live target URL (server-side scrape).
+  // The API returns no raw page text — these are the structural signals POP extracted.
+  function scrapedBlock(s) {
+    if (!s) return '';
+    const wc = s.wordCurrent != null
+      ? `<strong>${Number(s.wordCurrent).toLocaleString()}</strong> words${s.wordTarget != null ? ` <span style="color:var(--text-secondary)">/ target ${Number(s.wordTarget).toLocaleString()}</span>` : ''}`
+      : '—';
+    const tagRows = (s.tags || []).map(t => {
+      const over  = t.max > 0 && t.current > t.max;
+      const under = t.current < t.min;
+      const col   = over ? '#c48a00' : under ? '#dc3c3c' : '#2d9e6b';
+      const icon  = over ? '↑' : under ? '✗' : '✓';
+      return `<tr>
+        <td style="width:14px;font-size:11px;color:${col};vertical-align:top">${icon}</td>
+        <td style="font-size:11px;padding:2px 6px">${escHtml(t.label)}</td>
+        <td style="font-size:11px;text-align:center;width:56px;font-weight:600">${t.current}</td>
+        <td style="font-size:11px;text-align:center;width:90px;color:var(--text-secondary)">${t.min}–${t.max} <span style="opacity:.6">(μ${t.mean})</span></td>
+      </tr>`;
+    }).join('');
+    const tagTable = tagRows ? `
+      <table style="width:100%;border-collapse:collapse;margin-top:6px">
+        <thead><tr style="font-size:10px;color:var(--text-secondary)">
+          <th></th><th style="text-align:left;padding:2px 6px">Element on your page</th>
+          <th style="width:56px">Yours</th><th style="width:90px">Competitors</th>
+        </tr></thead>
+        <tbody>${tagRows}</tbody>
+      </table>` : '';
+    const entities = (s.entities || []).length
+      ? `<div style="margin-top:8px">
+          <div style="font-size:10px;font-weight:600;color:var(--text-secondary);margin-bottom:3px">Google NLP entities POP detected on your page</div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px">
+            ${s.entities.map(e => `<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:var(--bg);border:1px solid var(--border)">${escHtml(e)}</span>`).join('')}
+          </div>
+        </div>`
+      : '';
+    return `<details style="margin-bottom:14px" open>
+      <summary style="font-size:12px;font-weight:600;cursor:pointer;padding:4px 0;user-select:none">
+        What POP scraped from your page
+      </summary>
+      <div style="margin-top:6px;font-size:10px;color:var(--text-muted);line-height:1.4">
+        POP fetched your live URL server-side. The API returns no raw HTML — these are the signals it extracted from your page and compared to the ${escHtml(s.location || '')} SERP.
+      </div>
+      <div style="font-size:11px;margin-top:6px;line-height:1.6">
+        <div>URL: <a href="${escHtml(s.url)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">${escHtml(s.url)}</a></div>
+        <div>Keyword: <strong>${escHtml(s.keyword || '')}</strong> · Location: <strong>${escHtml(s.location || '')}</strong> · Language: <strong>${escHtml((s.language || '').replace(/^./, c => c.toUpperCase()))}</strong></div>
+        <div>Content read: ${wc}</div>
+      </div>
+      ${tagTable}
+      ${entities}
+    </details>`;
+  }
+
   function recsBlock(recs) {
     if (!recs) return '';
     const groups = [
@@ -2174,6 +2226,7 @@ function rtPopShowDetails(kwId) {
     <div style="font-size:10px;color:var(--text-secondary);margin-bottom:10px">
       Terms &amp; targets from Page Optimizer Pro · strategy: <strong>${escHtml(pr.strategy || 'focus')}</strong> · approach: <strong>${escHtml(pr.approach || 'regular')}</strong>
     </div>
+    ${scrapedBlock(pr.scraped)}
     ${recsBlock(pr.recommendations)}
     ${sectionBlock('Search Engine Title', pr.sections?.searchEngineTitle)}
     ${sectionBlock('Page Title', pr.sections?.pageTitle)}
@@ -2269,12 +2322,31 @@ async function rtPopScoreCheck(kwId) {
 
   const targetUrl  = kw.targetUrl || kw.url || '';
   const keyword    = kw.keyword || '';
-  const locName    = client?.popLocation || '';
-  const targLang   = client?.popLanguage || 'english';
+  let   locName    = client?.popLocation || '';
+  // POP languages are all lowercase (english, spanish, …) — normalise to the accepted case
+  let   targLang   = String(client?.popLanguage || 'english').toLowerCase();
   const gnl        = !!client?.popGnl;
 
   if (!targetUrl) { alert('Add a Target URL for this keyword first (click the Target URL cell to edit).'); return; }
   if (!locName) { alert('Add a Target Location for this client first.\n\nEdit Client → POP Settings → Target Location\nExample: "Winnipeg, Manitoba" or "Dallas, TX"'); return; }
+
+  // Location/language must be the exact case-sensitive values POP validates against.
+  // Normalise both against POP's own lists so everything sent comes straight from POP.
+  try {
+    if (!_popLocations) { const r = await fetch('/api/pop-locations'); _popLocations = await r.json(); }
+    if (Array.isArray(_popLocations) && locName) {
+      const hit = _popLocations.find(l => l.toLowerCase() === locName.toLowerCase());
+      if (hit) locName = hit;
+      else { alert(`"${locName}" is not a valid POP location.\n\nEdit Client → POP Settings → Target Location and pick one from the list (values come from Page Optimizer Pro, e.g. "Winnipeg, Manitoba, Canada").`); return; }
+    }
+  } catch { /* offline — fall through and let POP validate server-side */ }
+  try {
+    if (!_popLanguages) { const r = await fetch('/api/pop-languages'); _popLanguages = await r.json(); }
+    if (Array.isArray(_popLanguages) && _popLanguages.length && !_popLanguages.includes(targLang)) {
+      const hit = _popLanguages.find(l => l.toLowerCase() === targLang.toLowerCase());
+      targLang = hit || 'english';
+    }
+  } catch { /* offline — fall through */ }
   if (!hasPop && !document.getElementById('ag-popKey')?.value) {
     alert('No POP API key configured. Add it in Settings or ask your admin to set POP_API_KEY on the server.');
     return;
@@ -2365,7 +2437,7 @@ async function rtPopScoreCheck(kwId) {
 
     // Fetch recommendations (non-fatal — strategy + approach apply here, not create-report)
     let recommendations = null;
-    const reportId = rep?.id;
+    const reportId = r2.reportId || rep?.id;
     if (reportId) {
       try {
         setStatus(`Getting recommendations for ${kwLabel}…`);
@@ -2449,10 +2521,40 @@ async function rtPopScoreCheck(kwId) {
     // First 3 competitors are always POP's focus competitors
     const allCompsList = normUrls(termsCompUrls).length ? normUrls(termsCompUrls) : normUrls(allComps);
 
+    // What POP's crawler actually read from the live target URL. The API returns no
+    // raw HTML/text — these are the structural signals POP extracted server-side:
+    // total words, per-tag counts (H1/H2/paragraphs/images…) and Google NLP entities.
+    function extractEntities(nlp) {
+      if (!nlp) return [];
+      let ents = Array.isArray(nlp) ? nlp
+        : (nlp.entities || nlp.googleNlpEntities || nlp.nlpEntities || []);
+      if (!Array.isArray(ents)) return [];
+      return ents.map(e => typeof e === 'string' ? e : (e.name || e.entity || e.text || e.phrase || ''))
+        .filter(Boolean).slice(0, 40);
+    }
+    const scraped = {
+      url:         rep?.url || targetUrl,
+      keyword:     rep?.keyword || keyword,
+      location:    rep?.googleLocation || locName,
+      language:    rep?.language || targLang,
+      wordCurrent: rep?.wordCount?.current ?? rep?.wordCount?.total ?? null,
+      wordTarget:  rep?.wordCount?.target ?? null,
+      tags: (rep?.tagCounts || []).map(t => ({
+        label:   t.tagLabel || '',
+        current: t.signalCnt ?? 0,
+        min:     t.min ?? 0,
+        mean:    t.mean ?? 0,
+        max:     t.max ?? 0,
+        comment: t.comment || '',
+      })).filter(t => t.label),
+      entities: extractEntities(rep?.googleNlpSchemaData),
+    };
+
     kw.popReport = {
       wordCountCurrent: rep?.wordCount?.current ?? rep?.wordCount?.total ?? null,
       wordCountTarget:  rep?.wordCount?.target ?? null,
       competitors:      allCompsList,
+      scraped,
       strategy,
       approach,
       recommendations,
@@ -3789,6 +3891,24 @@ async function rtLoadPopLocations() {
   } catch { /* silently skip — user can still type manually */ }
 }
 
+let _popLanguages = null;
+async function rtLoadPopLanguages() {
+  const sel = document.getElementById('rt-popLanguage');
+  if (!sel) return;
+  try {
+    if (!_popLanguages) {
+      const r = await fetch('/api/pop-languages');
+      _popLanguages = await r.json();
+    }
+    if (!Array.isArray(_popLanguages) || !_popLanguages.length) return;
+    const cur = (sel.value || 'english').toLowerCase();
+    const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+    // All language options come straight from POP (exact case-sensitive values)
+    sel.innerHTML = _popLanguages.map(l => `<option value="${escHtml(l)}">${escHtml(cap(l))}</option>`).join('');
+    sel.value = _popLanguages.includes(cur) ? cur : 'english';
+  } catch { /* keep the hardcoded options as fallback */ }
+}
+
 function rtShowAddClient() {
   document.getElementById('rt-modalTitle').textContent     = 'Add Client';
   document.getElementById('rt-clientName').value           = '';
@@ -3804,6 +3924,7 @@ function rtShowAddClient() {
   if (hasAA) rtLoadCampaigns();
   else document.getElementById('rt-campaignPickWrap').classList.add('hidden');
   rtLoadPopLocations();
+  rtLoadPopLanguages();
   rtOpenModal('rt-clientModal');
 }
 
@@ -3824,6 +3945,7 @@ function rtShowEditClient() {
   if (hasAA) rtLoadCampaigns(c.aaCampaignId);
   else document.getElementById('rt-campaignPickWrap').classList.add('hidden');
   rtLoadPopLocations();
+  rtLoadPopLanguages();
   rtOpenModal('rt-clientModal');
 }
 
