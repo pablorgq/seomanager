@@ -438,6 +438,8 @@
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px">
           <div id="ag-outputTitle" style="font-size:20px;font-weight:700;color:var(--text-primary)"></div>
           <div style="display:flex;gap:8px;flex-shrink:0">
+            <button class="btn btn-secondary" id="ag-trustBtn" onclick="agTrustPass()"
+              title="Remove contradictory or unverifiable claims, repeated CTAs and duplicated ideas; keep the location consistent; turn inline dash lists into real lists">Trust &amp; readability pass</button>
             <button class="btn btn-secondary" onclick="agCopyArticle()">Copy article</button>
             <button class="btn btn-secondary" onclick="agCopyHtml()">Copy HTML</button>
             <button class="btn btn-primary" onclick="agStartFlow()">Regenerate</button>
@@ -447,6 +449,7 @@
         <div id="ag-metaCards" class="ag-meta-cards"></div>
         <div id="ag-hlLegend" class="ag-hl-legend" style="display:none"></div>
         <div id="ag-articleBox" class="ag-article-box"></div>
+        <div id="ag-trustNotes" class="ag-trust-notes" style="display:none"></div>
         <div id="ag-termsSummary" class="ag-terms-summary"></div>
         <div id="ag-nlpSection" class="form-card" style="display:none;margin-top:16px">
           <div style="font-size:13px;font-weight:600;margin-bottom:10px;color:var(--text-primary)">Google NLP Entities</div>

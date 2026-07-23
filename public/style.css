@@ -757,6 +757,25 @@ details[open] .card-prompts-toggle::before { transform: rotate(90deg); }
 .ag-verify-btn:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
 .ag-verify-btn:disabled { opacity: .6; cursor: default; }
 
+/* Editor's notes from the trust & readability pass — visually separated from the
+   article so it never reads as page copy */
+.ag-trust-notes {
+  margin-top: 16px; background: var(--surface-alt);
+  border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: var(--radius); overflow: hidden;
+}
+.ag-trust-notes-hd {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  flex-wrap: wrap; padding: 12px 18px; border-bottom: 1px solid var(--border);
+  font-size: 12px; font-weight: 700; color: var(--text-primary);
+}
+.ag-trust-notes-body { padding: 14px 18px; font-size: 13px; color: var(--text-secondary); line-height: 1.65; }
+.ag-trust-notes-body h4 { font-size: 12px; font-weight: 700; color: var(--text-primary); margin: 14px 0 6px; }
+.ag-trust-notes-body h4:first-child { margin-top: 0; }
+.ag-trust-notes-body ul { margin: 6px 0 10px; padding-left: 20px; }
+.ag-trust-notes-body li { margin-bottom: 5px; }
+.ag-trust-notes-body p  { margin: 0 0 8px; }
+
 /* "Reusing the report from Score" banner above the Continue button */
 .ag-reused-note {
   display: flex; align-items: center; gap: 10px; margin-bottom: 16px;
@@ -813,6 +832,8 @@ details[open] .card-prompts-toggle::before { transform: rotate(90deg); }
 .ag-article-box h2 { font-size: 17px; font-weight: 700; margin: 28px 0 12px; color: var(--text-primary); font-family: var(--font-head); }
 .ag-article-box h3 { font-size: 15px; font-weight: 600; margin: 20px 0 10px; color: var(--text-secondary); font-family: var(--font-head); }
 .ag-article-box p  { margin-bottom: 14px; }
+.ag-article-box ul { margin: 0 0 14px; padding-left: 26px; }
+.ag-article-box li { margin-bottom: 7px; }
 .ag-article-box strong { font-weight: 700; color: var(--accent); }
 mark.term-pop  { background: rgba(67,97,238,.15);  color: inherit; border-radius: 2px; font-weight: 600; padding: 0 1px; }
 mark.term-cora { background: rgba(16,185,129,.18); color: inherit; border-radius: 2px; font-weight: 600; padding: 0 1px; }

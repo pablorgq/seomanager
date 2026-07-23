@@ -869,6 +869,45 @@ let agArticleHtml = '';
 let agOriginalContent = '';
 let agSavedRun = null;      // kw.popRun carried over from a Rank Tracker "Score" run
 let agLastRun  = null;      // params of the report behind the current output, for re-scoring
+let agPreTrustText = '';    // article as generated, kept so the trust pass can be reverted
+let agTrustNotes   = '';    // the editor's notes from the last trust pass
+
+/* Marker the trust pass uses to split its rewrite from its notes, so the notes
+   never leak into the article body, the copy buttons or the saved report. */
+const AG_NOTES_MARKER = '===NOTES===';
+
+/* Guardrails folded into every generation prompt. These only stop patterns that
+   read as filler or as unverifiable puffery — they never ask the model to add
+   anything, so term placement and the POP brief are unaffected. */
+const AG_TRUST_RULES = `── TRUST & READABILITY (applies to everything you write) ──
+- Never state two different figures for the same fact (years in business, team size, jobs completed). One figure, used consistently.
+- No unverifiable superlatives. "The largest fleet in the country", "the first company to do X", "the best in the industry" are not allowed unless the source material backs them up. Use a defensible form instead ("one of the largest fleets serving the region").
+- At most 2 calls to action in the whole piece, worded differently. Do NOT end each section with a "Don't let X happen — contact us today" formula.
+- Say each idea once. If a cause-and-effect chain (e.g. dust → allergens → health → productivity) belongs to one section, do not restate it in others with new wording.
+- Keep one consistent geographic focus from the H1 to the final paragraph. Do not open with a city and close with the whole country.
+- Anything that is a genuine enumeration ("A - B - C" run together in a sentence) becomes a real markdown bullet list. Do not invent list items to pad.
+- Invent nothing. No certifications, awards, founding years, staff names or testimonials that are not in the source material.`;
+
+/* The full editorial pass, run on demand after generation. Unlike the rules
+   above this one is allowed to cut and restructure, so it stays opt-in. */
+const AG_TRUST_PASS_PROMPT = `You are editing a local service business's website copy to fix issues that hurt trust with readers and search engines (Google's helpful-content / E-E-A-T signals). Rewrite the content below, applying these fixes:
+
+1. Resolve contradictory or unverifiable credibility claims. If the page states two different "years of experience" figures, or makes an implausible experience claim (e.g. "a century of expertise" for a company that cannot be that old), keep only the specific, verifiable figure and drop the other.
+2. Soften or remove unverifiable superlatives. Claims like "the largest fleet in [country]" or "the first company to do X" should either be backed by something checkable or downgraded to a defensible version (e.g. "one of the largest fleets serving [region]").
+3. Eliminate repetitive CTA patterns. If the same "Don't let X happen — contact us today" structure repeats across sections, cut it to 1–2 well-placed, naturally varied calls to action.
+4. Cut redundant content loops. If the same idea is restated with slightly different wording across sections, consolidate it into one clear section.
+5. Fix inconsistent geographic targeting. Keep the location focus consistent throughout — this matters for local SEO relevance.
+6. Convert inline dash-separated text into real lists. Anything written as "Item A - Item B - Item C" as running text becomes a proper markdown bulleted list.
+7. Preserve all genuine facts. Keep real details like equipment specs, service types, phone numbers, and building/industry types served — only the framing changes, not the underlying facts.
+
+Keep the tone professional and consistent with the original. Do not invent facts that were not in the source. Do not pad sections to hit a word count. Keep the markdown heading structure (# for the H1, ## for section headings).
+
+OUTPUT FORMAT — follow exactly:
+First, the rewritten article in markdown. Nothing before it, no preamble.
+Then a line containing only ${AG_NOTES_MARKER}
+Then a short "Notes" section with two parts:
+(a) what was changed and why — one bullet per change
+(b) what specific, verifiable details (certifications, real founding year, named staff, local landmarks/neighbourhoods, testimonials) would strengthen the page further if supplied`;
 
 /* Shrink a POP cleanedContentBrief to just what the Article Generator reads.
    rtData is round-tripped whole through /api/rankdata, so the raw brief (which
@@ -1216,6 +1255,16 @@ function agRenderArticle(text, termClassMap, originalText) {
     line = line.trim();
     if (!line) return '';
     if (line.startsWith('<h')) return line;
+
+    // A block whose every line is a bullet becomes a real <ul>. Without this the
+    // paragraph branch below joins the lines with spaces, turning a proper list
+    // straight back into the "Item A - Item B - Item C" run the trust pass exists
+    // to eliminate.
+    const rows = line.split('\n').map(r => r.trim()).filter(Boolean);
+    if (rows.length && rows.every(r => /^[-*•]\s+/.test(r))) {
+      return `<ul>${rows.map(r => `<li>${r.replace(/^[-*•]\s+/, '')}</li>`).join('')}</ul>`;
+    }
+
     let diffCls = '';
     if (origParas.length) {
       const plain = line.replace(/<[^>]+>/g, '');
@@ -1306,6 +1355,153 @@ function agRenderScore(popBefore, popAfter, coverage) {
       </div>`;
     document.getElementById('ag-verifyBtn')?.addEventListener('click', agRescoreWithPop);
   }
+}
+
+/* Editorial pass over the generated article: strips contradictory or
+   unverifiable claims, collapses repeated CTAs and duplicated ideas, keeps the
+   geography consistent and turns inline "A - B - C" runs into real lists.
+
+   Runs on demand rather than automatically because it is allowed to cut text,
+   which can move term frequencies — so the coverage estimate is recomputed and
+   any POP-verified score is invalidated (the scored text no longer exists). */
+async function agTrustPass() {
+  if (!agLastRun || !agArticleText) return;
+  const btn = document.getElementById('ag-trustBtn');
+  const restore = () => { if (btn) { btn.disabled = false; btn.textContent = 'Trust & readability pass'; } };
+  if (btn) { btn.disabled = true; btn.textContent = 'Editing…'; }
+
+  const { model, bodyTerms, titleTerms, h2Items, termClassMap, covBefore, popBefore, wcTarget } = agLastRun;
+
+  try {
+    const chatHeaders = { 'Content-Type': 'application/json' };
+    if (!hasServerKey) {
+      const k = apiKey || await Store.get('seomanager_api_key');
+      if (k) chatHeaders['x-client-key'] = k;
+    }
+
+    agLog('Running trust & readability pass…');
+    const res = await fetch('/api/openai/chat', {
+      method: 'POST', headers: chatHeaders,
+      body: JSON.stringify({
+        model, max_tokens: 4000,
+        messages: [{ role: 'user', content: `${AG_TRUST_PASS_PROMPT}\n\nCONTENT TO REWRITE:\n---\n${agArticleText}\n---` }],
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(`OpenAI ${res.status}: ${err.error?.message || JSON.stringify(err).slice(0, 120)}`);
+    }
+    const out = (await res.json()).choices[0].message.content || '';
+
+    // Split the rewrite from the editor's notes. If the model ignored the
+    // marker, treat the whole reply as article and say the notes are missing
+    // rather than silently pasting a "Notes" section into the page copy.
+    const idx = out.indexOf(AG_NOTES_MARKER);
+    const newText = (idx >= 0 ? out.slice(0, idx) : out).trim();
+    agTrustNotes = idx >= 0 ? out.slice(idx + AG_NOTES_MARKER.length).trim() : '';
+    if (!newText) throw new Error('The editor returned an empty article');
+
+    agPreTrustText = agPreTrustText || agArticleText;
+    agArticleText  = newText;
+    agArticleHtml  = agRenderArticle(newText, termClassMap || new Map(), agOriginalContent);
+    document.getElementById('ag-articleBox').innerHTML = agArticleHtml;
+
+    // The text changed, so re-measure coverage and drop any POP score that was
+    // verified against the previous wording.
+    const covAfter = agComputeCoverage(newText, bodyTerms, titleTerms, h2Items);
+    agLastRun.covAfter = covAfter;
+    agLastRun.popAfter = null;
+    const wordCount = newText.split(/\s+/).length;
+
+    agRenderScore(popBefore, null, { before: covBefore, after: covAfter });
+    agRenderMetaCards({
+      popBefore, popAfter: null, covBefore, covAfter,
+      wordCount, wcTarget, termCount: (agLastRun.allTerms || []).length,
+    });
+    agRenderTrustNotes();
+    agLog(`Trust pass done — ${wordCount} words, coverage ${covAfter}%. Re-verify in POP to score the edited text.`);
+
+    // Keep the saved report in step with what is on screen
+    agUpdateSavedArticle({ wordCount, covAfter, resetPopAfter: true });
+  } catch (e) {
+    agLog('Trust pass failed: ' + e.message);
+    alert('Trust & readability pass failed:\n\n' + e.message);
+  }
+  restore();
+}
+
+/* Put back the article exactly as generated, before the trust pass. */
+function agTrustRevert() {
+  if (!agPreTrustText || !agLastRun) return;
+  const { bodyTerms, titleTerms, h2Items, termClassMap, covBefore, popBefore, wcTarget } = agLastRun;
+
+  agArticleText = agPreTrustText;
+  agArticleHtml = agRenderArticle(agArticleText, termClassMap || new Map(), agOriginalContent);
+  document.getElementById('ag-articleBox').innerHTML = agArticleHtml;
+
+  const covAfter  = agComputeCoverage(agArticleText, bodyTerms, titleTerms, h2Items);
+  const wordCount = agArticleText.split(/\s+/).length;
+  agLastRun.covAfter = covAfter;
+  agLastRun.popAfter = null;
+  agTrustNotes = '';
+
+  agRenderScore(popBefore, null, { before: covBefore, after: covAfter });
+  agRenderMetaCards({ popBefore, popAfter: null, covBefore, covAfter, wordCount, wcTarget, termCount: (agLastRun.allTerms || []).length });
+  agRenderTrustNotes();
+  agUpdateSavedArticle({ wordCount, covAfter, resetPopAfter: true });
+  agLog('Reverted to the article as generated.');
+}
+
+/* Keep the auto-saved report in step with the article currently on screen. */
+function agUpdateSavedArticle({ wordCount, covAfter, resetPopAfter }) {
+  const cid = rtData?.activeClientId;
+  const saved = cid && agLastRun ? repGet(cid, agLastRun.keyword) : null;
+  if (!saved) return;
+  saved.articleText = agArticleText;
+  saved.articleHtml = agArticleHtml;
+  saved.wordCount   = wordCount;
+  saved.covAfter    = covAfter;
+  if (resetPopAfter) { saved.scoreAfter = null; saved.scoreAfterSource = null; }
+  repSave(saved);
+  rtRender(); filesRender();
+}
+
+/* The editor's notes panel — what it changed, and what verifiable details would
+   strengthen the page. Deliberately outside the article box so it never ends up
+   in the copy buttons or the saved page copy. */
+function agRenderTrustNotes() {
+  const box = document.getElementById('ag-trustNotes');
+  if (!box) return;
+  if (!agTrustNotes) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  box.style.display = 'block';
+  box.innerHTML =
+    `<div class="ag-trust-notes-hd">
+      <span>Editor's notes — not part of the article</span>
+      <button class="ag-verify-btn" onclick="agTrustRevert()">Revert to generated version</button>
+    </div>
+    <div class="ag-trust-notes-body">${agRenderNotesHtml(agTrustNotes)}</div>`;
+}
+
+/* Minimal markdown for the notes block: headings, bullets, paragraphs. */
+function agRenderNotesHtml(text) {
+  const lines = String(text).split('\n');
+  let html = '', inList = false;
+  const closeList = () => { if (inList) { html += '</ul>'; inList = false; } };
+  for (const raw of lines) {
+    const l = raw.trim();
+    if (!l) { closeList(); continue; }
+    const bullet = l.match(/^[-*•]\s+(.*)$/);
+    if (bullet) {
+      if (!inList) { html += '<ul>'; inList = true; }
+      html += `<li>${escHtml(bullet[1])}</li>`;
+      continue;
+    }
+    closeList();
+    const h = l.match(/^#{1,6}\s+(.*)$/);
+    html += h ? `<h4>${escHtml(h[1])}</h4>` : `<p>${escHtml(l)}</p>`;
+  }
+  closeList();
+  return html;
 }
 
 /* One-off discovery helper: does POP expose an endpoint that scores raw content,
@@ -1800,9 +1996,11 @@ ${nlpEntityNames.length ? '\nGOOGLE NLP ENTITIES — weave these in naturally in
 KEYWORD VARIATIONS — use naturally throughout (not all in one place):
 ${selectedVars.join(', ')}
 ${contentInstructions ? `\nCONTENT INSTRUCTIONS — follow these exactly:\n${contentInstructions}\n` : ''}
+${AG_TRUST_RULES}
+
 ── FORMAT ───────────────────────────────────────────────
 - Output: one # H1 title, ${h2Target} ## H2 sections, one conclusion paragraph
-- Use flowing paragraphs — NO bullet lists
+- Prefer flowing paragraphs; use a markdown bullet list only where the content is a genuine enumeration
 - Every term must read naturally — never forced or stuffed
 - Do NOT include the meta title in the article body
 - Do NOT mention SEO, word counts, or these instructions`;
@@ -1810,8 +2008,7 @@ ${contentInstructions ? `\nCONTENT INSTRUCTIONS — follow these exactly:\n${con
     // Build term insertion list for the edit prompt
     const insertTermLines = [
       ...bodyTerms.map(t => {
-        const min = t.contentBrief.min ?? 0;
-        const max = t.contentBrief.max ?? t.contentBrief.target ?? 0;
+        const { min, max } = agTermBand(t);
         return `  • "${t.term.phrase}" — ${min}–${max} times`;
       }),
       ...selectedVars.map(v => `  • "${v}" — weave in naturally`),
@@ -1830,6 +2027,8 @@ ABSOLUTE CONSTRAINTS — failure to follow = task failed:
 • Do NOT reorder sections or paragraphs
 • You MAY add up to 2 short new paragraphs at the very end if the original is under ${wcTarget} words
 • Return the full page — every heading and paragraph — with edits applied
+• While inserting terms, do not introduce new calls to action, superlatives ("the largest", "the first"), or credibility claims. Nothing you add may be an unverifiable claim.
+  (Contradictions and repetition already in the original are left alone here — the "Trust & readability pass" button handles those.)
 
 TERMS TO WEAVE IN (insert where they fit naturally; do not force every term):
 ${insertTermLines}
@@ -1874,14 +2073,17 @@ ${popBriefSpecs}`;
     const covBefore = agOriginalContent
       ? agComputeCoverage(agOriginalContent, bodyTerms, titleTerms, h2Items) : null;
 
-    // Everything the re-score needs to build a matching report on the new text
+    // Everything the re-score and the trust pass need to work on this article
     agLastRun = {
       popKey, keyword, targetUrl, locName, targLang,
       variations: selectedVars, lsaPhrases: fullLsa,
-      overOpt, enableNlp, strategy, approach,
+      overOpt, enableNlp, strategy, approach, model,
       popBefore: pageScore, bodyTerms, titleTerms, h2Items,
       covBefore, covAfter, wcTarget,
     };
+    agPreTrustText = articleText;   // revert target for the trust pass
+    agTrustNotes   = '';
+    agRenderTrustNotes();
 
     document.getElementById('ag-outputTitle').textContent = keyword;
     agRenderScore(pageScore, null, { before: covBefore, after: covAfter });
@@ -1892,6 +2094,8 @@ ${popBriefSpecs}`;
     });
 
     const termClassMap = buildTermClassMap(allTerms, coraReport?.lsi);
+    agLastRun.termClassMap = termClassMap;
+    agLastRun.allTerms = allTerms;
     agArticleHtml = agRenderArticle(articleText, termClassMap, agOriginalContent);
     agArticleText = articleText;
     document.getElementById('ag-articleBox').innerHTML = agArticleHtml;

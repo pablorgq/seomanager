@@ -760,6 +760,12 @@ function renderPreviewHtml(markdown) {
       const lvl = h[1].length;
       return `<h${lvl}>${escHtml(h[2].replace(/\n/g, ' ').trim())}</h${lvl}>`;
     }
+    // Real lists stay lists — POP reads per-tag counts, so flattening a bullet
+    // block into one paragraph would misrepresent the page it is scoring.
+    const rows = b.split('\n').map(r => r.trim()).filter(Boolean);
+    if (rows.length && rows.every(r => /^[-*•]\s+/.test(r))) {
+      return `<ul>${rows.map(r => `<li>${escHtml(r.replace(/^[-*•]\s+/, ''))}</li>`).join('')}</ul>`;
+    }
     return `<p>${escHtml(b.replace(/\n/g, ' '))}</p>`;
   }).filter(Boolean).join('\n');
 }
