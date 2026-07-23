@@ -408,6 +408,13 @@
         <div class="ag-term-list" id="ag-lsiList"></div>
       </div>
 
+      <!-- Shown when Optimize reused the report from a Rank Tracker "Score" run -->
+      <div id="ag-reusedNote" class="ag-reused-note" style="display:none">
+        <span class="ag-reused-icon">♻</span>
+        <span id="ag-reusedNoteText" style="flex:1"></span>
+        <button class="btn btn-secondary" onclick="agRerunFresh()">Re-run POP fresh</button>
+      </div>
+
       <button id="ag-continueBtn" class="btn btn-primary" onclick="agContinueWithSelected()" style="display:none;margin-bottom:20px">
         Continue with selected terms →
       </button>

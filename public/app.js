@@ -867,6 +867,77 @@ let agTermsData = null;
 let agArticleText = '';
 let agArticleHtml = '';
 let agOriginalContent = '';
+let agSavedRun = null;      // kw.popRun carried over from a Rank Tracker "Score" run
+let agLastRun  = null;      // params of the report behind the current output, for re-scoring
+
+/* Shrink a POP cleanedContentBrief to just what the Article Generator reads.
+   rtData is round-tripped whole through /api/rankdata, so the raw brief (which
+   carries per-term competitor tables) is far too heavy to persist per keyword. */
+function popTrimBrief(cb) {
+  if (!cb) return null;
+  const trimSection = (arr, limit) => (arr || [])
+    .filter(t => t?.contentBrief && t?.term?.phrase)
+    .slice(0, limit)
+    .map(t => ({
+      term: { phrase: t.term.phrase, type: t.term.type || null },
+      contentBrief: {
+        min:       t.contentBrief.min ?? null,
+        max:       t.contentBrief.max ?? null,
+        target:    t.contentBrief.target ?? null,
+        targetMin: t.contentBrief.targetMin ?? null,
+        targetMax: t.contentBrief.targetMax ?? null,
+        current:   t.contentBrief.current ?? null,
+      },
+    }));
+  return {
+    pageTitle:   trimSection(cb.pageTitle, 20),
+    metaTitle:   trimSection(cb.metaTitle || cb.searchEngineTitle, 20),
+    subHeadings: trimSection(cb.subHeadings, 30),
+    p:           trimSection(cb.p, 60),
+  };
+}
+
+/* Single source of truth for reading a POP page score out of a create-report
+   payload. Score, the Article Generator and the post-generation re-score all
+   call this — before, each had its own chain and its own rounding, which is why
+   the same page could read 54 in the Rank Tracker and 92.16 in the generator.
+   Pass the `.report` object from a create-report poll. Returns a number 0-100
+   with one decimal, or null. */
+function popPickScore(report) {
+  const cb = report?.cleanedContentBrief;
+
+  const unwrap = v => {
+    if (v == null) return null;
+    if (typeof v === 'number') return v || null;
+    if (typeof v === 'string') { const n = parseFloat(v); return (!isNaN(n) && n > 0) ? n : null; }
+    if (typeof v !== 'object') return null;
+    // prefer a non-zero numeric field; fall back to POP's string variants
+    const num = [v.pageScore, v.pScore, v.pTotal, v.current, v.value, v.score, v.percent]
+      .map(Number).find(n => !isNaN(n) && n > 0);
+    if (num != null) return num;
+    const str = [v.pageScoreValue, v.pScoreValue].find(s => s && String(s).trim() !== '');
+    return str ? (parseFloat(str) || null) : null;
+  };
+
+  const chain = [
+    cb?.pageScore, cb?.pTotal, cb?.pScore, cb?.score,
+    report?.pageScore, report?.pTotal, report?.pageScoreValue, report?.pScore, report?.score,
+  ];
+  const raw = chain.find(v => v != null && v !== 0 && v !== '');
+  let score = unwrap(raw);
+  if (score == null || isNaN(score)) return null;
+
+  // POP returns pageScore two ways: already on 0-100 (54.4, 92.16) or as a
+  // fraction of target (1.03 = 103% of target, seen nested as
+  // {pageScore: 1.03, pageScoreValue: ""}). Anything <= 5 is read as a ratio —
+  // a real page that has content never scores 5/100, so the ambiguous band
+  // resolves to the ratio reading. This is the rule the Article Generator
+  // already used; the Score button used < 1 instead, which is where the two
+  // views diverged.
+  if (score > 0 && score <= 5) score = score * 100;
+  score = Math.min(100, score);
+  return Math.round(score * 100) / 100;              // keep 2dp so every view agrees
+}
 
 function agTogglePw(id, btn) {
   const el = document.getElementById(id);
@@ -907,6 +978,9 @@ function agRenderSteps() {
 }
 
 function agSetStep(i, state, detail) {
+  // The pollers are reused by the post-generation re-score, which runs outside
+  // the numbered step list and passes no index.
+  if (!agSteps[i]) return;
   agSteps[i].state = state;
   if (detail !== undefined) agSteps[i].detail = detail;
   agRenderSteps();
@@ -1097,6 +1171,27 @@ function agHighlightTerms(html, termClassMap) {
   return result;
 }
 
+/* The target frequency band for one content-brief term. POP returns the bounds
+   as min/max on some payloads and targetMin/targetMax on others — reading only
+   one pair silently scored every term against 0. */
+function agTermBand(t) {
+  const cb = t?.contentBrief || {};
+  const num = v => (v == null || v === '' || isNaN(Number(v))) ? null : Number(v);
+  const min = num(cb.min) ?? num(cb.targetMin) ?? 0;
+  const max = num(cb.max) ?? num(cb.targetMax) ?? num(cb.target) ?? 0;
+  return { min, max };
+}
+
+/* Count whole-word occurrences of a phrase. Without the boundaries "duct"
+   matched inside "ducts" and "conduct", inflating every count. */
+function agCountPhrase(lowerText, phrase) {
+  const esc = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+  // \b is useless next to a non-word char, so only anchor the ends that are words
+  const pre  = /^\w/.test(phrase) ? '\\b' : '';
+  const post = /\w$/.test(phrase) ? '\\b' : '';
+  return (lowerText.match(new RegExp(pre + esc + post, 'gi')) || []).length;
+}
+
 function paraSimScore(a, b) {
   const sig = s => new Set((s.toLowerCase().match(/\b\w{4,}\b/g) || []));
   const wa = sig(a), wb = sig(b);
@@ -1131,7 +1226,13 @@ function agRenderArticle(text, termClassMap, originalText) {
   }).filter(Boolean).join('\n');
 }
 
-function agComputeScore(articleText, bodyTerms, titleTerms, h2Items) {
+/* Local estimate of how well a piece of text covers the POP content brief.
+   This is NOT a POP score — it is the share of brief terms whose frequency lands
+   in their target band. Use it for a fast, free before/after comparison of two
+   texts against the SAME brief; never subtract it from a POP number. The real
+   POP score for generated content comes from agRescoreWithPop(). */
+function agComputeCoverage(articleText, bodyTerms, titleTerms, h2Items) {
+  if (!articleText) return null;
   const lower = articleText.toLowerCase();
   const lines = articleText.split('\n');
   const h1Line = (lines.find(l => l.startsWith('# ')) || '').toLowerCase();
@@ -1139,15 +1240,13 @@ function agComputeScore(articleText, bodyTerms, titleTerms, h2Items) {
 
   let points = 0, total = 0;
 
-  // Body terms (min/max frequency)
+  // Body terms, scored against their target frequency band
   for (const t of bodyTerms) {
     const phrase = (t.term?.phrase || '').toLowerCase().trim();
-    const min = t.contentBrief?.min ?? 0;
-    const max = t.contentBrief?.max ?? t.contentBrief?.target ?? 0;
+    const { min, max } = agTermBand(t);
     if (!phrase || max === 0) continue;
     total++;
-    const rx = new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-    const count = (lower.match(rx) || []).length;
+    const count = agCountPhrase(lower, phrase);
     if (count >= min && count <= max) points += 1;
     else if (count > max)            points += 0.75; // slight over-opt penalty
     else if (count > 0)              points += 0.4;  // present but below target
@@ -1171,26 +1270,193 @@ function agComputeScore(articleText, bodyTerms, titleTerms, h2Items) {
   return total ? Math.round((points / total) * 100) : null;
 }
 
-function agRenderScore(before, after) {
-  const bNum = parseFloat(before) || 0;
-  const scoreBadge = document.getElementById('ag-scoreBadge');
-  if (after !== null && after !== undefined) {
-    const aNum = parseFloat(after) || 0;
-    const delta = aNum - bNum;
-    const aCls = aNum >= 80 ? 'good' : aNum >= 60 ? 'warn' : 'bad';
-    const dSign = delta >= 0 ? '+' : '';
+/* Renders the score badge. A before → after delta is only ever drawn between two
+   POP scores; a local coverage estimate is shown alongside, never subtracted
+   from POP's number (that is what produced the meaningless "-39.16"). */
+function agRenderScore(popBefore, popAfter, coverage) {
+  const badge = document.getElementById('ag-scoreBadge');
+  if (!badge) return;
+  const bNum = parseFloat(popBefore);
+  const cls  = n => n >= 80 ? 'good' : n >= 60 ? 'warn' : 'bad';
+  const fmt  = n => Number.isInteger(n) ? String(n) : n.toFixed(2);
+
+  const covChip = coverage && coverage.after != null
+    ? `<span class="ag-cov-chip" title="Local estimate: share of brief terms whose frequency lands in its target band. Not a POP score.">Brief coverage: ${
+        coverage.before != null ? `${coverage.before}% → ` : ''}<strong>${coverage.after}%</strong></span>`
+    : '';
+
+  if (popAfter != null && !isNaN(parseFloat(popAfter))) {
+    const aNum  = parseFloat(popAfter);
+    const delta = Math.round((aNum - bNum) * 100) / 100;
     const dColor = delta > 0 ? 'var(--green)' : delta < 0 ? 'var(--red)' : 'var(--text-muted)';
-    scoreBadge.innerHTML =
-      `<div class="ag-score-badge ${aCls}" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-        <span>Before: <strong>${bNum}</strong></span>
+    badge.innerHTML =
+      `<div class="ag-score-badge ${cls(aNum)}" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <span>POP before: <strong>${fmt(bNum)}</strong></span>
         <span style="color:var(--text-muted)">→</span>
-        <span>After edit: <strong>${aNum} / 100</strong></span>
-        <span style="color:${dColor};font-weight:700">${dSign}${delta} pts</span>
+        <span>POP after: <strong>${fmt(aNum)} / 100</strong></span>
+        <span style="color:${dColor};font-weight:700">${delta >= 0 ? '+' : ''}${delta} pts</span>
+        ${covChip}
       </div>`;
   } else {
-    const cls = bNum >= 80 ? 'good' : bNum >= 60 ? 'warn' : 'bad';
-    scoreBadge.innerHTML = `<div class="ag-score-badge ${cls}">POP Score: ${bNum} / 100</div>`;
+    badge.innerHTML =
+      `<div class="ag-score-badge ${cls(bNum || 0)}" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <span>POP score (original page): <strong>${isNaN(bNum) ? '—' : fmt(bNum)} / 100</strong></span>
+        ${covChip}
+        <button id="ag-verifyBtn" class="ag-verify-btn" title="Publish this article to a temporary URL and run a fresh POP report on it — costs one POP report">Verify score in POP</button>
+      </div>`;
+    document.getElementById('ag-verifyBtn')?.addEventListener('click', agRescoreWithPop);
   }
+}
+
+/* One-off discovery helper: does POP expose an endpoint that scores raw content,
+   so we could skip the preview-URL round trip entirely?
+
+   Run `agProbePopContentScoring()` from the browser console after a generation.
+   It POSTs a few plausible shapes and logs each response. If any returns a score
+   instead of a 404/validation error, agRescoreWithPop can call that directly and
+   the /api/preview route becomes unnecessary. Costs nothing if they all 404. */
+async function agProbePopContentScoring() {
+  if (!agLastRun) { console.warn('[probe] generate an article first'); return; }
+  const { popKey, keyword, targetUrl } = agLastRun;
+  const reportId = agSavedRun?.reportId;
+  const sample = (agArticleText || '').slice(0, 4000);
+
+  const attempts = [
+    ['/expose/update-report/',     { apiKey: popKey, reportId, content: sample }],
+    ['/expose/score-content/',     { apiKey: popKey, keyword, content: sample }],
+    ['/expose/content-score/',     { apiKey: popKey, keyword, content: sample }],
+    ['/expose/get-page-score/',    { apiKey: popKey, reportId, content: sample }],
+    ['/expose/create-report/',     { apiKey: popKey, prepareId: agTermsData?.prepareId, content: sample, targetUrl }],
+  ];
+
+  const results = [];
+  for (const [path, body] of attempts) {
+    try {
+      const j = await agPopPost(path, body);
+      console.log(`[probe] ✔ ${path}`, j);
+      results.push({ path, ok: true, response: j });
+    } catch (e) {
+      console.log(`[probe] ✘ ${path} — ${e.message}`);
+      results.push({ path, ok: false, error: e.message });
+    }
+  }
+  console.table(results.map(r => ({ path: r.path, ok: r.ok, detail: r.error || 'see log' })));
+  return results;
+}
+window.agProbePopContentScoring = agProbePopContentScoring;
+
+/* Get a REAL POP score for the generated article.
+
+   POP scores a live URL, so the article is published to a temporary, unguessable
+   preview URL and a fresh report is run against it — using the same keyword,
+   location, language and term set as the baseline report, so "before" and
+   "after" are the same exam. Costs one POP report, hence the explicit button. */
+async function agRescoreWithPop() {
+  if (!agLastRun || !agArticleText) return;
+  const btn = document.getElementById('ag-verifyBtn');
+  const setBtn = txt => { if (btn) { btn.disabled = true; btn.textContent = txt; } };
+
+  const {
+    popKey, keyword, locName, targLang, variations, lsaPhrases,
+    overOpt, enableNlp, popBefore, covBefore, covAfter,
+  } = agLastRun;
+
+  try {
+    setBtn('Publishing preview…');
+    const pv = await fetch('/api/preview', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ markdown: agArticleText, title: keyword }),
+    });
+    const pvJson = await pv.json();
+    if (!pv.ok || !pvJson.url) throw new Error(pvJson.error?.message || 'Could not publish preview');
+    agLog('Preview published → ' + pvJson.url);
+
+    // POP crawls the URL from its own servers, so it has to be publicly routable
+    if (/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)/i.test(pvJson.url)) {
+      throw new Error(
+        `The preview URL is ${pvJson.url}, which POP's crawler cannot reach.\n\n` +
+        `Verifying against POP only works on the deployed app, not on localhost.`
+      );
+    }
+
+    setBtn('POP: requesting terms…');
+    const r1 = await agPopPost('/expose/get-terms/', {
+      apiKey: popKey, keyword, locationName: locName,
+      targetUrl: pvJson.url, targetLanguage: targLang,
+    });
+    const tid1 = r1.taskId || r1.task_id || r1.id;
+    if (!tid1) throw new Error('No taskId from get-terms');
+    const td = await agPollTerms(tid1);
+
+    setBtn('POP: scoring article…');
+    const r2 = await agPopPost('/expose/create-report/', {
+      apiKey: popKey, prepareId: td.prepareId,
+      variations, lsaPhrases,          // identical term set to the baseline
+      considerOverOptimization: overOpt, specialLanguageSupport: 0,
+      pageNotBuiltYet: 0, googleNlpCalculation: enableNlp,
+    });
+    const tid2 = r2.taskId || r2.task_id;
+    if (!tid2) throw new Error('No taskId from create-report');
+    const rd = await agPollReport(tid2);
+
+    const popAfter = popPickScore(rd.report);
+    if (popAfter == null) throw new Error('POP returned no page score for the preview');
+    agLog(`POP re-score: ${popBefore} → ${popAfter}`);
+
+    agLastRun.popAfter = popAfter;
+    agRenderScore(popBefore, popAfter, { before: covBefore, after: covAfter });
+    agRenderMetaCards({
+      popBefore, popAfter, covBefore, covAfter,
+      wordCount: agArticleText.split(/\s+/).length,
+      wcTarget: agLastRun.wcTarget ?? '—',
+      termCount: (variations || []).length + (lsaPhrases || []).length,
+    });
+
+    // Persist the verified score onto the saved report
+    const cid = rtData?.activeClientId;
+    const saved = cid ? repGet(cid, keyword) : null;
+    if (saved) {
+      saved.scoreAfter = popAfter;
+      saved.scoreAfterSource = 'pop';
+      repSave(saved);
+      rtRender(); filesRender();
+    }
+  } catch (e) {
+    agLog('Re-score failed: ' + e.message);
+    if (btn) { btn.disabled = false; btn.textContent = 'Verify score in POP — retry'; }
+    alert('POP re-score failed:\n\n' + e.message);
+  }
+}
+
+/* Meta cards under the article. POP scores and the local coverage estimate are
+   kept in separate cards so the two scales are never read as one number. */
+function agRenderMetaCards({ popBefore, popAfter, covBefore, covAfter, wordCount, wcTarget, termCount }) {
+  const el = document.getElementById('ag-metaCards');
+  if (!el) return;
+  const cls = s => s >= 80 ? 'var(--green)' : s >= 60 ? '#e8a838' : 'var(--red)';
+  const muted = 'var(--text-muted)';
+  const covDelta = (covBefore != null && covAfter != null) ? covAfter - covBefore : null;
+
+  const cards = [
+    { label: 'POP before', value: popBefore ?? '—', sub: 'original page',
+      color: popBefore != null ? cls(parseFloat(popBefore) || 0) : muted },
+    { label: 'POP after',
+      value: popAfter ?? 'not verified',
+      sub: popAfter != null ? 'this article' : 'click Verify score in POP',
+      color: popAfter != null ? cls(parseFloat(popAfter) || 0) : muted },
+    { label: 'Brief coverage',
+      value: covAfter != null ? `${covAfter}%` : '—',
+      sub: covDelta != null ? `${covDelta >= 0 ? '+' : ''}${covDelta} pts vs original` : 'local estimate',
+      color: covAfter != null ? cls(covAfter) : muted },
+    { label: 'Word count', value: wordCount, sub: `target ~${wcTarget}`, color: null },
+    { label: 'Terms used', value: termCount, sub: 'POP-recommended', color: null },
+  ];
+
+  el.innerHTML = cards.map(c => `<div class="ag-meta-card">
+    <div class="ag-meta-label">${c.label}</div>
+    <div class="ag-meta-value"${c.color ? ` style="color:${c.color}"` : ''}>${escHtml(String(c.value))}</div>
+    <div class="ag-meta-sub">${c.sub}</div>
+  </div>`).join('');
 }
 
 /* ── Cora + POP cross-reference ── */
@@ -1272,6 +1538,9 @@ async function agStartFlow() {
 
   if (!hasPop && popKey) await Store.set('seomanager_pop_key', popKey);
 
+  agSavedRun = null;   // a fresh run never reuses a stored Score report
+  document.getElementById('ag-reusedNote')?.style.setProperty('display', 'none');
+
   const btn = document.getElementById('ag-genBtn');
   btn.disabled = true;
   btn.textContent = 'Working…';
@@ -1322,6 +1591,66 @@ async function agStartFlow() {
   }
 }
 
+/* Start the generator from a report the Rank Tracker "Score" button already
+   built. Steps 1-2 are already paid for, so we jump straight to the term picker
+   with everything checked — leaving the selection alone reproduces the exact
+   report behind the badge, so "POP before" matches what the Rank Tracker shows. */
+async function agStartFromSavedRun(kw, competitors) {
+  const run = kw.popRun;
+  const popKey = hasPop ? '' : document.getElementById('ag-popKey').value.trim();
+
+  if (!hasServerKey) {
+    const k = apiKey || await Store.get('seomanager_api_key');
+    if (!k) { alert('Enter your OpenAI API key in Settings first.'); return; }
+  }
+
+  agSavedRun = run;
+
+  const btn = document.getElementById('ag-genBtn');
+  btn.disabled = true;
+  btn.textContent = 'Working…';
+
+  document.getElementById('ag-outputSection').style.display = 'none';
+
+  agInitSteps([
+    'Step 1 — Request POP terms',
+    'Step 2 — Poll: terms ready',
+    'Step 3 — Review & edit terms ✎',
+    'Step 4 — Create POP report',
+    'Step 5 — Poll: report ready',
+    'Step 6 — Fetch recommendations',
+    'Step 7 — Generate article with OpenAI',
+  ]);
+
+  const ranAt = run.ranAt ? new Date(run.ranAt).toLocaleDateString() : '—';
+  agSetStep(0, 'done', `reused from Score · ${ranAt}`);
+  agSetStep(1, 'done', `${run.variations.length} vars · ${run.lsaPhrases.length} LSI · reused`);
+
+  agTermsData = { prepareId: run.prepareId, variations: run.variations, lsaPhrases: run.lsaPhrases };
+
+  // No brand filtering here — Score sent every term, and unchecking any of them
+  // changes the denominator and therefore the score.
+  agShowTermEditors(run.variations, run.lsaPhrases, new Set());
+
+  const ageDays = run.ranAt ? Math.floor((Date.now() - new Date(run.ranAt)) / 86400000) : null;
+  const stale = ageDays != null && ageDays > 14;
+  agSetStep(2, 'active', 'all terms kept — leave them as-is to match the Rank Tracker score, or uncheck to rebuild');
+  agLog(
+    `Reusing the POP report from your Score run (${ranAt}, score ${run.score ?? '?'}). ` +
+    `Leave the terms untouched and no new POP report is built. ` +
+    (stale ? `⚠ That run is ${ageDays} days old — use "Re-run POP fresh" if the page has changed since.` : '')
+  );
+
+  document.getElementById('ag-reusedNote')?.style.setProperty('display', 'flex');
+  const rn = document.getElementById('ag-reusedNoteText');
+  if (rn) rn.textContent = `Reusing the POP report from ${ranAt} (score ${run.score ?? '?'})${stale ? ` — ${ageDays} days old` : ''}.`;
+
+  window._agFlow = {
+    popKey, keyword: run.keyword, targetUrl: run.targetUrl, pageNotBuilt: 0,
+    locName: run.locName, targLang: run.targLang, competitors,
+  };
+}
+
 async function agContinueWithSelected() {
   const { popKey, keyword, targetUrl, pageNotBuilt, locName, targLang, competitors } = window._agFlow;
   const enableNlp = document.getElementById('ag-enableNlp').checked ? 1 : 0;
@@ -1344,38 +1673,58 @@ async function agContinueWithSelected() {
 
   const btn = document.getElementById('ag-genBtn');
 
-  try {
-    agSetStep(3, 'active');
-    const r4 = await agPopPost('/expose/create-report/', {
-      apiKey: popKey, prepareId: agTermsData.prepareId,
-      variations: selectedVars, lsaPhrases: fullLsa,
-      considerOverOptimization: overOpt, specialLanguageSupport: 0,
-      pageNotBuiltYet: pageNotBuilt, googleNlpCalculation: enableNlp
-    });
-    const tid4 = r4.taskId || r4.task_id;
-    if (!tid4) throw new Error('No taskId from create-report');
-    agSetStep(3, 'done', 'taskId: ' + tid4);
+  // The saved Score report is only valid for the exact term set it was built
+  // from. Change the selection and the denominator changes, so a new report has
+  // to be built — and its score will not match the Rank Tracker badge.
+  const sameSet = (a, b) => a.length === b.length && new Set(a).size === new Set([...a, ...b]).size;
+  const reuseRun = agSavedRun
+    && sameSet(selectedVars, agSavedRun.variations || [])
+    && sameSet(selectedLsi, (agSavedRun.lsaPhrases || []).map(t => t.phrase || String(t)));
 
-    agSetStep(4, 'active');
-    const rd = await agPollReport(tid4, 4);
-    const reportId  = rd.report.id;
-    const wcTarget  = (rd.report.wordCount && rd.report.wordCount.target) || 600;
-    const h2Target  = rd.report.subHeadingsCount || 3;
-    // POP nests the score under cleanedContentBrief.pageScore, itself an
-    // object shaped like { pageScore: 1.03, pageScoreValue: "" } — confirmed
-    // from a live report. The number looks like a 0–1 ratio vs. target
-    // (1.03 = 103% of target) rather than already being on a 0–100 scale.
-    const rawScore = rd.report.cleanedContentBrief?.pageScore ?? rd.report.pageScore
-      ?? rd.report.pageScoreValue ?? rd.report.score ?? '?';
-    console.log('[POP report] pageScore (raw):', rawScore, '| pTotal:', rd.report.cleanedContentBrief?.pTotal);
-    let pageScore = rawScore && typeof rawScore === 'object'
-      ? (rawScore.pageScore ?? rawScore.current ?? rawScore.value ?? rawScore.score ?? rawScore.percent ?? rawScore.total ?? JSON.stringify(rawScore))
-      : rawScore;
-    if (typeof pageScore === 'number' && pageScore > 0 && pageScore <= 5) pageScore = Math.round(pageScore * 100);
-    const cbTerms   = (rd.report.cleanedContentBrief && rd.report.cleanedContentBrief.p) || [];
-    const nlpEntities = enableNlp && rd.report.googleNlpSchemaData
-      ? (rd.report.googleNlpSchemaData.entities || []).slice(0, 20) : [];
-    agSetStep(4, 'done', `reportId:${reportId} · score:${pageScore} · wc:${wcTarget}`);
+  if (agSavedRun && !reuseRun) {
+    agLog('Term set changed — building a new POP report. Its score will not match the Rank Tracker badge.');
+  }
+
+  try {
+    let reportId, wcTarget, h2Target, pageScore, cb, nlpEntities;
+
+    if (reuseRun) {
+      agSetStep(3, 'done', 'skipped — reusing the report from Score');
+      agSetStep(4, 'done', `reportId:${agSavedRun.reportId} · score:${agSavedRun.score}`);
+      reportId    = agSavedRun.reportId;
+      wcTarget    = agSavedRun.wordCountTarget || 600;
+      h2Target    = agSavedRun.subHeadingsCount || 3;
+      pageScore   = agSavedRun.score ?? '?';
+      cb          = agSavedRun.contentBrief || {};
+      nlpEntities = [];
+    } else {
+      agSetStep(3, 'active');
+      const r4 = await agPopPost('/expose/create-report/', {
+        apiKey: popKey, prepareId: agTermsData.prepareId,
+        variations: selectedVars, lsaPhrases: fullLsa,
+        considerOverOptimization: overOpt, specialLanguageSupport: 0,
+        pageNotBuiltYet: pageNotBuilt, googleNlpCalculation: enableNlp
+      });
+      const tid4 = r4.taskId || r4.task_id;
+      if (!tid4) throw new Error('No taskId from create-report');
+      agSetStep(3, 'done', 'taskId: ' + tid4);
+
+      agSetStep(4, 'active');
+      const rd = await agPollReport(tid4, 4);
+      reportId  = rd.report.id;
+      wcTarget  = (rd.report.wordCount && rd.report.wordCount.target) || 600;
+      h2Target  = rd.report.subHeadingsCount || 3;
+      // Same extractor the Rank Tracker "Score" button uses, so the two numbers
+      // are on one scale (see popPickScore).
+      pageScore = popPickScore(rd.report) ?? '?';
+      console.log('[POP report] pageScore:', pageScore, '| pTotal:', rd.report.cleanedContentBrief?.pTotal);
+      cb = rd.report.cleanedContentBrief || {};
+      nlpEntities = enableNlp && rd.report.googleNlpSchemaData
+        ? (rd.report.googleNlpSchemaData.entities || []).slice(0, 20) : [];
+      agSetStep(4, 'done', `reportId:${reportId} · score:${pageScore} · wc:${wcTarget}`);
+    }
+
+    const cbTerms = cb.p || [];
 
     agSetStep(5, 'active');
     agLog('Fetching recommendations → reportId: ' + reportId);
@@ -1384,32 +1733,29 @@ async function agContinueWithSelected() {
     agSetStep(5, 'done', `exact:${(recs.exactKeyword||[]).length} lsi:${(recs.lsi||[]).length} vars:${(recs.variations||[]).length}`);
 
     agSetStep(6, 'active');
-    const cb = rd.report.cleanedContentBrief || {};
 
     // Page title (H1) terms
     const titleTerms = (cb.pageTitle || [])
-      .filter(t => t.contentBrief && t.contentBrief.target > 0).map(t => t.term.phrase);
+      .filter(t => agTermBand(t).max > 0).map(t => t.term.phrase);
 
     // Meta/SEO title terms
     const metaTitleTerms = (cb.metaTitle || cb.searchEngineTitle || [])
-      .filter(t => t.contentBrief && t.contentBrief.target > 0).map(t => t.term.phrase);
+      .filter(t => agTermBand(t).max > 0).map(t => t.term.phrase);
 
     // H2 subheading terms with targets
     const h2Items = (cb.subHeadings || []).filter(t => t.contentBrief);
     const h2Lines = h2Items.length
       ? h2Items.map(t => {
-          const min = t.contentBrief.min ?? 0;
-          const max = t.contentBrief.max ?? t.contentBrief.target ?? 0;
+          const { min, max } = agTermBand(t);
           return `  "${t.term.phrase}" → ${min}-${max} times in H2s`;
         }).join('\n')
       : '';
 
     // Body paragraph terms with targets
-    const bodyTerms = (cb.p || cbTerms || []).filter(t => t.contentBrief && t.contentBrief.target > 0).slice(0, 30);
+    const bodyTerms = (cb.p || cbTerms || []).filter(t => agTermBand(t).max > 0).slice(0, 30);
     const bodyLines = bodyTerms.length > 0
       ? bodyTerms.map(t => {
-          const min = t.contentBrief.min ?? 0;
-          const max = t.contentBrief.max ?? t.contentBrief.target ?? 0;
+          const { min, max } = agTermBand(t);
           const nlp = t.term.type === 'nlp' ? ' [NLP]' : '';
           return `  "${t.term.phrase}"${nlp} → ${min}-${max} times`;
         }).join('\n')
@@ -1521,23 +1867,29 @@ ${popBriefSpecs}`;
 
     const allTerms = bodyTerms.map(t => t.term.phrase).concat(selectedVars).concat(selectedLsi).filter(Boolean);
 
-    // Re-score the generated article against the content brief
-    const afterScore = agComputeScore(articleText, bodyTerms, titleTerms, h2Items);
+    // Local brief-coverage estimate for BOTH texts against the same brief, so the
+    // pair is comparable. The real POP score for the new article comes from the
+    // "Verify score in POP" button (agRescoreWithPop).
+    const covAfter  = agComputeCoverage(articleText, bodyTerms, titleTerms, h2Items);
+    const covBefore = agOriginalContent
+      ? agComputeCoverage(agOriginalContent, bodyTerms, titleTerms, h2Items) : null;
+
+    // Everything the re-score needs to build a matching report on the new text
+    agLastRun = {
+      popKey, keyword, targetUrl, locName, targLang,
+      variations: selectedVars, lsaPhrases: fullLsa,
+      overOpt, enableNlp, strategy, approach,
+      popBefore: pageScore, bodyTerms, titleTerms, h2Items,
+      covBefore, covAfter, wcTarget,
+    };
 
     document.getElementById('ag-outputTitle').textContent = keyword;
-    agRenderScore(pageScore, afterScore);
+    agRenderScore(pageScore, null, { before: covBefore, after: covAfter });
 
-    const scoreCls = s => s >= 80 ? 'var(--green)' : s >= 60 ? '#e8a838' : 'var(--red)';
-    document.getElementById('ag-metaCards').innerHTML = [
-      { label: 'Score before', value: pageScore,   sub: 'original page', color: scoreCls(parseFloat(pageScore)||0) },
-      { label: 'Score after',  value: afterScore ?? '—', sub: 'this article', color: afterScore ? scoreCls(afterScore) : 'var(--text-muted)' },
-      { label: 'Word count',   value: wordCount,   sub: `target ~${wcTarget}`, color: null },
-      { label: 'Terms used',   value: allTerms.length, sub: 'POP-recommended', color: null },
-    ].map(c => `<div class="ag-meta-card">
-      <div class="ag-meta-label">${c.label}</div>
-      <div class="ag-meta-value"${c.color ? ` style="color:${c.color}"` : ''}>${escHtml(String(c.value))}</div>
-      <div class="ag-meta-sub">${c.sub}</div>
-    </div>`).join('');
+    agRenderMetaCards({
+      popBefore: pageScore, popAfter: null,
+      covBefore, covAfter, wordCount, wcTarget, termCount: allTerms.length,
+    });
 
     const termClassMap = buildTermClassMap(allTerms, coraReport?.lsi);
     agArticleHtml = agRenderArticle(articleText, termClassMap, agOriginalContent);
@@ -1602,8 +1954,11 @@ ${popBriefSpecs}`;
         clientId:       repClientId,
         clientName:     rtActiveClient()?.name || '',
         url:            targetUrl,
-        score:          pageScore,
-        scoreAfter:     afterScore,
+        score:          pageScore,     // POP score of the ORIGINAL page
+        scoreAfter:     null,          // set only once verified against POP
+        scoreAfterSource: null,
+        covBefore,
+        covAfter,
         wordCount,
         articleHtml:    agArticleHtml,
         articleText:    agArticleText,
@@ -1952,11 +2307,19 @@ function showPopReport(clientId, keyword) {
   document.getElementById('rep-keyword').textContent = rep.keyword || keyword;
   const scoreCls = s => s >= 80 ? 'var(--green)' : s >= 60 ? '#e8a838' : 'var(--red)';
   const before = parseFloat(rep.score) || 0;
-  const after  = rep.scoreAfter ?? null;
-  const delta  = after !== null ? after - before : null;
+  // Only a POP-verified after-score earns a delta — a local coverage estimate is
+  // a different scale and gets its own card.
+  const after  = rep.scoreAfterSource === 'pop' && rep.scoreAfter != null ? parseFloat(rep.scoreAfter) : null;
+  const delta  = after !== null ? Math.round((after - before) * 100) / 100 : null;
+  const covDelta = (rep.covBefore != null && rep.covAfter != null) ? rep.covAfter - rep.covBefore : null;
   document.getElementById('rep-meta').innerHTML =
-    `<span class="ag-meta-card" style="min-width:80px"><div class="ag-meta-label">Before</div><div class="ag-meta-value" style="color:${scoreCls(before)}">${escHtml(String(rep.score || '—'))}</div></span>` +
-    (after !== null ? `<span class="ag-meta-card" style="min-width:80px"><div class="ag-meta-label">After edit</div><div class="ag-meta-value" style="color:${scoreCls(after)}">${after}${delta !== null ? ` <span style="font-size:13px;color:${delta>=0?'var(--green)':'var(--red)'}">(${delta>=0?'+':''}${delta})</span>` : ''}</div></span>` : '') +
+    `<span class="ag-meta-card" style="min-width:80px"><div class="ag-meta-label">POP before</div><div class="ag-meta-value" style="color:${scoreCls(before)}">${escHtml(String(rep.score ?? '—'))}</div></span>` +
+    (after !== null
+      ? `<span class="ag-meta-card" style="min-width:80px"><div class="ag-meta-label">POP after</div><div class="ag-meta-value" style="color:${scoreCls(after)}">${after}<span style="font-size:13px;color:${delta>=0?'var(--green)':'var(--red)'}"> (${delta>=0?'+':''}${delta})</span></div></span>`
+      : `<span class="ag-meta-card" style="min-width:80px"><div class="ag-meta-label">POP after</div><div class="ag-meta-value" style="color:var(--text-muted);font-size:13px">not verified</div></span>`) +
+    (rep.covAfter != null
+      ? `<span class="ag-meta-card" style="min-width:80px"><div class="ag-meta-label">Brief coverage</div><div class="ag-meta-value" style="color:${scoreCls(rep.covAfter)}">${rep.covAfter}%${covDelta != null ? `<span style="font-size:13px;color:${covDelta>=0?'var(--green)':'var(--red)'}"> (${covDelta>=0?'+':''}${covDelta})</span>` : ''}</div></span>`
+      : '') +
     `<span class="ag-meta-card" style="min-width:80px"><div class="ag-meta-label">Words</div><div class="ag-meta-value">${escHtml(String(rep.wordCount || '—'))}</div></span>` +
     `<span style="font-size:11px;color:var(--text-muted);align-self:center">Saved ${rep.savedAt ? new Date(rep.savedAt).toLocaleDateString() : '—'}</span>`;
   const leg = document.getElementById('rep-legend');
@@ -2027,7 +2390,7 @@ ${rep.articleHtml || `<p>${escHtml(rep.articleText || '')}</p>`}
 
 function rtPopCell(kw) {
   const scoreBadge = kw.popScore != null
-    ? `<span class="rt-pop-score-badge ${kw.popScore >= 80 ? 'pop-green' : kw.popScore >= 60 ? 'pop-yellow' : 'pop-red'}">${kw.popScore}/100</span>`
+    ? `<span class="rt-pop-score-badge ${kw.popScore >= 80 ? 'pop-green' : kw.popScore >= 60 ? 'pop-yellow' : 'pop-red'}" title="POP page score: ${kw.popScore}">${Math.round(kw.popScore)}/100</span>`
     : '';
   const scoreDate = kw.popScoreDate ? `<span class="rt-pop-date"> ${escHtml(kw.popScoreDate)}</span>` : '';
   const detailBtn = kw.popReport
@@ -2222,7 +2585,7 @@ function rtPopShowDetails(kwId) {
 
   const body = `
     <div style="display:flex;align-items:flex-start;gap:16px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)">
-      <div style="font-size:44px;font-weight:800;color:${scoreColor};line-height:1;flex-shrink:0">${score ?? '?'}</div>
+      <div style="font-size:44px;font-weight:800;color:${scoreColor};line-height:1;flex-shrink:0" title="${score ?? ''}">${score != null ? Math.round(score) : '?'}</div>
       <div style="flex:1;min-width:0">
         <div style="font-size:13px;font-weight:600">${escHtml(kw.keyword || '')}</div>
         <div style="font-size:11px;color:var(--text-secondary)">${escHtml(kw.targetUrl || kw.url || '')} · ${kw.popScoreDate || ''}</div>
@@ -2334,6 +2697,21 @@ async function rtOptimizeInAG(kwId) {
   if (url && /^https?:\/\//i.test(url)) {
     try { await agFetchPageContent(); } catch { /* non-fatal — user can paste/fetch manually */ }
   }
+
+  // Reuse the report the Score button already built rather than paying for a
+  // second one — that second report was the reason "before" never matched the
+  // Rank Tracker badge. "Re-run POP fresh" falls back to the full flow.
+  if (kw.popRun?.prepareId && kw.popRun?.reportId) {
+    agStartFromSavedRun(kw, comps);
+  } else {
+    agStartFlow();
+  }
+}
+
+/* Force a full get-terms → create-report run, discarding the saved Score report. */
+function agRerunFresh() {
+  agSavedRun = null;
+  document.getElementById('ag-reusedNote')?.style.setProperty('display', 'none');
   agStartFlow();
 }
 
@@ -2535,35 +2913,8 @@ async function rtPopScoreCheck(kwId) {
 
     const cb = rep?.cleanedContentBrief;
 
-    // Try every known score field. ?? keeps 0 as valid — use || to skip zeros
-    // so we fall through to string fields like pageScoreValue when numeric is 0.
-    // Also check cb.pTotal (referenced in Article Generator alongside pageScore).
-    function pickScore(obj) {
-      if (!obj) return null;
-      if (typeof obj === 'number') return obj || null;
-      if (typeof obj === 'string') { const n = parseFloat(obj); return (!isNaN(n) && n > 0) ? n : null; }
-      if (typeof obj !== 'object') return null;
-      // prefer non-zero numeric field; fall back to string
-      const num = [obj.pageScore, obj.pScore, obj.pTotal, obj.current, obj.value, obj.score, obj.percent]
-        .map(Number).find(n => !isNaN(n) && n > 0);
-      if (num != null) return num;
-      const str = [obj.pageScoreValue, obj.pScoreValue].find(s => s && String(s).trim() !== '');
-      return str ? (parseFloat(str) || null) : null;
-    }
-
-    const scoreChain = [
-      cb?.pageScore, cb?.pTotal, cb?.pScore, cb?.score,
-      rep?.pageScore, rep?.pTotal, rep?.pageScoreValue, rep?.pScore, rep?.score,
-    ];
-    let rawScore = scoreChain.find(v => v != null && v !== 0 && v !== '');
-    let score = pickScore(rawScore);
-
-    if (score != null && !isNaN(score)) {
-      if (score > 0 && score < 1) score = score * 100;  // 0–1 ratio → percent
-      // POP otherwise returns 0–100 directly (e.g. 29.77); clamp to guard bad data
-      score = Math.min(100, Math.round(score));
-    }
-    console.log('[POP score] rawScore:', JSON.stringify(rawScore), '→ final:', score);
+    const score = popPickScore(rep);
+    console.log('[POP score] final:', score);
 
     // Extract section-level term data for the Details panel
     function extractTerms(arr) {
@@ -2634,6 +2985,23 @@ async function rtPopScoreCheck(kwId) {
         subHeadings:       extractTerms(cb?.subHeadings),
         mainContent:       extractTerms(cb?.p).slice(0, 50),
       },
+    };
+
+    // Everything the Article Generator would otherwise have to re-fetch. Saving it
+    // lets "Optimize" reuse THIS report instead of building a second one, so the
+    // generator's "before" is the exact number on this badge.
+    kw.popRun = {
+      prepareId, reportId,
+      variations,
+      lsaPhrases,
+      contentBrief:     popTrimBrief(cb),
+      wordCountTarget:  rep?.wordCount?.target ?? null,
+      subHeadingsCount: rep?.subHeadingsCount ?? null,
+      keyword, targetUrl, locName, targLang,
+      overOpt: 1, pageNotBuiltYet: 0, gnl: gnl ? 1 : 0,
+      strategy, approach,
+      score,
+      ranAt: new Date().toISOString(),
     };
 
     kw.popScore     = score;

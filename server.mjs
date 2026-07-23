@@ -533,9 +533,13 @@ app.use((req, res, next) => {
   next();
 });
 
-/* Auth guard — everything except /login requires a valid session */
+/* Auth guard — everything except /login requires a valid session.
+   /preview/* is exempt on purpose: POP's crawler is unauthenticated and has to be
+   able to read a generated article in order to score it. Access is gated by a
+   128-bit unguessable id that expires after PREVIEW_TTL_MS. */
 app.use((req, res, next) => {
   if (req.path === '/login' || req.path === '/logo.jpg' || req.path === '/xlsx.min.js') return next();
+  if (req.path.startsWith('/preview/')) return next();
   if (isValidSession(parseCookies(req).sm_auth)) return next();
   if (req.path.startsWith('/api/')) {
     return res.status(401).json({ error: { message: 'Session expired — please reload the page and sign in again.' } });
@@ -718,6 +722,82 @@ app.get('/api/pop-languages', apiGuard, async (_req, res) => {
   } catch (e) {
     res.status(502).json({ error: e.message });
   }
+});
+
+/* ─────────────────────────────────────────────
+   ARTICLE PREVIEW — temporary public pages for POP re-scoring
+
+   POP scores a live URL, not a blob of text, so to get a real POP score for a
+   freshly generated article we host it briefly at an unguessable URL and point
+   POP's crawler at it. Kept in memory (single Railway instance) and expired
+   aggressively — these are throwaway pages, never user data.
+───────────────────────────────────────────── */
+const PREVIEW_TTL_MS = 2 * 60 * 60 * 1000;   // 2h — POP finishes a report in minutes
+const PREVIEW_MAX    = 50;
+const previews = new Map();                   // id → { body, title, expiresAt }
+
+function prunePreviews() {
+  const now = Date.now();
+  for (const [id, p] of previews) if (p.expiresAt <= now) previews.delete(id);
+  // hard cap as a second line of defence against unbounded growth
+  while (previews.size > PREVIEW_MAX) previews.delete(previews.keys().next().value);
+}
+
+const escHtml = s => String(s)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+/* The client sends markdown, not HTML, and the page is rendered here from a
+   fixed tag set. The preview is served from our own origin, so accepting raw
+   HTML would be a stored-XSS hole — this way nothing in the article can become
+   markup. POP only needs the h1/h2/p structure anyway. */
+function renderPreviewHtml(markdown) {
+  return String(markdown).split(/\n{2,}/).map(block => {
+    const b = block.trim();
+    if (!b) return '';
+    const h = b.match(/^(#{1,3})\s+(.*)$/s);
+    if (h) {
+      const lvl = h[1].length;
+      return `<h${lvl}>${escHtml(h[2].replace(/\n/g, ' ').trim())}</h${lvl}>`;
+    }
+    return `<p>${escHtml(b.replace(/\n/g, ' '))}</p>`;
+  }).filter(Boolean).join('\n');
+}
+
+app.post('/api/preview', apiGuard, (req, res) => {
+  const { markdown = '', title = 'Article' } = req.body || {};
+  if (typeof markdown !== 'string' || !markdown.trim()) {
+    return res.status(400).json({ error: { message: 'markdown is required' } });
+  }
+  if (markdown.length > 200_000) {
+    return res.status(413).json({ error: { message: 'Article too large to preview' } });
+  }
+  prunePreviews();
+  const id = randomBytes(16).toString('hex');
+  previews.set(id, {
+    body: renderPreviewHtml(markdown),
+    title: String(title).slice(0, 200),
+    expiresAt: Date.now() + PREVIEW_TTL_MS,
+  });
+
+  const proto = isSecureRequest(req) ? 'https' : 'http';
+  const host  = req.headers['x-forwarded-host'] || req.headers.host;
+  res.json({ id, url: `${proto}://${host}/preview/${id}`, expiresIn: PREVIEW_TTL_MS });
+});
+
+app.get('/preview/:id', (req, res) => {
+  prunePreviews();
+  const p = previews.get(req.params.id);
+  if (!p) return res.status(404).type('html').send('<h1>Preview expired</h1>');
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+  res.setHeader('Cache-Control', 'no-store');
+  res.type('html').send(
+    `<!doctype html><html lang="en"><head><meta charset="utf-8">` +
+    `<meta name="viewport" content="width=device-width,initial-scale=1">` +
+    `<meta name="robots" content="noindex,nofollow">` +
+    `<title>${escHtml(p.title)}</title></head>` +
+    `<body>\n${p.body}\n</body></html>`
+  );
 });
 
 app.use('/api/pop', apiGuard, async (req, res) => {

@@ -742,6 +742,30 @@ details[open] .card-prompts-toggle::before { transform: rotate(90deg); }
 .ag-score-badge.bad  { background: rgba(229,56,59,.1); color: var(--red); }
 .ag-prefill-flash { animation: prefillPop 1.2s ease; }
 
+/* Local brief-coverage estimate — deliberately styled as a side note so it
+   never reads as a second POP score */
+.ag-cov-chip {
+  font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 100px;
+  background: var(--surface); border: 1px solid var(--border);
+  color: var(--text-secondary); cursor: help;
+}
+.ag-verify-btn {
+  font-size: 11px; font-weight: 600; padding: 4px 12px; border-radius: 100px;
+  border: 1px solid var(--border); background: var(--surface);
+  color: var(--text-secondary); cursor: pointer;
+}
+.ag-verify-btn:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.ag-verify-btn:disabled { opacity: .6; cursor: default; }
+
+/* "Reusing the report from Score" banner above the Continue button */
+.ag-reused-note {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 16px;
+  padding: 10px 14px; border-radius: var(--radius);
+  background: rgba(67,97,238,.06); border: 1px solid rgba(67,97,238,.25);
+  font-size: 12px; color: var(--text-secondary);
+}
+.ag-reused-icon { font-size: 15px; color: var(--accent); }
+
 /* Cora + POP cross-reference panel */
 .ag-cross-ref { margin-top: 20px; background: var(--surface-alt); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
 .ag-cross-ref-hd { display: flex; align-items: baseline; gap: 10px; padding: 14px 18px 10px; border-bottom: 1px solid var(--border); }
