@@ -636,6 +636,13 @@ app.get('/api/config', (req, res) => res.json({
   hasAA:        !!AA_KEY,
   hasPop:       !!POP_KEY,
   commit:       GIT_COMMIT,
+  // Whether the JSON data files survive a redeploy. False means DATA_DIR fell
+  // back to the app directory, which the platform rebuilds on every deploy —
+  // and the activity log, weekly data, audit data and GSC tokens are all
+  // server-only, so they are lost each time with no client copy to restore from.
+  dataDir:           DATA_DIR,
+  persistentStorage: DATA_DIR === '/data',
+  activityLogEntries: activityLog.length,
 }));
 
 /* ─────────────────────────────────────────────
