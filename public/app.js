@@ -2887,9 +2887,12 @@ function rtPopCell(kw) {
   const detailBtn = kw.popReport
     ? ` <button class="rt-pop-detail-btn" data-kwid="${escHtml(kw.id)}" title="View content brief breakdown">Details</button>`
     : '';
+  const wdBadge = kw.watchdog?.enabled
+    ? ` <span class="rt-pop-wd-badge" title="POP watchdog on — auto re-score ${escHtml(kw.watchdog.repeat || 'weekly')}">⏱ ${escHtml(kw.watchdog.repeat || 'weekly')}</span>`
+    : '';
   const scoreBtn = `<button class="rt-pop-score-btn" data-kwid="${escHtml(kw.id)}" title="Score existing page in POP">Score</button>`;
   const optimBtn = `<button class="rt-run-pop-btn" data-kwid="${escHtml(kw.id)}" data-kw="${escHtml(kw.keyword||'')}" data-url="${escHtml(kw.targetUrl||kw.url||'')}" title="Improve this page in the Article Generator using its POP score">Optimize</button>`;
-  return `${scoreBadge}${scoreDate}${detailBtn}${scoreBadge || scoreDate ? '<br>' : ''}${scoreBtn} ${optimBtn}`;
+  return `${scoreBadge}${scoreDate}${wdBadge}${detailBtn}${scoreBadge || scoreDate ? '<br>' : ''}${scoreBtn} ${optimBtn}`;
 }
 
 function rtPopShowDetails(kwId) {
@@ -3085,6 +3088,16 @@ function rtPopShowDetails(kwId) {
       </div>
     </div>
     ${competitorsBlock(pr.competitors)}
+    ${rtWatchdogBlock(kw)}
+    <details style="margin-bottom:14px">
+      <summary style="font-size:12px;font-weight:600;cursor:pointer;padding:4px 0;user-select:none">
+        SERP titles <span style="font-size:10px;font-weight:400;color:var(--text-secondary)">— real Google results via Ahrefs (1 API call)</span>
+      </summary>
+      <div style="margin-top:8px">
+        <button id="rt-serp-load" style="font-size:11px;padding:3px 12px;border-radius:6px;border:1px solid var(--border);background:transparent;cursor:pointer;color:var(--text-secondary)">Load SERP titles</button>
+        <div id="rt-serp-body" style="margin-top:8px"></div>
+      </div>
+    </details>
     <div style="font-size:10px;color:var(--text-secondary);margin-bottom:10px">
       Terms &amp; targets from Page Optimizer Pro · strategy: <strong>${escHtml(pr.strategy || 'focus')}</strong> · approach: <strong>${escHtml(pr.approach || 'regular')}</strong>
     </div>
@@ -3127,6 +3140,190 @@ function rtPopShowDetails(kwId) {
   // Wire the "Edit / Add SERP picks" button inside the freshly-rendered body
   document.getElementById('rt-pop-detail-body').querySelector('.rt-pop-set-comp-btn')
     ?.addEventListener('click', () => rtPopEditCompetitors(kwId));
+
+  // Wire watchdog + SERP-titles controls
+  rtWireWatchdogControls(kwId);
+  document.getElementById('rt-serp-load')
+    ?.addEventListener('click', () => rtLoadSerpTitles(kwId));
+}
+
+/* Generic POST to the POP API from the Rank Tracker context. Mirrors the inner
+   popPost in rtPopScoreCheck: server key via the proxy, else the client key. */
+async function rtPopApiPost(path, body) {
+  const base = hasPop ? POP_API_PROXY : POP_API_DIRECT;
+  const payload = { ...body };
+  if (!hasPop) {
+    const k = document.getElementById('ag-popKey')?.value || await Store.get('seomanager_pop_key');
+    if (k) payload.apiKey = k;
+  }
+  const r = await fetch(`${base}${path}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.error || j.detail) {
+    const s = v => !v ? '' : typeof v === 'string' ? v : JSON.stringify(v);
+    throw new Error(s(j.error) || s(j.detail) || s(j.message) || `HTTP ${r.status}`);
+  }
+  return j;
+}
+
+/* POP Watchdog: ask POP to automatically re-score this page on a schedule.
+   Attaches to the reportId saved during Score. Notifications are left off per
+   the current UI (no emails). Each watchdog run costs 1 POP API call. */
+async function rtSetWatchdog(kwId, enable, repeat) {
+  let kw;
+  for (const c of rtData.clients || []) {
+    const found = c.keywords?.find(k => k.id === kwId);
+    if (found) { kw = found; break; }
+  }
+  if (!kw) return;
+
+  const reportId = kw.popRun?.reportId;
+  if (!reportId) {
+    alert('Score this page in POP first — the watchdog needs a POP report to attach to.');
+    return;
+  }
+
+  const btn = document.getElementById('rt-wd-save');
+  const status = document.getElementById('rt-wd-status');
+  if (btn) { btn.disabled = true; btn.textContent = 'Applying…'; }
+
+  try {
+    await rtPopApiPost('/expose/watchdog-setup/', {
+      reportId,
+      shouldWatchdogEnable: !!enable,
+      repeat: repeat || 'weekly',
+      isNotificationEnabled: false,
+      notificationEmails: [],
+    });
+    kw.watchdog = { enabled: !!enable, repeat: repeat || 'weekly', updatedAt: new Date().toISOString() };
+    rtSave();
+    if (status) {
+      status.textContent = enable ? `On · ${kw.watchdog.repeat}` : 'Off';
+      status.style.color = enable ? 'var(--green)' : 'var(--text-secondary)';
+    }
+    // Refresh the row so the POP cell shows the watchdog badge
+    const cell = document.querySelector(`tr[data-id="${CSS.escape(kwId)}"] .rt-td-pop`);
+    if (cell) cell.outerHTML = `<td class="rt-td-pop">${rtPopCell(kw)}</td>`;
+  } catch (e) {
+    if (status) { status.textContent = 'Failed: ' + e.message; status.style.color = 'var(--red)'; }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Apply'; }
+  }
+}
+
+/* Build the watchdog control block for the POP Details panel. */
+function rtWatchdogBlock(kw) {
+  if (!kw.popRun?.reportId) {
+    return `<div style="margin-bottom:14px;padding:10px;border:1px dashed var(--border);border-radius:6px;font-size:11px;color:var(--text-secondary)">
+      <strong>POP Watchdog</strong> — score this page first, then you can have POP auto-re-score it on a schedule.
+    </div>`;
+  }
+  const wd = kw.watchdog || {};
+  const opt = (v, l) => `<option value="${v}"${(wd.repeat || 'weekly') === v ? ' selected' : ''}>${l}</option>`;
+  const setAt = wd.updatedAt ? new Date(wd.updatedAt).toLocaleDateString() : '';
+  return `<div style="margin-bottom:14px;padding:10px;border:1px solid var(--border);border-radius:6px">
+    <div style="font-size:12px;font-weight:600;margin-bottom:2px">POP Watchdog</div>
+    <div style="font-size:10px;color:var(--text-muted);margin-bottom:8px;line-height:1.4">
+      POP re-scores this page automatically on the chosen schedule. Each run costs 1 POP API call. No email notifications.
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <label style="display:flex;align-items:center;gap:5px;font-size:11px;cursor:pointer">
+        <input type="checkbox" id="rt-wd-enable"${wd.enabled ? ' checked' : ''}> Enabled
+      </label>
+      <select id="rt-wd-repeat" style="font-size:11px;padding:2px 6px;border-radius:4px;border:1px solid var(--border);background:var(--surface);color:var(--text)">
+        ${opt('weekly', 'Weekly')}${opt('monthly', 'Monthly')}${opt('quarterly', 'Quarterly')}
+      </select>
+      <button id="rt-wd-save" style="font-size:11px;padding:3px 12px;border-radius:6px;border:none;background:var(--accent);color:#fff;cursor:pointer">Apply</button>
+      <span id="rt-wd-status" style="font-size:11px;color:${wd.enabled ? 'var(--green)' : 'var(--text-secondary)'}">${wd.enabled ? `On · ${wd.repeat}${setAt ? ` · ${setAt}` : ''}` : 'Off'}</span>
+    </div>
+  </div>`;
+}
+
+function rtWireWatchdogControls(kwId) {
+  const btn = document.getElementById('rt-wd-save');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    const enable = document.getElementById('rt-wd-enable')?.checked;
+    const repeat = document.getElementById('rt-wd-repeat')?.value || 'weekly';
+    rtSetWatchdog(kwId, enable, repeat);
+  });
+}
+
+/* Common country names → Ahrefs ISO-2 codes, derived from a POP location string
+   like "Winnipeg, Manitoba, Canada". Falls back to US. */
+const AHREFS_COUNTRY_MAP = {
+  'canada': 'ca', 'united states': 'us', 'usa': 'us', 'us': 'us',
+  'united kingdom': 'gb', 'uk': 'gb', 'england': 'gb', 'scotland': 'gb', 'wales': 'gb',
+  'australia': 'au', 'new zealand': 'nz', 'ireland': 'ie', 'india': 'in',
+  'germany': 'de', 'france': 'fr', 'spain': 'es', 'italy': 'it', 'netherlands': 'nl',
+  'mexico': 'mx', 'brazil': 'br', 'south africa': 'za', 'singapore': 'sg', 'uae': 'ae',
+  'united arab emirates': 'ae',
+};
+function ahrefsCountryFromLocation(loc) {
+  const last = String(loc || '').split(',').pop().trim().toLowerCase();
+  return AHREFS_COUNTRY_MAP[last] || 'us';
+}
+
+/* Load the real Google SERP titles for this keyword via the existing Ahrefs key
+   (serp-overview). Costs one Ahrefs API call, so it is triggered on demand. */
+async function rtLoadSerpTitles(kwId) {
+  let kw, client;
+  for (const c of rtData.clients || []) {
+    const found = c.keywords?.find(k => k.id === kwId);
+    if (found) { kw = found; client = c; break; }
+  }
+  if (!kw) return;
+
+  const box = document.getElementById('rt-serp-body');
+  const btn = document.getElementById('rt-serp-load');
+  const keyword = kw.keyword || '';
+  const country = ahrefsCountryFromLocation(client?.popLocation);
+  if (box) box.innerHTML = `<div style="font-size:11px;color:var(--text-secondary)">Loading SERP for “${escHtml(keyword)}” (${country.toUpperCase()})…</div>`;
+  if (btn) btn.disabled = true;
+
+  try {
+    const res = await ahrefsQuery('serp-overview/serp-overview', {
+      country, keyword,
+      select: 'position,url,title,domain_rating',
+      top_positions: 10,
+    });
+    // Ahrefs v3 responses wrap rows under a data-ish key; find the first array
+    const rows = Array.isArray(res) ? res
+      : (res.positions || res.pages || res.serp || res.data
+         || Object.values(res).find(v => Array.isArray(v)) || []);
+    if (!rows.length) {
+      if (box) box.innerHTML = `<div style="font-size:11px;color:var(--text-secondary)">No SERP rows returned for this keyword/country.</div>`;
+      return;
+    }
+    const yourHost = (() => { try { return new URL(kw.targetUrl || kw.url || '').hostname.replace(/^www\./, ''); } catch { return ''; } })();
+    const rowsHtml = rows.slice(0, 10).map(r => {
+      const pos = r.position ?? r.pos ?? '';
+      const url = r.url || r.page || '';
+      const title = r.title || '(no title)';
+      const host = (() => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; } })();
+      const mine = yourHost && host === yourHost;
+      return `<div style="display:flex;gap:8px;padding:4px 0;border-bottom:1px solid var(--border)${mine ? ';background:rgba(45,158,107,.08)' : ''}">
+        <span style="font-size:11px;font-weight:700;color:var(--text-secondary);width:20px;text-align:right">${escHtml(String(pos))}</span>
+        <div style="min-width:0;flex:1">
+          <div style="font-size:11px;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escHtml(title)}">${escHtml(title)}${mine ? ' <span style="color:#2d9e6b;font-weight:600">· you</span>' : ''}</div>
+          <a href="${escHtml(url)}" target="_blank" rel="noopener" style="font-size:10px;color:var(--accent);text-decoration:none">${escHtml(host)}</a>
+        </div>
+      </div>`;
+    }).join('');
+    if (box) box.innerHTML = rowsHtml;
+  } catch (e) {
+    const msg = e.message || 'request failed';
+    const hint = /not configured|AHREFS_API_KEY/.test(msg)
+      ? 'Ahrefs API key not set on the server (Railway → Variables → AHREFS_API_KEY).'
+      : /subscription|plan|not allowed|forbidden|403/i.test(msg)
+        ? 'Your Ahrefs plan may not include SERP overview.'
+        : msg;
+    if (box) box.innerHTML = `<div style="font-size:11px;color:var(--red)">SERP titles unavailable: ${escHtml(hint)}</div>`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 /* Open the Article Generator pre-loaded with everything from this keyword's POP
