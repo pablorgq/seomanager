@@ -1706,6 +1706,48 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
+/* ── Service-page image modal (own drawer + overlay, decoupled from the report
+   modal so the two overlays never trigger each other) ── */
+.agimg-modal {
+  display: none;
+  position: fixed;
+  top: 0; right: 0; bottom: 0;
+  width: min(620px, 100vw);
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  box-shadow: -6px 0 32px rgba(0,0,0,.2);
+  z-index: 1000;
+  overflow-y: auto;
+  padding: 28px 32px;
+}
+.agimg-overlay {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.4);
+  z-index: 999;
+}
+.agimg-modal.open { display: block; }
+.agimg-modal.open ~ .agimg-overlay { display: block; }
+
+.agimg-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 4px; }
+.agimg-preview {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface-alt); overflow: hidden;
+  min-height: 120px; display: flex; flex-direction: column;
+}
+.agimg-preview img { width: 100%; height: auto; display: block; }
+.agimg-placeholder { padding: 32px 16px; text-align: center; color: var(--text-muted); font-size: 13px; }
+.agimg-dims, .agimg-existing-note { padding: 8px 12px; font-size: 11px; color: var(--text-secondary); border-top: 1px solid var(--border); }
+
+/* Rank Tracker "image generated" indicator, next to the 📄 report icon */
+.rt-img-btn {
+  background: none; border: none; cursor: pointer;
+  font-size: 14px; opacity: .35; padding: 0 2px; filter: grayscale(1);
+  transition: opacity .15s, filter .15s;
+}
+.rt-img-btn:hover { opacity: .8; }
+.rt-img-btn.rt-img-has { opacity: 1; filter: none; }
+
 /* ── RT task columns ── */
 .rt-th-task { width: 30px; text-align: center; font-size: 10px; color: var(--text-muted); }
 .rt-td-task { text-align: center; }

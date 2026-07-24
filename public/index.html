@@ -440,6 +440,8 @@
           <div style="display:flex;gap:8px;flex-shrink:0">
             <button class="btn btn-secondary" id="ag-trustBtn" onclick="agTrustPass()"
               title="Remove contradictory or unverifiable claims, repeated CTAs and duplicated ideas; keep the location consistent; turn inline dash lists into real lists">Trust &amp; readability pass</button>
+            <button class="btn btn-secondary" onclick="agOpenImageModalFromArticle()"
+              title="Generate a realistic 3:2 service-page photo from this article, with SEO filename + alt text">Generate image</button>
             <button class="btn btn-secondary" onclick="agCopyArticle()">Copy article</button>
             <button class="btn btn-secondary" onclick="agCopyHtml()">Copy HTML</button>
             <button class="btn btn-primary" onclick="agStartFlow()">Regenerate</button>
@@ -990,6 +992,61 @@
   <script src="app.js"></script>
 
   <!-- SEO Report slide-in panel -->
+  <!-- Service-page image generator (shared by Article Generator + Rank Tracker) -->
+  <div id="agImageModal" class="agimg-modal">
+    <div class="pop-report-header">
+      <div style="flex:1;min-width:0">
+        <div class="pop-report-title">Service-page image</div>
+        <div id="agimg-title" style="font-size:13px;color:var(--text-secondary);margin-top:4px"></div>
+      </div>
+      <button class="btn btn-secondary" onclick="agCloseImageModal()">✕ Close</button>
+    </div>
+
+    <div class="agimg-grid">
+      <div class="form-group">
+        <label class="form-label">Visual style</label>
+        <select id="agimg-style" class="form-select" onchange="agRebuildImagePrompt()">
+          <option value="realistic">Realistic Photo</option>
+          <option value="editorial">Editorial / Magazine</option>
+          <option value="lifestyle">Lifestyle / Warm</option>
+          <option value="clinical">Clinical / Professional</option>
+          <option value="minimal">Minimalist / Clean</option>
+          <option value="dramatic">Dramatic / Moody</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Output</label>
+        <input class="form-input" value="3:2 landscape · downscaled 50% · JPG" disabled />
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Prompt <span style="color:var(--text-muted);font-weight:400">(auto-built from the content — editable)</span></label>
+      <textarea id="agimg-prompt" class="form-textarea" rows="4"></textarea>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Negative prompt <span style="color:var(--text-muted);font-weight:400">(folded into the prompt as "Avoid…" — OpenAI has no hard negative)</span></label>
+      <textarea id="agimg-negative" class="form-textarea" rows="2"></textarea>
+    </div>
+    <div class="form-group">
+      <label class="form-label">SEO alt text <span style="color:var(--text-muted);font-weight:400">(left blank = auto-generated from content)</span></label>
+      <input id="agimg-alt" class="form-input" maxlength="125" placeholder="Auto-generated if left blank" />
+    </div>
+
+    <div class="form-actions" style="margin-bottom:14px">
+      <button class="btn btn-primary" id="agimg-genBtn" onclick="agRunImageGen()">Generate</button>
+      <span id="agimg-status" style="font-size:12px;color:var(--text-secondary);align-self:center"></span>
+    </div>
+
+    <div id="agimg-preview" class="agimg-preview"></div>
+
+    <div id="agimg-actions" class="form-actions" style="display:none;margin-top:14px">
+      <button class="btn btn-primary" id="agimg-saveBtn" onclick="agSaveImage()">Save to page record</button>
+      <button class="btn btn-secondary" onclick="agDownloadImage()">Download JPG</button>
+    </div>
+  </div>
+  <div id="agImageOverlay" class="agimg-overlay" onclick="agCloseImageModal()"></div>
+
   <div id="popReportModal" class="pop-report-modal">
     <div class="pop-report-header">
       <div style="flex:1;min-width:0">

@@ -1250,6 +1250,49 @@ app.post('/api/gcs/create-folder', apiGuard, async (req, res) => {
 });
 
 /* ─────────────────────────────────────────────
+   GCS IMAGE UPLOAD
+   Stores a generated service-page image and returns a public URL, so the
+   Rank Tracker can link to it later instead of persisting megabytes of base64
+   in the rank-data blob.
+───────────────────────────────────────────── */
+app.post('/api/gcs/upload-image', apiGuard, async (req, res) => {
+  if (!gcs || !GCS_BUCKET) {
+    return res.status(503).json({ error: { message: 'GCS not configured on this server.' } });
+  }
+  const { dataUrl, filename, folder } = sanitizeBody(req.body) || {};
+  if (typeof dataUrl !== 'string') {
+    return res.status(400).json({ error: { message: 'dataUrl is required.' } });
+  }
+  const m = dataUrl.match(/^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/);
+  if (!m) {
+    return res.status(400).json({ error: { message: 'dataUrl must be a base64 image (jpeg, png or webp).' } });
+  }
+  const contentType = m[1];
+  const buffer = Buffer.from(m[2], 'base64');
+  if (buffer.length > 12 * 1024 * 1024) {
+    return res.status(413).json({ error: { message: 'Image too large (max 12MB).' } });
+  }
+
+  const ext = contentType === 'image/jpeg' ? 'jpg' : contentType === 'image/webp' ? 'webp' : 'png';
+  const safeName = String(filename || 'image')
+    .toLowerCase().replace(/\.[a-z0-9]+$/, '').replace(/[^a-z0-9\-]/g, '-')
+    .replace(/^-+|-+$/g, '').slice(0, 80) || 'image';
+  const safeFolder = String(folder || 'service-images')
+    .toLowerCase().replace(/[^a-z0-9\-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 63) || 'service-images';
+  // A short random suffix keeps re-generations from silently overwriting each other
+  const objectName = `${safeFolder}/${safeName}-${randomBytes(4).toString('hex')}.${ext}`;
+
+  try {
+    const file = gcs.bucket(GCS_BUCKET).file(objectName);
+    await file.save(buffer, { contentType, predefinedAcl: 'publicRead', resumable: false });
+    res.json({ url: `https://storage.googleapis.com/${GCS_BUCKET}/${objectName}`, object: objectName });
+  } catch (e) {
+    console.error('[gcs upload-image]', e.message);
+    res.status(500).json({ error: { message: `GCS error: ${e.message}` } });
+  }
+});
+
+/* ─────────────────────────────────────────────
    ACTIVITY LOG ROUTES
 ───────────────────────────────────────────── */
 

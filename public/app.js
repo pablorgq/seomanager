@@ -1504,6 +1504,288 @@ function agRenderNotesHtml(text) {
   return html;
 }
 
+/* ═══════════════════════════════════════════════
+   SERVICE-PAGE IMAGE GENERATION
+   Generate a realistic photo for the page from its keyword + content, at a 3:2
+   landscape ratio, downscaled and saved as JPG with an SEO filename + alt text.
+   Triggerable from the Article Generator output and from a Rank Tracker row.
+   Stored in GCS when configured, so the Rank Tracker only keeps a small URL.
+════════════════════════════════════════════════ */
+
+/* Default negatives. OpenAI has no negative-prompt parameter, so these are
+   folded into the prompt as "Avoid: …" guidance rather than hard-enforced. */
+const IMG_DEFAULT_NEGATIVE = 'AI-generated look, CGI, illustration, cartoon, painting, fake faces, plastic skin, distorted anatomy, extra fingers, duplicate people, unrealistic furniture, dramatic poses, text, logos, watermarks, blurry, low quality';
+
+// Landscape request. gpt-image-1 returns 1536×1024; dall-e-3 remaps to 1792×1024
+// (see tryModel). Either way it is a 3:2-ish landscape we then downscale.
+const IMG_GEN_SIZE = '1536x1024';
+const IMG_DOWNSCALE = 0.5;
+const IMG_JPEG_QUALITY = 0.85;
+
+// Context for the currently-open image modal (set by the AG button or an RT row)
+let agImageCtx = null;
+
+/* Load a data URL into an <img> element, resolved once decoded. */
+function agLoadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Could not decode the generated image'));
+    img.src = src;
+  });
+}
+
+/* Downscale a PNG data URL and re-encode as JPEG for a lighter web-ready file. */
+async function agDownscaleToJpeg(dataUrl, scale = IMG_DOWNSCALE, quality = IMG_JPEG_QUALITY) {
+  const img = await agLoadImage(dataUrl);
+  const w = Math.max(1, Math.round((img.naturalWidth  || img.width)  * scale));
+  const h = Math.max(1, Math.round((img.naturalHeight || img.height) * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff';            // flatten any transparency for JPEG
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(img, 0, 0, w, h);
+  return { dataUrl: canvas.toDataURL('image/jpeg', quality), width: w, height: h };
+}
+
+/* SEO-friendly filename from the keyword + location, e.g.
+   "commercial-duct-cleaning-winnipeg.jpg". */
+function agImageFilename(keyword, locName) {
+  const cityOnly = String(locName || '').split(',')[0];
+  const joined = [keyword, cityOnly].filter(Boolean).join('-').trim();
+  // slugify() defaults empty input to "blog"; guard so a missing keyword yields a
+  // meaningful name instead.
+  const base = joined ? slugify(joined).slice(0, 80) : 'service-image';
+  return `${base}.jpg`;
+}
+
+/* Build the image prompt from the page's topic, style and negatives. Note this
+   does NOT use SAFETY_PREFIX (that is medical-specific) — service pages want a
+   generic realistic-workplace scene. */
+function agBuildImagePrompt({ keyword, locName, style, negative, extra }) {
+  const stylePrompt = STYLE_MAP[style] || STYLE_MAP.realistic;
+  const topic = sanitizeTopic(keyword || 'local service');
+  const loc = locName ? ` in ${String(locName).split(',')[0]}` : '';
+  let p = `Professional real-world photograph for a "${topic}"${loc} service web page. `
+        + `Authentic professionals at work in a realistic setting, genuine equipment, natural lighting, candid and trustworthy. `
+        + `${stylePrompt}.`;
+  if (extra && extra.trim()) p += ` ${extra.trim()}.`;
+  if (negative && negative.trim()) p += ` Avoid: ${negative.trim()}.`;
+  return p;
+}
+
+/* SEO alt text from the content + keyword. Uses a small chat call when a key is
+   available; always falls back to a deterministic keyword+location phrase. */
+async function agGenerateAltText({ keyword, locName, contentText }) {
+  const cityOnly = String(locName || '').split(',')[0];
+  const fallback = [keyword, cityOnly].filter(Boolean).join(' in ').slice(0, 120) || keyword || 'service photo';
+  try {
+    const chatHeaders = { 'Content-Type': 'application/json' };
+    if (!hasServerKey) {
+      const k = apiKey || await Store.get('seomanager_api_key');
+      if (!k) return fallback;
+      chatHeaders['x-client-key'] = k;
+    }
+    const brief = String(contentText || '').replace(/[#*]/g, '').slice(0, 800);
+    const prompt = `Write ONE concise alt-text line (max 125 characters) for a realistic photo on a "${keyword}"`
+      + `${cityOnly ? ` in ${cityOnly}` : ''} service web page. Describe a plausible real scene. `
+      + `No quotes, no "image of"/"photo of", no trailing period.${brief ? `\n\nPage context:\n${brief}` : ''}`;
+    const res = await fetch('/api/openai/chat', {
+      method: 'POST', headers: chatHeaders,
+      body: JSON.stringify({ model: 'gpt-4o-mini', max_tokens: 60, messages: [{ role: 'user', content: prompt }] }),
+    });
+    if (!res.ok) return fallback;
+    const out = (await res.json()).choices?.[0]?.message?.content || '';
+    const alt = out.trim().replace(/^["']|["']$/g, '').replace(/\.$/, '').slice(0, 125);
+    return alt || fallback;
+  } catch { return fallback; }
+}
+
+/* Find the keyword object + client for a saved keyword, so image results can be
+   persisted back onto the Rank Tracker row. */
+function agFindKwByKeyword(keyword, clientId) {
+  const cid = clientId || rtData?.activeClientId;
+  const client = (rtData?.clients || []).find(c => c.id === cid);
+  const kw = client?.keywords?.find(k => (k.keyword || '').toLowerCase().trim() === (keyword || '').toLowerCase().trim());
+  return { client, kw };
+}
+
+/* Open the image modal from the Article Generator output. */
+function agOpenImageModalFromArticle() {
+  if (!agLastRun) return;
+  agImageCtx = {
+    keyword:     agLastRun.keyword,
+    locName:     agLastRun.locName,
+    strategy:    agLastRun.strategy,
+    contentText: agArticleText,
+    clientId:    rtData?.activeClientId,
+    kwId:        agFindKwByKeyword(agLastRun.keyword, rtData?.activeClientId).kw?.id || null,
+  };
+  agShowImageModal();
+}
+
+/* Open the image modal from a Rank Tracker row. Pulls page content from the
+   saved report when one exists, so the prompt/alt are content-aware. */
+function agOpenImageModal(kwId) {
+  const client = rtActiveClient();
+  const kw = client?.keywords?.find(k => k.id === kwId);
+  if (!kw) return;
+  const rep = repGet(client.id, kw.keyword);
+  agImageCtx = {
+    keyword:     kw.keyword,
+    locName:     client?.popLocation,
+    strategy:    kw.popStrategy,
+    contentText: rep?.articleText || '',
+    clientId:    client?.id,
+    kwId:        kw.id,
+  };
+  agShowImageModal();
+}
+
+/* Render + open the modal, prefilled from agImageCtx and any existing image. */
+function agShowImageModal() {
+  const ctx = agImageCtx;
+  const { kw } = agFindKwByKeyword(ctx.keyword, ctx.clientId);
+  const existing = kw?.image || null;
+
+  document.getElementById('agimg-title').textContent = ctx.keyword || 'Service image';
+  document.getElementById('agimg-negative').value = IMG_DEFAULT_NEGATIVE;
+  document.getElementById('agimg-prompt').value =
+    agBuildImagePrompt({ keyword: ctx.keyword, locName: ctx.locName, style: 'realistic', negative: '' });
+  document.getElementById('agimg-alt').value = existing?.alt || '';
+  document.getElementById('agimg-style').value = existing?.style || 'realistic';
+
+  const preview = document.getElementById('agimg-preview');
+  if (existing?.url) {
+    preview.innerHTML = `<img src="${escHtml(existing.url)}" alt="${escHtml(existing.alt || '')}" />
+      <div class="agimg-existing-note">Existing image${existing.date ? ` · ${escHtml(existing.date)}` : ''} — <a href="${escHtml(existing.url)}" target="_blank" rel="noopener">open</a></div>`;
+  } else {
+    preview.innerHTML = '<div class="agimg-placeholder">No image yet — set the options and click Generate.</div>';
+  }
+  document.getElementById('agimg-actions').style.display = 'none';
+  document.getElementById('agimg-status').textContent = '';
+
+  document.getElementById('agImageModal').classList.add('open');
+}
+
+function agCloseImageModal() {
+  document.getElementById('agImageModal').classList.remove('open');
+}
+
+// Holds the freshly generated (pre-persist) result for download/upload actions
+let agImageResult = null;
+
+/* Regenerate the prompt from the current keyword + selected style (keeps any
+   custom "extra" the user typed after the auto-built base is discarded). */
+function agRebuildImagePrompt() {
+  if (!agImageCtx) return;
+  const style = document.getElementById('agimg-style').value;
+  document.getElementById('agimg-prompt').value =
+    agBuildImagePrompt({ keyword: agImageCtx.keyword, locName: agImageCtx.locName, style, negative: '' });
+}
+
+async function agRunImageGen() {
+  if (!agImageCtx) return;
+  const btn = document.getElementById('agimg-genBtn');
+  const status = document.getElementById('agimg-status');
+  const setBusy = (t) => { btn.disabled = true; btn.textContent = t; };
+
+  const style    = document.getElementById('agimg-style').value;
+  const promptEl = document.getElementById('agimg-prompt').value.trim();
+  const negative = document.getElementById('agimg-negative').value.trim();
+  const prompt   = negative && !/avoid:/i.test(promptEl) ? `${promptEl} Avoid: ${negative}.` : promptEl;
+
+  try {
+    const key = await getApiKey();
+    setBusy('Generating…'); status.textContent = 'Calling the image model…';
+    const raw = await generateImage(key, prompt, IMG_GEN_SIZE);
+
+    setBusy('Processing…'); status.textContent = 'Downscaling and converting to JPG…';
+    const jpg = await agDownscaleToJpeg(raw);
+
+    // Alt text: keep the user's if they typed one, else generate
+    let alt = document.getElementById('agimg-alt').value.trim();
+    if (!alt) {
+      status.textContent = 'Writing SEO alt text…';
+      alt = await agGenerateAltText({ keyword: agImageCtx.keyword, locName: agImageCtx.locName, contentText: agImageCtx.contentText });
+      document.getElementById('agimg-alt').value = alt;
+    }
+
+    const filename = agImageFilename(agImageCtx.keyword, agImageCtx.locName);
+    agImageResult = { dataUrl: jpg.dataUrl, filename, alt, style, width: jpg.width, height: jpg.height };
+
+    document.getElementById('agimg-preview').innerHTML =
+      `<img src="${jpg.dataUrl}" alt="${escHtml(alt)}" />
+       <div class="agimg-dims">${jpg.width}×${jpg.height} · JPG · ${escHtml(filename)}</div>`;
+    document.getElementById('agimg-actions').style.display = 'flex';
+    status.textContent = hasGcs
+      ? 'Generated. Save to store it on the page record, or just download.'
+      : 'Generated. Download it — GCS is not configured, so it is not stored in-app.';
+  } catch (e) {
+    status.textContent = 'Failed: ' + e.message;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Generate';
+  }
+}
+
+function agDownloadImage() {
+  if (agImageResult) downloadDataUrl(agImageResult.dataUrl, agImageResult.filename);
+}
+
+/* Persist the generated image: upload to GCS when available, then record a small
+   marker on the keyword and the saved report so the Rank Tracker can show it. */
+async function agSaveImage() {
+  if (!agImageResult || !agImageCtx) return;
+  const btn = document.getElementById('agimg-saveBtn');
+  const status = document.getElementById('agimg-status');
+  btn.disabled = true; btn.textContent = 'Saving…';
+
+  let url = null;
+  try {
+    if (hasGcs) {
+      status.textContent = 'Uploading to Google Cloud Storage…';
+      const client = (rtData?.clients || []).find(c => c.id === agImageCtx.clientId);
+      const folder = client?.name ? slugify(client.name) : 'service-images';
+      const r = await fetch('/api/gcs/upload-image', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataUrl: agImageResult.dataUrl, filename: agImageResult.filename, folder }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j.url) throw new Error(j.error?.message || 'Upload failed');
+      url = j.url;
+    }
+
+    const marker = {
+      url,                                   // null when GCS is off → indicator is non-clickable
+      alt: agImageResult.alt,
+      filename: agImageResult.filename,
+      style: agImageResult.style,
+      date: new Date().toISOString().slice(0, 10),
+    };
+
+    // Record on the keyword row (small — no base64 in rank data)
+    const { kw } = agFindKwByKeyword(agImageCtx.keyword, agImageCtx.clientId);
+    if (kw) { kw.image = marker; rtSave(); }
+
+    // Mirror onto the saved report if one exists
+    const rep = agImageCtx.clientId ? repGet(agImageCtx.clientId, agImageCtx.keyword) : null;
+    if (rep) {
+      rep.imageUrl = url; rep.imageAlt = marker.alt;
+      rep.imageFilename = marker.filename; rep.imageStyle = marker.style;
+      repSave(rep);
+    }
+
+    rtRender(); filesRender();
+    status.textContent = url ? 'Saved and stored in GCS.' : 'Marked as generated on the page record.';
+    agImageCtx.kwId = kw?.id || agImageCtx.kwId;
+  } catch (e) {
+    status.textContent = 'Save failed: ' + e.message;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save to page record';
+  }
+}
+
 /* One-off discovery helper: does POP expose an endpoint that scores raw content,
    so we could skip the preview-URL round trip entirely?
 
@@ -2461,9 +2743,14 @@ function rtRowHtml(kw, client) {
   const savedRep = repGet(client.id, kw.keyword);
   const repDate  = savedRep?.savedAt ? new Date(savedRep.savedAt).toLocaleDateString() : '';
   const repTip   = savedRep ? `SEO report — saved ${repDate}` : 'No report yet';
+  const hasImg   = !!kw.image;
+  const imgTip   = kw.image
+    ? `Service image${kw.image.date ? ` — ${kw.image.date}` : ''}${kw.image.url ? ' (click to view / regenerate)' : ' (downloaded; click to regenerate)'}`
+    : 'Generate a service-page image for this keyword';
   const repCell  = `<td class="rt-td-rep"><button class="rt-rep-btn${savedRep ? ' rt-rep-has' : ''}"
     data-client="${escHtml(client.id)}" data-kw="${escHtml(kw.keyword || '')}"
-    title="${escHtml(repTip)}"${savedRep ? '' : ' disabled'}>📄</button></td>`;
+    title="${escHtml(repTip)}"${savedRep ? '' : ' disabled'}>📄</button><button class="rt-img-btn${hasImg ? ' rt-img-has' : ''}"
+    data-kwid="${escHtml(kw.id)}" title="${escHtml(imgTip)}">🖼</button></td>`;
   const taskCells = TASK_FIELDS.map(t => rtTaskCell(kw, t.key, t.title)).join('');
   return `
     <tr data-id="${escHtml(kw.id)}">
@@ -4395,6 +4682,9 @@ async function rtInit() {
       showPopReport(repBtn.dataset.client, repBtn.dataset.kw);
       return;
     }
+
+    const imgBtn = e.target.closest('.rt-img-btn');
+    if (imgBtn) { agOpenImageModal(imgBtn.dataset.kwid); return; }
 
     const taskBtn = e.target.closest('.rt-task-btn');
     if (taskBtn) {
