@@ -1785,3 +1785,33 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
 .db-st-prog .db-st-fill { background: #e8a838; }
 .db-st-done .db-st-val  { color: var(--green); }
 .db-st-done .db-st-fill { background: var(--green); }
+
+/* ═══════════════════════════════════════════════
+   ARTICLE IMAGE TOOL
+   Most of this tab reuses .form-card / .form-group / .ig-gallery / .ig-card.
+   Only the URL row, the option grid and the inline status lines are new.
+   ═══════════════════════════════════════════════ */
+
+.aig-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.aig-row .form-input { flex: 1; min-width: 220px; }
+
+.aig-controls-row {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr .6fr .7fr;
+  gap: 16px;
+  margin: 16px 0;
+}
+
+.aig-hint {
+  font-weight: 400; font-size: 11px; color: var(--text-muted);
+  text-transform: none; letter-spacing: 0;
+}
+
+.aig-status { font-size: 12px; color: var(--text-secondary); margin-top: 6px; min-height: 16px; }
+
+@media (max-width: 860px) {
+  .aig-controls-row { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 400px) {
+  .aig-controls-row { grid-template-columns: 1fr; }
+}

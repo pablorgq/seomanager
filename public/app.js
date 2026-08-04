@@ -29,7 +29,14 @@ const STYLE_MAP = {
   lifestyle:  'warm lifestyle photography, golden hour lighting, authentic candid feel, no text',
   clinical:   'clean professional medical photography, bright clinical lighting, sterile atmosphere, no text',
   minimal:    'minimalist composition, clean white background, negative space, studio photography, no text',
-  dramatic:   'dramatic moody photography, cinematic lighting, rich shadows, high contrast, no text'
+  dramatic:   'dramatic moody photography, cinematic lighting, rich shadows, high contrast, no text',
+  // Illustrated presets — used by the Article Image tool. The two older UIs list
+  // their options explicitly in index.html, so these are additive for them.
+  vector:     'flat vector illustration, clean geometric shapes, bold flat colors, modern editorial illustration style, no text',
+  render3d:   'polished 3D render, soft studio lighting, subtle depth of field, clay-render material feel, no text',
+  watercolor: 'soft watercolor illustration, hand-painted texture, gentle color bleeds, light paper grain, no text',
+  isometric:  'isometric illustration, 30-degree axonometric view, clean lines, consistent flat lighting, no text',
+  lineart:    'minimal line-art illustration, single-weight strokes, generous white space, monochrome, no text'
 };
 
 const SANITIZE_MAP = [
@@ -91,9 +98,10 @@ const TAB_ROUTES = {
   images:    '/image-generator',
   indexy:    '/indexy',
   ahrefs:    '/ahrefs',
+  artimage:  '/article-image',
 };
 const ROUTE_TABS  = Object.fromEntries(Object.entries(TAB_ROUTES).map(([tab, path]) => [path, tab]));
-const TOOLS_TABS  = new Set(['brands', 'images']);
+const TOOLS_TABS  = new Set(['brands', 'images', 'artimage']);
 
 function switchTab(tab, { pushState = true } = {}) {
   if (!TAB_ROUTES[tab]) tab = 'dashboard';
@@ -107,6 +115,7 @@ function switchTab(tab, { pushState = true } = {}) {
   if (tab === 'weekly') weeklyRender();
   if (tab === 'indexy') { indexyRender(); indexySyncClient(); }
   if (tab === 'ahrefs') ahrefsRender();
+  if (tab === 'artimage') aigRender();
   if (pushState) {
     const path = TAB_ROUTES[tab];
     if (window.location.pathname !== path) history.pushState({ tab }, '', path);
@@ -7468,6 +7477,393 @@ async function ahrefsGenerateStrategy() {
   } finally {
     btn.disabled = false; btn.textContent = '🤖 Generate AI Strategy';
   }
+}
+
+/* ═══════════════════════════════════════════════
+   ARTICLE IMAGE
+   Paste an article URL → read the page → write a visual brief from its content →
+   generate images in a chosen style and aspect ratio. Session-only: nothing is
+   persisted to the rank data or uploaded to GCS (that stays with the
+   service-page modal, which is bound to a keyword record).
+════════════════════════════════════════════════ */
+
+/* Aspect ratios. OpenAI only accepts three sizes, so each ratio requests the
+   nearest native one and is center-cropped on canvas afterwards. The crop ratio
+   is set for every entry, including the "native" ones, because the model
+   fallback chain can change the size out from under us (dall-e-3 remaps to
+   1792×1024, dall-e-2 forces 1024×1024 — see tryModel). Cropping is skipped
+   automatically when the returned image already matches. */
+const AIG_RATIOS = {
+  '16:9': { label: 'Wide 16:9',      size: '1536x1024', ratio: 16 / 9 },
+  '3:2':  { label: 'Landscape 3:2',  size: '1536x1024', ratio: 3 / 2  },
+  '4:3':  { label: 'Standard 4:3',   size: '1536x1024', ratio: 4 / 3  },
+  '1:1':  { label: 'Square 1:1',     size: '1024x1024', ratio: 1      },
+  '2:3':  { label: 'Portrait 2:3',   size: '1024x1536', ratio: 2 / 3  },
+  '9:16': { label: 'Story 9:16',     size: '1024x1536', ratio: 9 / 16 },
+};
+
+const AIG_STYLE_GROUPS = {
+  Photographic: {
+    realistic: 'Realistic Photo', editorial: 'Editorial / Magazine', lifestyle: 'Lifestyle / Warm',
+    clinical: 'Clinical / Professional', minimal: 'Minimalist / Clean', dramatic: 'Dramatic / Moody',
+  },
+  Illustrated: {
+    vector: 'Flat Vector', render3d: '3D Render', watercolor: 'Watercolor',
+    isometric: 'Isometric', lineart: 'Line Art',
+  },
+};
+
+const AIG_JPEG_QUALITY = 0.9;
+const AIG_MAX_IMAGES   = 4;
+
+let aigState = { url: '', title: '', images: [] };
+
+/* Center-crop a generated image to the requested ratio and encode it.
+   Crop geometry is derived from the DECODED dimensions, never from the size we
+   asked for, so it stays correct whichever model in the fallback chain answered. */
+async function aigCropToRatio(dataUrl, targetRatio, format = 'jpg', quality = AIG_JPEG_QUALITY) {
+  const img = await agLoadImage(dataUrl);
+  const sw0 = img.naturalWidth  || img.width;
+  const sh0 = img.naturalHeight || img.height;
+
+  // Largest centred rectangle of the target ratio that fits inside the source.
+  let sw = sw0, sh = Math.round(sw0 / targetRatio);
+  if (sh > sh0) { sh = sh0; sw = Math.round(sh0 * targetRatio); }
+  const sx = Math.round((sw0 - sw) / 2);
+  const sy = Math.round((sh0 - sh) / 2);
+
+  // Already the right shape and no re-encode needed — hand back the original.
+  if (sw === sw0 && sh === sh0 && format === 'png') return { dataUrl, width: sw0, height: sh0 };
+
+  const canvas = document.createElement('canvas');
+  canvas.width = sw; canvas.height = sh;
+  const ctx = canvas.getContext('2d');
+  if (format === 'jpg') { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, sw, sh); } // flatten alpha
+  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+  return {
+    dataUrl: canvas.toDataURL(format === 'jpg' ? 'image/jpeg' : 'image/png', quality),
+    width: sw, height: sh,
+  };
+}
+
+/* Small gpt-4o-mini call. Same key handling as agGenerateAltText: the server key
+   when one is configured, otherwise the browser's own via x-client-key. */
+async function aigChat(prompt, maxTokens) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (!hasServerKey) {
+    const k = apiKey || await Store.get('seomanager_api_key');
+    if (!k) throw new Error('Enter your OpenAI API key in Settings first.');
+    headers['x-client-key'] = k;
+  }
+  const res = await fetch('/api/openai/chat', {
+    method: 'POST', headers,
+    body: JSON.stringify({ model: 'gpt-4o-mini', max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e?.error?.message || `HTTP ${res.status}`);
+  }
+  return ((await res.json()).choices?.[0]?.message?.content || '').trim();
+}
+
+/* Best-effort article title: Jina Reader prefixes its output with "Title: …";
+   otherwise fall back to the last URL path segment. */
+function aigDeriveTitle(text, url) {
+  const m = String(text || '').match(/^Title:\s*(.+)$/m);
+  if (m) return m[1].trim().slice(0, 120);
+  try {
+    const seg = new URL(url).pathname.split('/').filter(Boolean).pop() || '';
+    const words = seg.replace(/\.\w+$/, '').replace(/[-_]+/g, ' ').trim();
+    if (words) return words.charAt(0).toUpperCase() + words.slice(1);
+  } catch (_) {}
+  return 'article';
+}
+
+/* Fetch and extract the article body via /api/fetch-page (direct fetch, with a
+   Jina Reader fallback for JS-rendered and bot-protected pages). */
+async function aigReadArticle() {
+  const url    = document.getElementById('aig-url').value.trim();
+  const status = document.getElementById('aig-fetchStatus');
+  const ta     = document.getElementById('aig-text');
+  if (!/^https?:\/\//i.test(url)) { status.innerHTML = '<span style="color:var(--text-muted)">Enter a valid http(s) URL first.</span>'; return; }
+
+  const btn = document.getElementById('aig-readBtn');
+  btn.disabled = true; status.innerHTML = 'Reading the page…';
+  try {
+    const r = await fetch('/api/fetch-page', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }),
+    });
+    let d = {};
+    try { d = await r.json(); } catch (_) {}
+    if (r.ok && d.text) {
+      ta.value = d.text;
+      aigState.url = url;
+      aigState.title = aigDeriveTitle(d.text, url);
+      const via = d.source === 'jina' ? ' via Jina Reader' : '';
+      status.innerHTML = `<span style="color:var(--green)">✓ ${d.words} words read${via}</span> — writing the visual brief…`;
+      await aigWriteBrief();
+    } else {
+      const reason = typeof d.error === 'string' ? d.error : `HTTP ${r.status}`;
+      agFetchShowManual(status, url, reason);
+    }
+  } catch (e) {
+    agFetchShowManual(status, url, String(e.message || e));
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* Turn the article text into a short visual scene description — this is the step
+   that makes the image about what the article is actually about. */
+async function aigWriteBrief() {
+  const text   = document.getElementById('aig-text').value.trim();
+  const status = document.getElementById('aig-briefStatus');
+  const out    = document.getElementById('aig-brief');
+  const btn    = document.getElementById('aig-briefBtn');
+  if (!text) { status.innerHTML = '<span style="color:var(--text-muted)">Read a URL or paste the article text first.</span>'; return; }
+
+  if (!aigState.title) aigState.title = aigDeriveTitle(text, aigState.url || document.getElementById('aig-url').value.trim());
+
+  btn.disabled = true; status.innerHTML = 'Writing the visual brief…';
+  try {
+    const brief = await aigChat(
+      'Read this article and describe, in 2-3 sentences, ONE photograph or illustration that would sit at the top of it. '
+      + 'Describe only what is visible: subject, setting, action, mood, lighting. '
+      + 'No text, signage, logos, screens or UI in the frame. No preamble, no quotes — just the description.\n\n'
+      + `Article:\n${text.slice(0, 4000)}`, 220);
+    out.value = brief;
+    status.innerHTML = '<span style="color:var(--green)">✓ Brief written from the article — edit it if you want.</span>';
+  } catch (e) {
+    // Still usable without a key: fall back to the title plus the opening lines.
+    const opening = text.replace(/^Title:.*$/m, '').replace(/\s+/g, ' ').trim().slice(0, 220);
+    out.value = `A scene illustrating "${aigState.title}". ${opening}`;
+    status.innerHTML = `<span style="color:var(--text-muted)">⚠ Could not write the brief (${escHtml(e.message)}) — using the article's opening instead. Edit it below.</span>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* Compose the final image prompt. Deliberately no SAFETY_PREFIX — that one is
+   medical-specific (see agBuildImagePrompt). */
+function aigBuildPrompt({ brief, style, extra, negative, framing }) {
+  const stylePrompt = STYLE_MAP[style] || STYLE_MAP.realistic;
+  let p = `${sanitizeTopic(String(brief || '').trim())} ${stylePrompt}.`;
+  if (framing)                 p += ` ${framing}.`;
+  if (extra && extra.trim())   p += ` ${extra.trim()}.`;
+  if (negative && negative.trim()) p += ` Avoid: ${negative.trim()}.`;
+  return p;
+}
+
+/* SEO alt text for the article's image. Mirrors agGenerateAltText's key handling
+   but with article wording rather than service-page wording. */
+async function aigGenerateAlt(brief) {
+  const fallback = String(aigState.title || 'article image').slice(0, 125);
+  try {
+    const alt = await aigChat(
+      `Write ONE alt-text line (max 125 characters) for the lead image on an article titled "${aigState.title}". `
+      + 'Describe the scene plainly. No quotes, no "image of"/"photo of", no trailing period.\n\n'
+      + `The image shows: ${String(brief).slice(0, 500)}`, 60);
+    return alt.replace(/^["']|["']$/g, '').replace(/\.$/, '').slice(0, 125) || fallback;
+  } catch (_) { return fallback; }
+}
+
+async function aigGenerate() {
+  const brief    = document.getElementById('aig-brief').value.trim();
+  const status   = document.getElementById('aig-genStatus');
+  const gallery  = document.getElementById('aig-gallery');
+  if (!brief) { status.innerHTML = '<span style="color:var(--text-muted)">Write or paste a visual brief first.</span>'; return; }
+
+  let key;
+  try { key = await getApiKey(); }
+  catch (e) { status.innerHTML = `<span style="color:var(--red)">${escHtml(e.message)}</span>`; return; }
+
+  const style    = document.getElementById('aig-style').value;
+  const ratioKey = document.getElementById('aig-ratio').value;
+  const format   = document.getElementById('aig-format').value;
+  const extra    = document.getElementById('aig-extra').value;
+  const negative = document.getElementById('aig-negative').value;
+  const count    = Math.max(1, Math.min(AIG_MAX_IMAGES, parseInt(document.getElementById('aig-count').value) || 1));
+  const cfg      = AIG_RATIOS[ratioKey] || AIG_RATIOS['16:9'];
+  const ext      = format === 'jpg' ? 'jpg' : 'png';
+  const base     = slugify(aigState.title || 'article-image').slice(0, 60) || 'article-image';
+
+  const btn = document.getElementById('aig-genBtn');
+  btn.disabled = true; btn.textContent = 'Generating…';
+  document.getElementById('aig-downloadAllBtn').classList.add('hidden');
+  aigState.images = [];
+  gallery.innerHTML = '';
+  status.textContent = `Generating ${count} image${count > 1 ? 's' : ''} at ${cfg.label}…`;
+
+  const cards = Array.from({ length: count }, (_, i) => {
+    const card = document.createElement('div');
+    card.className = 'ig-card';
+    card.innerHTML = `
+      <div class="ig-card-img"><div class="spinner"></div></div>
+      <div class="ig-card-body">
+        <span class="ig-card-num">Image ${i + 1}</span>
+        <div class="ig-card-actions"></div>
+      </div>`;
+    gallery.appendChild(card);
+    return card;
+  });
+
+  const tasks = cards.map((card, i) => async () => {
+    // Vary the camera angle across a batch so the results aren't near-duplicates.
+    const framing = count > 1 ? `Framing: ${FRAMING_VARIATIONS[i % FRAMING_VARIATIONS.length]}` : '';
+    const prompt  = aigBuildPrompt({ brief, style, extra, negative, framing });
+    const imgDiv  = card.querySelector('.ig-card-img');
+    const actions = card.querySelector('.ig-card-actions');
+    try {
+      const raw = await generateImage(key, prompt, cfg.size);
+      const out = await aigCropToRatio(raw, cfg.ratio, ext);
+      const filename = `${base}${count > 1 ? `-${i + 1}` : ''}.${ext}`;
+      aigState.images[i] = { ...out, prompt, filename };
+
+      imgDiv.innerHTML = `<img src="${out.dataUrl}" alt="Image ${i + 1}" loading="lazy" />`;
+      card.querySelector('.ig-card-num').textContent = `${out.width}×${out.height} · ${ext.toUpperCase()}`;
+      actions.innerHTML = `
+        <button class="btn-sm btn-copy-prompt">Copy Prompt</button>
+        <button class="btn-sm btn-download">Download</button>`;
+      actions.querySelector('.btn-copy-prompt').addEventListener('click', (ev) => copyText(ev.currentTarget, prompt));
+      actions.querySelector('.btn-download').addEventListener('click', () => downloadDataUrl(out.dataUrl, filename));
+    } catch (e) {
+      imgDiv.innerHTML = '';
+      const err = document.createElement('div');
+      err.className = 'img-error';
+      err.textContent = `⚠ ${e.message}`;
+      imgDiv.appendChild(err);
+    }
+  });
+
+  await runConcurrent(tasks, 3);
+
+  const made = aigState.images.filter(Boolean).length;
+  if (made) {
+    document.getElementById('aig-downloadAllBtn').classList.remove('hidden');
+    document.getElementById('aig-altCard').classList.remove('hidden');
+    const altEl = document.getElementById('aig-alt');
+    if (!altEl.value.trim()) {
+      status.textContent = 'Writing SEO alt text…';
+      altEl.value = await aigGenerateAlt(brief);
+    }
+    status.innerHTML = `<span style="color:var(--green)">✓ ${made} of ${count} generated.</span>`;
+  } else {
+    status.innerHTML = '<span style="color:var(--red)">No images were generated — see the errors above.</span>';
+  }
+  btn.disabled = false; btn.textContent = 'Generate images';
+}
+
+async function aigDownloadAll() {
+  for (const img of aigState.images) {
+    if (!img) continue;
+    downloadDataUrl(img.dataUrl, img.filename);
+    await new Promise(r => setTimeout(r, 300));
+  }
+}
+
+function aigRender() {
+  const root = document.getElementById('aig-root');
+  if (!root || root.dataset.ready) return;   // keep results when switching tabs
+  root.dataset.ready = '1';
+
+  const styleOpts = Object.entries(AIG_STYLE_GROUPS).map(([group, opts]) =>
+    `<optgroup label="${group}">` +
+    Object.entries(opts).map(([v, l]) => `<option value="${v}">${l}</option>`).join('') +
+    '</optgroup>').join('');
+  const ratioOpts = Object.entries(AIG_RATIOS)
+    .map(([k, c]) => `<option value="${k}">${c.label}</option>`).join('');
+
+  root.innerHTML = `
+    <div class="db-header">
+      <h2 class="db-title">Article Image</h2>
+      <p class="db-sub">Paste an article URL — the page is read, turned into a visual brief, and rendered as images in the style and aspect ratio you choose.</p>
+    </div>
+
+    <div class="form-card">
+      <div class="form-group">
+        <label class="form-label">Article URL</label>
+        <div class="aig-row">
+          <input type="url" id="aig-url" class="form-input" placeholder="https://example.com/blog/some-article" />
+          <button class="btn btn-secondary" id="aig-readBtn">Read article</button>
+        </div>
+        <div class="aig-status" id="aig-fetchStatus"></div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Article content <span class="aig-hint">auto-filled — or paste it yourself if the site blocks fetching</span></label>
+        <textarea id="aig-text" class="form-textarea" rows="4" placeholder="The article body appears here once the URL is read."></textarea>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Visual brief <span class="aig-hint">what the image should show, written from the article — edit freely</span></label>
+        <textarea id="aig-brief" class="form-textarea" rows="3" placeholder="Read a URL above, or describe the shot yourself."></textarea>
+        <div class="aig-row" style="margin-top:8px">
+          <button class="btn-sm" id="aig-briefBtn">Rewrite brief from article</button>
+          <div class="aig-status" id="aig-briefStatus" style="margin:0"></div>
+        </div>
+      </div>
+
+      <div class="aig-controls-row">
+        <div class="form-group">
+          <label class="form-label">Visual Style</label>
+          <select id="aig-style" class="form-select">${styleOpts}</select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Aspect Ratio</label>
+          <select id="aig-ratio" class="form-select">${ratioOpts}</select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Images</label>
+          <input type="number" id="aig-count" class="form-input" min="1" max="${AIG_MAX_IMAGES}" value="1" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Format</label>
+          <select id="aig-format" class="form-select">
+            <option value="jpg">JPG</option>
+            <option value="png">PNG</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Extra direction <span class="aig-hint">optional</span></label>
+        <input type="text" id="aig-extra" class="form-input" placeholder="e.g. cool blue palette, shot from a low angle" />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Avoid</label>
+        <textarea id="aig-negative" class="form-textarea" rows="2">${escHtml(IMG_DEFAULT_NEGATIVE)}</textarea>
+      </div>
+
+      <div class="form-actions">
+        <button class="btn btn-primary" id="aig-genBtn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+          Generate images
+        </button>
+        <button class="btn btn-secondary hidden" id="aig-downloadAllBtn">Download all</button>
+        <div class="aig-status" id="aig-genStatus" style="margin:0"></div>
+      </div>
+    </div>
+
+    <div class="form-card hidden" id="aig-altCard">
+      <div class="form-group" style="margin:0">
+        <label class="form-label">SEO alt text</label>
+        <div class="aig-row">
+          <input type="text" id="aig-alt" class="form-input" maxlength="125" />
+          <button class="btn btn-secondary" id="aig-copyAltBtn">Copy</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="ig-gallery" id="aig-gallery"></div>`;
+
+  document.getElementById('aig-readBtn').addEventListener('click', aigReadArticle);
+  document.getElementById('aig-url').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); aigReadArticle(); } });
+  document.getElementById('aig-briefBtn').addEventListener('click', aigWriteBrief);
+  document.getElementById('aig-genBtn').addEventListener('click', aigGenerate);
+  document.getElementById('aig-downloadAllBtn').addEventListener('click', aigDownloadAll);
+  document.getElementById('aig-copyAltBtn').addEventListener('click', (e) =>
+    copyText(e.currentTarget, document.getElementById('aig-alt').value));
 }
 
 /* ── START ── */
