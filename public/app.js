@@ -2133,7 +2133,7 @@ async function agStartFromSavedRun(kw, competitors) {
   if (rn) rn.textContent = `Reusing the POP report from ${ranAt} (score ${run.score ?? '?'})${stale ? ` — ${ageDays} days old` : ''}.`;
 
   window._agFlow = {
-    popKey, keyword: run.keyword, targetUrl: run.targetUrl, pageNotBuilt: 0,
+    popKey, keyword: run.keyword, targetUrl: run.targetUrl, pageNotBuilt: run.pageNotBuiltYet ? 1 : 0,
     locName: run.locName, targLang: run.targLang, competitors,
   };
 }
@@ -2769,7 +2769,13 @@ function rtRowHtml(kw, client) {
       <td class="rt-td-kw rt-editable" data-field="keyword">
         <button class="rt-mk-btn${kw.mainKeyword ? ' rt-mk-active' : ''}" data-id="${escHtml(kw.id)}" title="Toggle Main Keyword">MK</button>
         ${escHtml(kw.keyword || '')}</td>
-      <td class="rt-td-target rt-editable" data-field="targetUrl">${kw.targetUrl ? `<a href="${escHtml(kw.targetUrl)}" target="_blank" rel="noopener" class="rt-url-link" title="${escHtml(kw.targetUrl)}">${escHtml(rtShortUrl(kw.targetUrl))}</a>` : '<span class="rt-na">—</span>'}</td>
+      <td class="rt-td-target rt-editable" data-field="targetUrl">${
+        kw.targetUrl
+          ? `<a href="${escHtml(kw.targetUrl)}" target="_blank" rel="noopener" class="rt-url-link" title="${escHtml(kw.targetUrl)}">${escHtml(rtShortUrl(kw.targetUrl))}</a>`
+          : kw.pageNotBuilt
+            ? '<span class="rt-notbuilt" title="Page not built yet — POP scores the keyword without a live page">not built yet</span>'
+            : '<span class="rt-na">—</span>'
+      }</td>
       <td class="rt-td-vol">${kw.volume ? escHtml(String(kw.volume)) : '<span class="rt-na">—</span>'}</td>
       <td class="rt-td-delta">${rtDeltaCell(kw.rank, kw.prevRank)}</td>
       <td class="rt-td-pop">${rtPopCell(kw)}</td>
@@ -3091,7 +3097,7 @@ function rtPopShowDetails(kwId) {
       <div style="font-size:44px;font-weight:800;color:${scoreColor};line-height:1;flex-shrink:0" title="${score ?? ''}">${score != null ? Math.round(score) : '?'}</div>
       <div style="flex:1;min-width:0">
         <div style="font-size:13px;font-weight:600">${escHtml(kw.keyword || '')}</div>
-        <div style="font-size:11px;color:var(--text-secondary)">${escHtml(kw.targetUrl || kw.url || '')} · ${kw.popScoreDate || ''}</div>
+        <div style="font-size:11px;color:var(--text-secondary)">${escHtml(kw.targetUrl || kw.url || '') || (kw.pageNotBuilt ? 'Page not built yet — targets only' : '')} · ${kw.popScoreDate || ''}</div>
         ${wcHtml}
         ${strategyPickerHtml}
       </div>
@@ -3376,10 +3382,11 @@ async function rtOptimizeInAG(kwId) {
   const comps = [...new Set([...(kw.popReport?.competitors || []), ...(kw.customCompetitors || [])])];
   document.getElementById('ag-competitors').value = comps.join('\n');
 
-  // We're improving an existing page → ensure "page not built" is off and the
-  // existing-content box is shown, then auto-fetch the live copy.
+  // Normally we're improving an existing page → "page not built" off, existing
+  // content box shown, live copy auto-fetched. A keyword flagged as not-built
+  // carries that through instead, so the generator writes from scratch.
   const pnb = document.getElementById('ag-pageNotBuilt');
-  if (pnb) { pnb.checked = false; pnb.dispatchEvent(new Event('change')); }
+  if (pnb) { pnb.checked = !!kw.pageNotBuilt; pnb.dispatchEvent(new Event('change')); }
 
   // Flash the pre-filled fields so it's clear what was carried over
   ['ag-keyword','ag-targetUrl','ag-locationName','ag-targetLanguage','ag-strategy','ag-approach','ag-competitors'].forEach(id => {
@@ -3389,9 +3396,10 @@ async function rtOptimizeInAG(kwId) {
     setTimeout(() => el.classList.remove('ag-prefill-flash'), 1200);
   });
 
-  // Auto-fetch the current page content, then start the POP improve flow
+  // Auto-fetch the current page content, then start the POP improve flow.
+  // Nothing to fetch when the page does not exist yet.
   const url = (kw.targetUrl || kw.url || '').trim();
-  if (url && /^https?:\/\//i.test(url)) {
+  if (!kw.pageNotBuilt && url && /^https?:\/\//i.test(url)) {
     try { await agFetchPageContent(); } catch { /* non-fatal — user can paste/fetch manually */ }
   }
 
@@ -3465,14 +3473,23 @@ async function rtPopScoreCheck(kwId) {
   }
   if (!kw) return;
 
-  const targetUrl  = kw.targetUrl || kw.url || '';
+  // "Page not built yet" (set on the Target URL cell) lets POP run without a live
+  // page: get-terms still needs some URL, so send a placeholder, and create-report
+  // is told not to expect existing content. Same deal as the Article Generator's
+  // ag-pageNotBuilt toggle.
+  const pageNotBuilt = !!kw.pageNotBuilt;
+  const targetUrl  = kw.targetUrl || kw.url || (pageNotBuilt ? 'https://example.com' : '');
   const keyword    = kw.keyword || '';
   let   locName    = client?.popLocation || '';
   // POP languages are all lowercase (english, spanish, …) — normalise to the accepted case
   let   targLang   = String(client?.popLanguage || 'english').toLowerCase();
   const gnl        = !!client?.popGnl;
 
-  if (!targetUrl) { alert('Add a Target URL for this keyword first (click the Target URL cell to edit).'); return; }
+  if (!targetUrl) {
+    alert('Add a Target URL for this keyword first (click the Target URL cell to edit).\n\n'
+        + 'No page built yet? Tick "Page not built yet" in that same box and POP will score the keyword without one.');
+    return;
+  }
   if (!locName) { alert('Add a Target Location for this client first.\n\nEdit Client → POP Settings → Target Location\nExample: "Winnipeg, Manitoba" or "Dallas, TX"'); return; }
 
   // Location/language must be the exact case-sensitive values POP validates against.
@@ -3571,7 +3588,7 @@ async function rtPopScoreCheck(kwId) {
     setStatus(`Creating report for ${kwLabel}…`);
     const r2 = await popPost('/expose/create-report/', {
       prepareId, variations, lsaPhrases,
-      pageNotBuiltYet: 0, considerOverOptimization: 1,
+      pageNotBuiltYet: pageNotBuilt ? 1 : 0, considerOverOptimization: 1,
       googleNlpCalculation: gnl ? 1 : 0, specialLanguageSupport: 0,
     });
     const tid2 = r2.taskId || r2.task_id || r2.id;
@@ -3695,7 +3712,7 @@ async function rtPopScoreCheck(kwId) {
       wordCountTarget:  rep?.wordCount?.target ?? null,
       subHeadingsCount: rep?.subHeadingsCount ?? null,
       keyword, targetUrl, locName, targLang,
-      overOpt: 1, pageNotBuiltYet: 0, gnl: gnl ? 1 : 0,
+      overOpt: 1, pageNotBuiltYet: pageNotBuilt ? 1 : 0, gnl: gnl ? 1 : 0,
       strategy, approach,
       score,
       ranAt: new Date().toISOString(),
@@ -5159,6 +5176,15 @@ function rtOpenEditModal(kwId, field) {
   } else {
     document.getElementById('rt-editInput').value = val;
   }
+
+  // "Page not built yet" belongs to the Target URL — it lets Score run POP for a
+  // page that does not exist yet, instead of demanding a URL.
+  const pnbWrap = document.getElementById('rt-editPnbWrap');
+  if (pnbWrap) {
+    pnbWrap.style.display = field === 'targetUrl' ? 'block' : 'none';
+    document.getElementById('rt-editPageNotBuilt').checked = !!kw.pageNotBuilt;
+  }
+
   rtOpenModal('rt-editModal');
 
   setTimeout(() => {
@@ -5187,6 +5213,10 @@ function rtEditSave() {
     kw.popDate     = lines[1]?.trim() || new Date().toISOString().slice(0, 10);
   } else {
     kw[field] = raw;
+  }
+
+  if (field === 'targetUrl') {
+    kw.pageNotBuilt = document.getElementById('rt-editPageNotBuilt')?.checked || false;
   }
 
   rtSave();

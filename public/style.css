@@ -1815,3 +1815,10 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
 @media (max-width: 400px) {
   .aig-controls-row { grid-template-columns: 1fr; }
 }
+
+/* Target URL cell when the page does not exist yet (POP runs on targets only) */
+.rt-notbuilt {
+  font-size: 10px; font-style: italic; color: var(--text-muted);
+  border: 1px dashed var(--border); border-radius: 4px; padding: 1px 6px;
+  white-space: nowrap;
+}

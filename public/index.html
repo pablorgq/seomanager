@@ -643,6 +643,16 @@
           <div class="rt-modal-title" id="rt-editModalTitle">Edit</div>
           <input type="text" id="rt-editInput" class="form-input" style="margin-bottom:4px">
           <textarea id="rt-editTextarea" class="form-textarea" rows="3" style="display:none;margin-bottom:4px"></textarea>
+          <div id="rt-editPnbWrap" style="display:none;margin-top:10px">
+            <label class="toggle-label">
+              <input type="checkbox" id="rt-editPageNotBuilt" class="toggle-input">
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
+              Page not built yet
+            </label>
+            <div style="font-size:11px;color:var(--text-secondary);margin-top:6px">
+              Tick this to run POP without a live page — you get the term targets and word count to build against, but no "current" score.
+            </div>
+          </div>
           <div class="rt-modal-actions" style="margin-top:12px">
             <button class="btn btn-primary" id="rt-editSaveBtn">Save</button>
             <button class="btn btn-ghost" onclick="rtCloseModal('rt-editModal')">Cancel</button>
