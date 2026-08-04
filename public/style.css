@@ -1822,3 +1822,22 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
   border: 1px dashed var(--border); border-radius: 4px; padding: 1px 6px;
   white-space: nowrap;
 }
+
+/* ── POP target-location autocomplete (client modal) ── */
+.rt-ac-wrap { position: relative; }
+.rt-ac-list {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 10;
+  margin-top: 4px; max-height: 240px; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: 0 8px 24px rgba(26,29,46,.16);
+}
+.rt-ac-item {
+  padding: 7px 10px; font-size: 12px; color: var(--text-primary);
+  cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rt-ac-item:hover, .rt-ac-item.rt-ac-active { background: rgba(67,97,238,.1); }
+.rt-ac-item mark { background: rgba(67,97,238,.22); color: inherit; border-radius: 2px; padding: 0 1px; }
+.rt-ac-empty { padding: 8px 10px; font-size: 12px; color: var(--text-muted); }
+.rt-ac-note { font-size: 11px; margin-top: 4px; min-height: 14px; color: var(--text-muted); }
+.rt-ac-note.rt-ac-ok  { color: var(--green); }
+.rt-ac-note.rt-ac-bad { color: #e8a838; }

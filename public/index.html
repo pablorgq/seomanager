@@ -581,10 +581,11 @@
           </div>
           <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin:12px 0 6px">POP Settings</div>
           <div style="display:flex;gap:8px;margin-bottom:14px">
-            <div class="form-group" style="flex:2;margin-bottom:0">
+            <div class="form-group rt-ac-wrap" style="flex:2;margin-bottom:0">
               <label class="form-label">Target Location</label>
-              <input type="text" id="rt-popLocation" class="form-input" list="pop-locations-list" placeholder="Type to search (e.g. Winnipeg)" autocomplete="off" />
-              <datalist id="pop-locations-list"></datalist>
+              <input type="text" id="rt-popLocation" class="form-input" placeholder="Type a city, e.g. winnipeg" autocomplete="off" role="combobox" aria-expanded="false" aria-autocomplete="list" />
+              <div class="rt-ac-list" id="rt-popLocAc" role="listbox" hidden></div>
+              <div class="rt-ac-note" id="rt-popLocNote"></div>
             </div>
             <div class="form-group" style="flex:1;margin-bottom:0">
               <label class="form-label">Language</label>

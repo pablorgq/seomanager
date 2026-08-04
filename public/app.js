@@ -3490,7 +3490,7 @@ async function rtPopScoreCheck(kwId) {
         + 'No page built yet? Tick "Page not built yet" in that same box and POP will score the keyword without one.');
     return;
   }
-  if (!locName) { alert('Add a Target Location for this client first.\n\nEdit Client → POP Settings → Target Location\nExample: "Winnipeg, Manitoba" or "Dallas, TX"'); return; }
+  if (!locName) { alert('Add a Target Location for this client first.\n\nEdit Client → POP Settings → Target Location — type a city and pick from the list.\nPOP formats them country-first, e.g. "Canada, Manitoba, Winnipeg".'); return; }
 
   // Location/language must be the exact case-sensitive values POP validates against.
   // Normalise both against POP's own lists so everything sent comes straight from POP.
@@ -3499,7 +3499,7 @@ async function rtPopScoreCheck(kwId) {
     if (Array.isArray(_popLocations) && locName) {
       const hit = _popLocations.find(l => l.toLowerCase() === locName.toLowerCase());
       if (hit) locName = hit;
-      else { alert(`"${locName}" is not a valid POP location.\n\nEdit Client → POP Settings → Target Location and pick one from the list (values come from Page Optimizer Pro, e.g. "Winnipeg, Manitoba, Canada").`); return; }
+      else { alert(`"${locName}" is not a valid POP location.\n\nEdit Client → POP Settings → Target Location, type a city and pick a suggestion.\nPOP formats them country-first, e.g. "Canada, Manitoba, Winnipeg".`); return; }
     }
   } catch { /* offline — fall through and let POP validate server-side */ }
   try {
@@ -5022,17 +5022,147 @@ async function rtLoadCampaigns(preselectId) {
 }
 
 /* Load POP locations into datalist once, cache in memory */
+/* ── POP target-location autocomplete ──
+   POP returns ~41k locations formatted country-first ("Canada, Manitoba,
+   Winnipeg"), and Score validates the saved value against that list exactly.
+   A native <datalist> cannot cope with that many options — browsers silently
+   render nothing — and it would only ever prefix-match "Canada…" anyway, so
+   typing a city name showed no suggestions at all. This is a filtered dropdown
+   instead: substring match, city matches ranked first. */
+
 let _popLocations = null;
+let _popLocLoading = null;
+let _popLocAcIdx = -1;      // highlighted row in the open dropdown
+
 async function rtLoadPopLocations() {
-  const dl = document.getElementById('pop-locations-list');
-  if (!dl || dl.children.length > 0) return; // already populated
-  try {
+  rtPopLocAcBind();
+  if (_popLocations) return _popLocations;
+  if (!_popLocLoading) {
+    _popLocLoading = fetch('/api/pop-locations')
+      .then(r => r.json())
+      .then(list => { _popLocations = Array.isArray(list) ? list : []; return _popLocations; })
+      .catch(() => { _popLocations = []; return _popLocations; })   // user can still type manually
+      .finally(() => { _popLocLoading = null; });
+  }
+  return _popLocLoading;
+}
+
+/* Rank matches so the city — the part people actually type — wins over an
+   incidental hit inside a country or region name. */
+function rtPopLocMatches(query, limit = 50) {
+  const needle = query.trim().toLowerCase();
+  if (needle.length < 2 || !_popLocations) return [];
+  const hits = [];
+  for (const loc of _popLocations) {
+    const l = loc.toLowerCase();
+    const i = l.indexOf(needle);
+    if (i < 0) continue;
+    const city = l.slice(l.lastIndexOf(',') + 1).trim();
+    let rank = 3;                                             // matched somewhere
+    if (city === needle) rank = 0;                            // exact city
+    else if (city.startsWith(needle)) rank = 1;               // city prefix
+    else if (i === 0 || l[i - 1] === ' ' || l[i - 1] === ',') rank = 2; // word start
+    hits.push({ loc, rank, len: loc.length });
+    if (hits.length > 4000) break;                            // pathological query guard
+  }
+  hits.sort((a, b) => a.rank - b.rank || a.len - b.len || a.loc.localeCompare(b.loc));
+  return hits.slice(0, limit).map(h => h.loc);
+}
+
+function rtPopLocAcClose() {
+  const ac = document.getElementById('rt-popLocAc');
+  if (!ac) return;
+  ac.hidden = true; ac.innerHTML = ''; _popLocAcIdx = -1;
+  document.getElementById('rt-popLocation')?.setAttribute('aria-expanded', 'false');
+}
+
+/* Mark whether the current text is a value POP will actually accept, so an
+   invalid location is caught here rather than when Score runs. */
+function rtPopLocValidate() {
+  const note = document.getElementById('rt-popLocNote');
+  const val  = document.getElementById('rt-popLocation')?.value.trim() || '';
+  if (!note) return;
+  if (!val) { note.textContent = ''; note.className = 'rt-ac-note'; return; }
+  if (!_popLocations || !_popLocations.length) { note.textContent = ''; return; }
+  const ok = _popLocations.some(l => l.toLowerCase() === val.toLowerCase());
+  note.textContent = ok ? '✓ valid POP location' : '⚠ not a POP location — pick one from the list';
+  note.className = 'rt-ac-note ' + (ok ? 'rt-ac-ok' : 'rt-ac-bad');
+}
+
+function rtPopLocAcRender(items, query) {
+  const ac = document.getElementById('rt-popLocAc');
+  if (!ac) return;
+  if (!items.length) { rtPopLocAcClose(); return; }
+  const needle = query.trim().toLowerCase();
+  ac.innerHTML = items.map((loc, i) => {
+    const at = loc.toLowerCase().indexOf(needle);
+    const marked = at < 0 ? escHtml(loc)
+      : escHtml(loc.slice(0, at)) + '<mark>' + escHtml(loc.slice(at, at + needle.length)) + '</mark>' + escHtml(loc.slice(at + needle.length));
+    return `<div class="rt-ac-item" role="option" data-i="${i}" data-val="${escHtml(loc)}">${marked}</div>`;
+  }).join('');
+  ac.hidden = false; _popLocAcIdx = -1;
+  document.getElementById('rt-popLocation')?.setAttribute('aria-expanded', 'true');
+}
+
+function rtPopLocAcHighlight(delta) {
+  const ac = document.getElementById('rt-popLocAc');
+  const rows = ac ? [...ac.querySelectorAll('.rt-ac-item')] : [];
+  if (!rows.length) return;
+  _popLocAcIdx = (_popLocAcIdx + delta + rows.length) % rows.length;
+  rows.forEach((r, i) => r.classList.toggle('rt-ac-active', i === _popLocAcIdx));
+  rows[_popLocAcIdx].scrollIntoView({ block: 'nearest' });
+}
+
+function rtPopLocAcPick(value) {
+  const input = document.getElementById('rt-popLocation');
+  if (input) input.value = value;
+  rtPopLocAcClose();
+  rtPopLocValidate();
+}
+
+/* Bound once; the input lives in the static client modal markup. */
+function rtPopLocAcBind() {
+  const input = document.getElementById('rt-popLocation');
+  const ac    = document.getElementById('rt-popLocAc');
+  if (!input || !ac || input.dataset.acReady) return;
+  input.dataset.acReady = '1';
+
+  const refresh = async () => {
+    const q = input.value;
+    if (q.trim().length < 2) { rtPopLocAcClose(); rtPopLocValidate(); return; }
     if (!_popLocations) {
-      const r = await fetch('/api/pop-locations');
-      _popLocations = await r.json();
+      ac.innerHTML = '<div class="rt-ac-empty">Loading locations…</div>';
+      ac.hidden = false;
+      await rtLoadPopLocations();
+      if (input.value !== q) return;                 // typed on while we waited
     }
-    dl.innerHTML = (_popLocations || []).map(l => `<option value="${escHtml(l)}">`).join('');
-  } catch { /* silently skip — user can still type manually */ }
+    const hits = rtPopLocMatches(q);
+    if (!hits.length) {
+      ac.innerHTML = '<div class="rt-ac-empty">No POP location matches that.</div>';
+      ac.hidden = false; _popLocAcIdx = -1;
+    } else {
+      rtPopLocAcRender(hits, q);
+    }
+    rtPopLocValidate();
+  };
+
+  input.addEventListener('input', refresh);
+  input.addEventListener('focus', () => { if (input.value.trim().length >= 2) refresh(); });
+  input.addEventListener('keydown', e => {
+    if (ac.hidden) return;
+    if (e.key === 'ArrowDown')      { e.preventDefault(); rtPopLocAcHighlight(1); }
+    else if (e.key === 'ArrowUp')   { e.preventDefault(); rtPopLocAcHighlight(-1); }
+    else if (e.key === 'Enter')     {
+      const row = ac.querySelectorAll('.rt-ac-item')[_popLocAcIdx];
+      if (row) { e.preventDefault(); rtPopLocAcPick(row.dataset.val); }
+    }
+    else if (e.key === 'Escape')    { rtPopLocAcClose(); }
+  });
+  ac.addEventListener('mousedown', e => {          // mousedown: fires before blur
+    const row = e.target.closest('.rt-ac-item');
+    if (row) { e.preventDefault(); rtPopLocAcPick(row.dataset.val); }
+  });
+  input.addEventListener('blur', () => setTimeout(() => { rtPopLocAcClose(); rtPopLocValidate(); }, 120));
 }
 
 let _popLanguages = null;
@@ -5067,7 +5197,8 @@ function rtShowAddClient() {
   document.getElementById('rt-saveClientBtn').dataset.mode = 'add';
   if (hasAA) rtLoadCampaigns();
   else document.getElementById('rt-campaignPickWrap').classList.add('hidden');
-  rtLoadPopLocations();
+  rtPopLocAcClose();
+  rtLoadPopLocations().then(rtPopLocValidate);
   rtLoadPopLanguages();
   rtOpenModal('rt-clientModal');
 }
@@ -5088,7 +5219,8 @@ function rtShowEditClient() {
   document.getElementById('rt-saveClientBtn').dataset.mode = 'edit';
   if (hasAA) rtLoadCampaigns(c.aaCampaignId);
   else document.getElementById('rt-campaignPickWrap').classList.add('hidden');
-  rtLoadPopLocations();
+  rtPopLocAcClose();
+  rtLoadPopLocations().then(rtPopLocValidate);
   rtLoadPopLanguages();
   rtOpenModal('rt-clientModal');
 }
