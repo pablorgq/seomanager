@@ -150,7 +150,14 @@ async function init() {
   await rtInit();
   coraInit();
   await weeklyLoadFromServer();
-  fetch('/api/auditdata').then(r => r.ok ? r.json() : {}).then(d => { auditData = d || {}; dbRender(); }).catch(() => {});
+  // Not awaited — but the Indexy tab may already be on screen by the time this
+  // lands (deep link / hard reload), and it renders straight from auditData, so
+  // re-run it once the data is actually here or the list shows up empty.
+  fetch('/api/auditdata').then(r => r.ok ? r.json() : {}).then(d => {
+    auditData = d || {};
+    dbRender();
+    if (document.querySelector('.tab-btn.active')?.dataset.tab === 'indexy') indexySyncClient();
+  }).catch(() => {});
   dbRender();
 
   // Hide POP key field when key is configured server-side
@@ -7003,7 +7010,9 @@ function indexyWireCheckboxes(clientId) {
   result?.querySelectorAll('.indexy-check').forEach(cb => {
     cb.addEventListener('change', () => {
       const li       = cb.closest('li');
-      const taskText = li.querySelector('label')?.textContent?.trim() || '';
+      // data-task is written by indexyRenderMd and is the key it looks up on
+      // re-render; textContent is only a fallback for older rendered markup.
+      const taskText = cb.dataset.task || li.querySelector('label')?.textContent?.trim() || '';
       li.classList.toggle('indexy-done', cb.checked);
 
       const rec = auditData[clientId] || {};
@@ -7172,8 +7181,13 @@ function indexyRenderMd(rawText, checkedItems = []) {
       if (cbMatch) {
         if (!inList) { out.push('<ul class="indexy-list">'); inList = true; }
         const taskText = cbMatch[2].replace(/\s*\[([^\]]{0,80})\]\s*$/, ' ($1)').trim();
-        const checked  = cbMatch[1].toLowerCase() === 'x' || checkedSet.has(taskText);
-        out.push(`<li class="${checked ? 'indexy-done' : ''}"><label><input type="checkbox" class="indexy-check"${checked ? ' checked' : ''}> ${inl(taskText)}</label></li>`);
+        // Identity key for "is this one ticked". It must be the same string the
+        // change handler stores, which reads the RENDERED text — so strip the
+        // bold markers here, exactly as inl() + textContent would. Emitted as
+        // data-task so both sides use one string by construction.
+        const taskKey  = taskText.replace(/\*\*(.+?)\*\*/g, '$1');
+        const checked  = cbMatch[1].toLowerCase() === 'x' || checkedSet.has(taskKey) || checkedSet.has(taskText);
+        out.push(`<li class="${checked ? 'indexy-done' : ''}"><label><input type="checkbox" class="indexy-check" data-task="${escHtml(taskKey)}"${checked ? ' checked' : ''}> ${inl(taskText)}</label></li>`);
         continue;
       }
       if (/^- /.test(line)) {
