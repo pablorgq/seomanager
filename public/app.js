@@ -99,9 +99,10 @@ const TAB_ROUTES = {
   indexy:    '/indexy',
   ahrefs:    '/ahrefs',
   artimage:  '/article-image',
+  artcontent:'/article-content',
 };
 const ROUTE_TABS  = Object.fromEntries(Object.entries(TAB_ROUTES).map(([tab, path]) => [path, tab]));
-const TOOLS_TABS  = new Set(['brands', 'images', 'artimage']);
+const TOOLS_TABS  = new Set(['brands', 'images', 'artimage', 'artcontent']);
 
 function switchTab(tab, { pushState = true } = {}) {
   if (!TAB_ROUTES[tab]) tab = 'dashboard';
@@ -116,6 +117,7 @@ function switchTab(tab, { pushState = true } = {}) {
   if (tab === 'indexy') { indexyRender(); indexySyncClient(); }
   if (tab === 'ahrefs') ahrefsRender();
   if (tab === 'artimage') aigRender();
+  if (tab === 'artcontent') acgRender();
   if (pushState) {
     const path = TAB_ROUTES[tab];
     if (window.location.pathname !== path) history.pushState({ tab }, '', path);
@@ -8040,6 +8042,782 @@ function aigRender() {
   document.getElementById('aig-downloadAllBtn').addEventListener('click', aigDownloadAll);
   document.getElementById('aig-copyAltBtn').addEventListener('click', (e) =>
     copyText(e.currentTarget, document.getElementById('aig-alt').value));
+}
+
+/* ═══════════════════════════════════════════════
+   ARTICLE CONTENT + IMAGES
+   Write a full article from an intention brief, then design and render the
+   images that belong inside it. Every image comes back with an alt line, a
+   caption and a recommended filename, and every image prompt is hardened
+   against text appearing in the frame.
+
+   Three model calls per run:
+     1. the article        — markdown, [IMAGE:n] placeholders, internal links inline
+     2. the image plan     — meta tags + one {brief, alt, caption, filename} per slot
+     3. link repair        — only when step 1 dropped a link (see acgAuditLinks)
+   then N image calls through the shared generateImage() fallback chain.
+
+   Session-only, like the Article Image tool: nothing is written to rank data
+   or uploaded to GCS.
+════════════════════════════════════════════════ */
+
+const ACG_MAX_IMAGES = 6;
+
+const ACG_TONES = {
+  informative:  'Informative',
+  conversational: 'Conversational',
+  professional: 'Professional',
+  authoritative: 'Authoritative / Expert',
+  friendly:     'Friendly / Approachable',
+};
+
+const ACG_MODELS = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'];
+
+/* Belt and braces on top of STYLE_MAP's trailing "no text". The image models
+   love to invent signage and UI chrome, and a single mention is not enough. */
+const ACG_NO_TEXT = 'Absolutely no text, letters, words, numbers, captions, signage, labels, logos, watermarks, charts, screens or user interface of any kind anywhere in the frame';
+
+let acgState = { article: null, images: [], meta: null, inputs: null, links: [] };
+
+/* ── helpers ── */
+
+function acgEscRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+function acgWordCount(s) { return (String(s || '').trim().match(/\S+/g) || []).length; }
+
+function acgStatus(id, html, kind) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const color = kind === 'ok' ? 'var(--green)' : kind === 'err' ? 'var(--red)' : 'var(--text-muted)';
+  el.innerHTML = html ? `<span style="color:${color}">${html}</span>` : '';
+}
+
+/* Chat call. Same key handling as aigChat — the server key when one is
+   configured, otherwise the browser's own via x-client-key. */
+async function acgChat(prompt, maxTokens, model) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (!hasServerKey) {
+    const k = apiKey || await Store.get('seomanager_api_key');
+    if (!k) throw new Error('Enter your OpenAI API key in Settings first.');
+    headers['x-client-key'] = k;
+  }
+  const res = await fetch('/api/openai/chat', {
+    method: 'POST', headers,
+    body: JSON.stringify({ model: model || 'gpt-4o', max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e?.error?.message || `HTTP ${res.status}`);
+  }
+  return ((await res.json()).choices?.[0]?.message?.content || '').trim();
+}
+
+/* Object-shaped sibling of parseJsonBlogs (which only recovers arrays). */
+function acgParseJson(raw) {
+  let s = String(raw || '').trim()
+    .replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+  try { return JSON.parse(s); } catch (_) {}
+  const m = s.match(/\{[\s\S]*\}/);
+  if (m) {
+    try { return JSON.parse(m[0].replace(/,\s*([}\]])/g, '$1')); } catch (_) {}
+  }
+  throw new Error('Could not read the image plan the model returned — try again.');
+}
+
+/* "https://site.com/page | anchor text", one per line. The separator can be a
+   pipe or a tab, and the two halves can be in either order — whichever side
+   looks like a URL wins. A bare URL gets an anchor derived from its slug. */
+function acgParseLinks(raw) {
+  return String(raw || '').split('\n').map(line => {
+    const parts = line.split(/\s*[|\t]\s*/).map(p => p.trim()).filter(Boolean);
+    if (!parts.length) return null;
+    const isUrl = p => /^(https?:\/\/|\/)/i.test(p);
+    let url, anchor;
+    if (parts.length === 1) {
+      if (!isUrl(parts[0])) return null;
+      url = parts[0];
+      const seg = url.split(/[?#]/)[0].split('/').filter(Boolean).pop() || '';
+      anchor = seg.replace(/\.\w+$/, '').replace(/[-_]+/g, ' ').trim() || url;
+    } else {
+      const urlIdx = isUrl(parts[0]) ? 0 : isUrl(parts[1]) ? 1 : -1;
+      if (urlIdx === -1) return null;
+      url = parts[urlIdx];
+      anchor = parts[1 - urlIdx];
+    }
+    return { url, anchor };
+  }).filter(Boolean);
+}
+
+/* Did the model actually place each link, with the anchor untouched? */
+function acgAuditLinks(md, links) {
+  return links.map(l => {
+    const uses  = (md.match(new RegExp('\\]\\(' + acgEscRe(l.url) + '\\)', 'g')) || []).length;
+    const exact = md.includes(`[${l.anchor}](${l.url})`);
+    return { ...l, uses, exact };
+  });
+}
+
+/* Model-suggested filenames are advisory — they arrive with extensions,
+   capitals and duplicates. Normalise, guarantee uniqueness, add the extension
+   the user actually asked for. */
+function acgFilename(raw, keyword, i, ext, taken) {
+  // slugify() substitutes "blog" for a falsy input, so only feed it real text —
+  // otherwise a missing suggestion silently becomes blog.jpg.
+  const cleaned = String(raw || '').replace(/\.(jpe?g|png|webp|gif)$/i, '').trim();
+  let base = cleaned ? slugify(cleaned).slice(0, 70) : '';
+  if (!base) base = `${(keyword ? slugify(keyword) : '') || 'article'}-${i + 1}`;
+  let name = base, n = 2;
+  while (taken.has(name)) name = `${base}-${n++}`;
+  taken.add(name);
+  return `${name}.${ext}`;
+}
+
+function acgBuildImagePrompt({ brief, style, extra, negative }) {
+  const stylePrompt = STYLE_MAP[style] || STYLE_MAP.realistic;
+  let p = `${sanitizeTopic(String(brief || '').trim())} ${stylePrompt}. ${ACG_NO_TEXT}.`;
+  if (extra && extra.trim())       p += ` ${extra.trim()}.`;
+  if (negative && negative.trim()) p += ` Avoid: ${negative.trim()}.`;
+  return p;
+}
+
+/* ── markdown rendering ──
+   Handles the subset the article prompt is allowed to emit: h1-h3, paragraphs,
+   bullet lists, bold, markdown links, and the [IMAGE:n] placeholders — which
+   become real <figure> blocks with the caption underneath.
+     src 'data' → the generated image (on-screen preview)
+     src 'file' → the recommended filename (WordPress-ready export) */
+function acgRenderMd(md, images, opts = {}) {
+  const { src = 'data', cls = true } = opts;
+  const c = n => (cls ? ` class="${n}"` : '');
+
+  let html = escHtml(String(md || ''));
+
+  html = html.replace(/^[ \t]*\[IMAGE:(\d+)\][ \t]*$/gm, (_, n) => {
+    const img = images[Number(n) - 1];
+    if (!img) return `<div class="acg-slot">Image ${escHtml(n)} — not generated</div>`;
+    const alt = escHtml(img.alt || '');
+    const body = src === 'file'
+      ? `<img src="${escHtml(img.filename)}" alt="${alt}" />`
+      : img.dataUrl
+        ? `<img src="${img.dataUrl}" alt="${alt}" loading="lazy" />`
+        : `<div class="acg-slot">Image ${escHtml(n)} — <code>${escHtml(img.filename)}</code></div>`;
+    const cap = img.caption ? `<figcaption${c('acg-cap')}>${escHtml(img.caption)}</figcaption>` : '';
+    return `<figure${c('acg-fig')}>${body}${cap}</figure>`;
+  });
+
+  html = html
+    .replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm,  '<h2>$1</h2>')
+    .replace(/^# (.+)$/gm,   '<h1>$1</h1>');
+
+  return html.split(/\n\n+/).map(block => {
+    block = block.trim();
+    if (!block) return '';
+    if (block.startsWith('<h') || block.startsWith('<figure') || block.startsWith('<div class="acg-slot"')) return block;
+    const rows = block.split('\n').map(r => r.trim()).filter(Boolean);
+    if (rows.length && rows.every(r => /^[-*•]\s+/.test(r))) {
+      return `<ul>${rows.map(r => `<li>${r.replace(/^[-*•]\s+/, '')}</li>`).join('')}</ul>`;
+    }
+    return `<p>${block.replace(/\n/g, ' ')}</p>`;
+  }).filter(Boolean).join('\n');
+}
+
+/* Markdown export — placeholders become a standard image tag plus an italic
+   caption line, which is how most markdown pipelines render captions. */
+function acgToMarkdown() {
+  const a = acgState.article;
+  if (!a) return '';
+  return a.markdown.replace(/^[ \t]*\[IMAGE:(\d+)\][ \t]*$/gm, (_, n) => {
+    const im = acgState.images[Number(n) - 1];
+    if (!im) return '';
+    return `![${im.alt || ''}](${im.filename})` + (im.caption ? `\n*${im.caption}*` : '');
+  }).trim();
+}
+
+function acgToHtml() {
+  const a = acgState.article;
+  if (!a) return '';
+  return acgRenderMd(a.markdown, acgState.images, { src: 'file', cls: false });
+}
+
+/* ── step 1: the article ── */
+async function acgWriteArticle(input) {
+  const { keyword, intention, words, tone, language, model, instructions, links, imgCount } = input;
+  const h2Target = Math.max(3, Math.min(8, Math.round(words / 250)));
+
+  const linkBlock = links.length ? `
+── INTERNAL LINKS — MANDATORY ───────────────────────────
+Place every one of these links in the article, each exactly ONCE, inside an
+existing sentence where it is genuinely relevant to what is being said.
+Use the anchor text EXACTLY as written — do not reword it, pluralise it,
+capitalise it differently or extend it. Markdown format: [anchor](url)
+${links.map(l => `- [${l.anchor}](${l.url})`).join('\n')}
+Never put two of these links in the same paragraph. Never repeat a URL.
+Never invent links that are not on this list.
+` : '';
+
+  const imgBlock = imgCount > 0 ? `
+── IMAGE PLACEHOLDERS ───────────────────────────────────
+Insert exactly ${imgCount} placeholder${imgCount > 1 ? 's' : ''}, each alone on its own line with a blank
+line above and below, numbered in order: ${Array.from({ length: imgCount }, (_, i) => `[IMAGE:${i + 1}]`).join(' ')}
+- [IMAGE:1] is the lead image: place it after the introduction and before the first ## heading.
+${imgCount > 1 ? `- The remaining ${imgCount - 1} go directly beneath a ## heading — pick the ${imgCount - 1} most visual sections.` : ''}
+- Never put two placeholders in the same section, and never inside a list or sentence.
+- Write nothing else on the placeholder line: no caption, no description.
+` : '';
+
+  const prompt = `You are an expert SEO content writer. Write a complete, publish-ready article in ${language}.
+
+── BRIEF ────────────────────────────────────────────────
+MAIN KEYWORD: "${keyword}"
+WHAT THIS ARTICLE IS FOR: ${intention}
+TARGET LENGTH: about ${words} words — stay within 10% of it
+TONE: ${ACG_TONES[tone] || tone}
+${linkBlock}${imgBlock}${instructions ? `
+── CONTENT INSTRUCTIONS — follow these exactly ──────────
+${instructions}
+` : ''}
+── KEYWORD USE ──────────────────────────────────────────
+- The main keyword must appear in the H1, in the first 100 words, and in at least one H2.
+- Use it naturally through the body plus close variations — never stuff it.
+${AG_TRUST_RULES}
+
+── FORMAT ───────────────────────────────────────────────
+- Open with one "# " H1 containing the main keyword, then a 2-3 sentence introduction.
+- Write ${h2Target} "## " H2 sections with descriptive, specific headings.
+- Prefer flowing paragraphs; use a markdown bullet list only where the content is a genuine enumeration.
+- Close with a short conclusion paragraph.
+- Output ONLY the article markdown. No code fences, no preamble, no notes about these instructions.
+- Do NOT mention SEO, word counts, or the fact that you were briefed.`;
+
+  return await acgChat(prompt, Math.min(12000, Math.round(words * 2.4) + 800), model);
+}
+
+/* ── step 3: link repair ──
+   Runs only for links step 1 failed to place. Constrained to insertion so the
+   article we already word-counted and rendered does not shift underneath us. */
+async function acgRepairLinks(markdown, missing, model) {
+  const prompt = `Below is a finished markdown article. Insert the following internal links into it, each exactly once, inside the most contextually relevant sentence that already exists.
+
+LINKS TO INSERT — use the anchor text exactly as written, markdown format [anchor](url):
+${missing.map(l => `- [${l.anchor}](${l.url})`).join('\n')}
+
+Rules:
+- Change nothing else. No rewording, no new sentences, no new paragraphs, no removed content.
+- Keep every existing heading, list, link and [IMAGE:n] placeholder exactly where it is.
+- If an anchor phrase already appears in the text, wrap that occurrence rather than adding words.
+
+Return the FULL article markdown. No code fences, no commentary.
+
+ARTICLE:
+${markdown}`;
+  const out = await acgChat(prompt, Math.min(12000, Math.round(acgWordCount(markdown) * 2.4) + 800), model);
+  return out.replace(/^```(?:markdown)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+}
+
+/* ── step 2: meta tags + the image plan ── */
+async function acgPlanImages(markdown, input, slotCount) {
+  const { keyword, model } = input;
+  const prompt = `Below is a finished article. Produce its meta tags${slotCount ? `, and design the image that belongs at each [IMAGE:n] placeholder` : ''}.
+
+MAIN KEYWORD: "${keyword}"
+
+Return ONLY a JSON object — no code fences, no commentary:
+{
+  "metaTitle": "max 60 characters, includes the main keyword, compelling",
+  "metaDescription": "max 155 characters, includes the main keyword, describes the value of reading",
+  "slug": "lowercase-hyphenated-url-slug-from-the-keyword",
+  "images": [${slotCount ? `
+    {
+      "n": 1,
+      "brief": "2-3 sentences describing ONE photograph or illustration for this exact section. Describe only what is VISIBLE: subject, setting, action, mood, lighting, composition. There must be no text, lettering, signage, logos, screens, charts or user interface anywhere in the frame — do not describe any.",
+      "alt": "max 125 characters. Plainly describe what the image shows. Work the topic in naturally where it fits. No 'image of' or 'photo of', no quotes, no trailing period.",
+      "caption": "one sentence shown beneath the image for the reader. Add context or insight the alt text does not — never restate the alt wording.",
+      "filename": "lowercase-hyphenated-descriptive-name, 3 to 6 words, no file extension"
+    }` : ''}
+  ]
+}
+${slotCount ? `Return exactly ${slotCount} image object${slotCount > 1 ? 's' : ''}, one per placeholder, in order, with "n" matching the placeholder number. Each image must be visually distinct from the others.` : 'Return "images" as an empty array.'}
+
+ARTICLE:
+${markdown}`;
+
+  const raw = await acgChat(prompt, 400 + slotCount * 320, model);
+  const data = acgParseJson(raw);
+  return {
+    metaTitle: String(data.metaTitle || '').trim(),
+    metaDescription: String(data.metaDescription || '').trim(),
+    slug: slugify(data.slug || keyword),
+    images: Array.isArray(data.images) ? data.images : [],
+  };
+}
+
+/* ── the run ── */
+function acgReadInputs() {
+  const v = id => (document.getElementById(id)?.value || '').trim();
+  const words = Math.max(200, Math.min(5000, parseInt(document.getElementById('acg-words').value) || 1200));
+  return {
+    keyword:      v('acg-keyword'),
+    intention:    v('acg-intention'),
+    words,
+    tone:         v('acg-tone'),
+    language:     v('acg-language') || 'English',
+    model:        v('acg-model'),
+    instructions: v('acg-instructions'),
+    links:        acgParseLinks(v('acg-links')),
+    imgCount:     Math.max(0, Math.min(ACG_MAX_IMAGES, parseInt(document.getElementById('acg-imgCount').value) || 0)),
+    style:        v('acg-style'),
+    ratioKey:     v('acg-ratio'),
+    format:       v('acg-format'),
+    extra:        v('acg-extra'),
+    negative:     v('acg-negative'),
+    renderImages: document.getElementById('acg-renderImages').checked,
+  };
+}
+
+async function acgRun() {
+  const input = acgReadInputs();
+  if (!input.keyword)   { acgStatus('acg-runStatus', 'Enter a main keyword first.'); return; }
+  if (!input.intention) { acgStatus('acg-runStatus', 'Describe what the article is for first.'); return; }
+
+  const btn = document.getElementById('acg-runBtn');
+  btn.disabled = true; btn.textContent = 'Writing…';
+  document.getElementById('acg-output').classList.add('hidden');
+  acgState = { article: null, images: [], meta: null, inputs: input, links: [] };
+
+  try {
+    acgStatus('acg-runStatus', `Writing the article (~${input.words} words)…`);
+    let markdown = (await acgWriteArticle(input))
+      .replace(/^```(?:markdown)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+
+    // Repair any internal link the writer dropped, before anything else reads
+    // the markdown — one attempt, and we keep the original if it comes back wrong.
+    let audit = acgAuditLinks(markdown, input.links);
+    const missing = audit.filter(l => !l.exact);
+    if (missing.length) {
+      acgStatus('acg-runStatus', `Placing ${missing.length} internal link${missing.length > 1 ? 's' : ''} the writer missed…`);
+      try {
+        const repaired = await acgRepairLinks(markdown, missing, input.model);
+        const before = (markdown.match(/\[IMAGE:\d+\]/g) || []).length;
+        const after  = (repaired.match(/\[IMAGE:\d+\]/g) || []).length;
+        // Only accept the repair if it kept the article intact.
+        if (repaired && after === before && acgWordCount(repaired) >= acgWordCount(markdown) * 0.9) {
+          const reAudit = acgAuditLinks(repaired, input.links);
+          if (reAudit.filter(l => l.exact).length > audit.filter(l => l.exact).length) markdown = repaired;
+        }
+      } catch (_) { /* keep the original article — the audit below will flag it */ }
+      audit = acgAuditLinks(markdown, input.links);
+    }
+
+    const slotNums  = [...new Set((markdown.match(/\[IMAGE:(\d+)\]/g) || []).map(s => parseInt(s.match(/\d+/)[0])))].sort((a, b) => a - b);
+    const slotCount = slotNums.length;
+
+    acgStatus('acg-runStatus', slotCount ? 'Designing the images, alt text and captions…' : 'Writing the meta tags…');
+    let plan;
+    try {
+      plan = await acgPlanImages(markdown, input, slotCount);
+    } catch (e) {
+      plan = { metaTitle: '', metaDescription: '', slug: slugify(input.keyword), images: [] };
+      acgStatus('acg-runStatus', `⚠ Image plan failed (${escHtml(e.message)}) — using fallbacks.`);
+    }
+
+    const ext   = input.format === 'png' ? 'png' : 'jpg';
+    const taken = new Set();
+    acgState.images = slotNums.map((n, i) => {
+      const p = plan.images.find(x => Number(x.n) === n) || plan.images[i] || {};
+      return {
+        n,
+        brief:    String(p.brief || `A scene illustrating ${input.keyword}.`).trim(),
+        alt:      String(p.alt || `${input.keyword} — image ${i + 1}`).replace(/^["']|["']$/g, '').replace(/\.$/, '').slice(0, 125),
+        caption:  String(p.caption || '').replace(/^["']|["']$/g, '').trim(),
+        filename: acgFilename(p.filename, input.keyword, i, ext, taken),
+        dataUrl:  null,
+      };
+    });
+
+    acgState.article = { markdown, wordCount: acgWordCount(markdown.replace(/\[IMAGE:\d+\]/g, '')) };
+    acgState.meta = plan;
+    acgState.links = audit;
+
+    acgRenderOutput();
+    document.getElementById('acg-output').classList.remove('hidden');
+    acgStatus('acg-runStatus', `✓ ${acgState.article.wordCount} words written.`, 'ok');
+
+    if (slotCount && input.renderImages) await acgGenerateImages();
+  } catch (e) {
+    acgStatus('acg-runStatus', `Error: ${escHtml(e.message)}`, 'err');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Write article + images';
+  }
+}
+
+/* ── image generation ── */
+async function acgGenerateImages() {
+  if (!acgState.images.length) return;
+  const input = acgState.inputs;
+
+  let key;
+  try { key = await getApiKey(); }
+  catch (e) { acgStatus('acg-imgStatus', escHtml(e.message), 'err'); return; }
+
+  const cfg = AIG_RATIOS[input.ratioKey] || AIG_RATIOS['16:9'];
+  const ext = input.format === 'png' ? 'png' : 'jpg';
+  const btn = document.getElementById('acg-imgBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; }
+  acgStatus('acg-imgStatus', `Generating ${acgState.images.length} image${acgState.images.length > 1 ? 's' : ''} at ${cfg.label}…`);
+
+  const tasks = acgState.images.map((img, i) => async () => {
+    const cell = document.getElementById(`acg-imgcell-${i}`);
+    if (cell) cell.innerHTML = '<div class="spinner"></div>';
+    const prompt = acgBuildImagePrompt({ brief: img.brief, style: input.style, extra: input.extra, negative: input.negative });
+    img.prompt = prompt;
+    try {
+      const raw = await generateImage(key, prompt, cfg.size);
+      const out = await aigCropToRatio(raw, cfg.ratio, ext);
+      img.dataUrl = out.dataUrl; img.width = out.width; img.height = out.height;
+      if (cell) cell.innerHTML = `<img src="${out.dataUrl}" alt="${escHtml(img.alt)}" loading="lazy" />`;
+    } catch (e) {
+      img.error = e.message;
+      if (cell) cell.innerHTML = `<div class="img-error">⚠ ${escHtml(e.message)}</div>`;
+    }
+  });
+
+  await runConcurrent(tasks, 2);
+
+  // Re-render so the per-image Download / Copy prompt buttons appear now that
+  // there is something to download. State carries the hand-edits, so nothing
+  // the user typed is lost — but the status line is rebuilt, hence the order.
+  const made = acgState.images.filter(i => i.dataUrl).length;
+  acgRenderOutput();
+  if (made) document.getElementById('acg-downloadAllBtn').classList.remove('hidden');
+  acgStatus('acg-imgStatus', made
+    ? `✓ ${made} of ${acgState.images.length} generated.`
+    : 'No images were generated — see the errors above.', made ? 'ok' : 'err');
+}
+
+async function acgDownloadAllImages() {
+  for (const img of acgState.images) {
+    if (!img.dataUrl) continue;
+    downloadDataUrl(img.dataUrl, img.filename);
+    await new Promise(r => setTimeout(r, 300));
+  }
+}
+
+/* ── output rendering ── */
+function acgRenderPreview() {
+  const el = document.getElementById('acg-preview');
+  if (el && acgState.article) el.innerHTML = acgRenderMd(acgState.article.markdown, acgState.images);
+}
+
+function acgRenderOutput() {
+  const { article, meta, images, links, inputs } = acgState;
+  const wcClass = Math.abs(article.wordCount - inputs.words) / inputs.words > 0.15 ? 'acg-warn' : 'acg-ok';
+
+  const metaHtml = `
+    <div class="acg-meta-row"><span class="acg-meta-k">Meta title</span>
+      <input type="text" class="form-input" id="acg-metaTitle" value="${escHtml(meta.metaTitle)}" />
+      <span class="acg-count ${meta.metaTitle.length > 60 ? 'acg-warn' : 'acg-ok'}">${meta.metaTitle.length}/60</span>
+      <button class="btn-sm" data-copy="acg-metaTitle">Copy</button></div>
+    <div class="acg-meta-row"><span class="acg-meta-k">Meta description</span>
+      <input type="text" class="form-input" id="acg-metaDesc" value="${escHtml(meta.metaDescription)}" />
+      <span class="acg-count ${meta.metaDescription.length > 155 ? 'acg-warn' : 'acg-ok'}">${meta.metaDescription.length}/155</span>
+      <button class="btn-sm" data-copy="acg-metaDesc">Copy</button></div>
+    <div class="acg-meta-row"><span class="acg-meta-k">URL slug</span>
+      <input type="text" class="form-input" id="acg-slug" value="${escHtml(meta.slug)}" />
+      <span class="acg-count acg-ok">${article.wordCount} words <span class="${wcClass}">(target ${inputs.words})</span></span>
+      <button class="btn-sm" data-copy="acg-slug">Copy</button></div>`;
+
+  const linksHtml = links.length ? `
+    <div class="form-group" style="margin-top:14px">
+      <label class="form-label">Internal links</label>
+      <div class="acg-links">${links.map(l => {
+        const state = l.exact ? 'ok' : l.uses ? 'warn' : 'err';
+        const note  = l.exact
+          ? (l.uses > 1 ? `placed ${l.uses}× — remove the extra` : 'placed with the exact anchor')
+          : l.uses ? 'placed, but the anchor text was changed' : 'not placed — add it by hand';
+        return `<div class="acg-link ${state}">
+          <span class="acg-link-dot"></span>
+          <code>${escHtml(l.anchor)}</code>
+          <span class="acg-link-url">${escHtml(l.url)}</span>
+          <span class="acg-link-note">${note}</span></div>`;
+      }).join('')}</div>
+    </div>` : '';
+
+  const imgHtml = images.length ? `
+    <div class="form-card">
+      <div class="acg-sub-head">
+        <h3 class="acg-h3">Images <span class="aig-hint">every prompt is written text-free — alt, caption and filename are ready to paste</span></h3>
+        <div class="form-actions" style="margin:0">
+          <button class="btn btn-secondary" id="acg-imgBtn">${images.some(i => i.dataUrl) ? 'Regenerate images' : 'Generate images'}</button>
+          <button class="btn btn-secondary hidden" id="acg-downloadAllBtn">Download all</button>
+          <div class="aig-status" id="acg-imgStatus" style="margin:0"></div>
+        </div>
+      </div>
+      ${images.map((img, i) => `
+        <div class="acg-img-card">
+          <div class="acg-img-cell" id="acg-imgcell-${i}">${
+            img.dataUrl ? `<img src="${img.dataUrl}" alt="${escHtml(img.alt)}" loading="lazy" />`
+                        : `<div class="acg-slot">Image ${img.n}</div>`}</div>
+          <div class="acg-img-fields">
+            <div class="acg-field"><label class="form-label">Alt text <span class="acg-count ${img.alt.length > 125 ? 'acg-warn' : 'acg-ok'}">${img.alt.length}/125</span></label>
+              <div class="aig-row"><input type="text" class="form-input" id="acg-alt-${i}" maxlength="125" value="${escHtml(img.alt)}" />
+              <button class="btn-sm" data-copy="acg-alt-${i}">Copy</button></div></div>
+            <div class="acg-field"><label class="form-label">Caption</label>
+              <div class="aig-row"><input type="text" class="form-input" id="acg-cap-${i}" value="${escHtml(img.caption)}" />
+              <button class="btn-sm" data-copy="acg-cap-${i}">Copy</button></div></div>
+            <div class="acg-field"><label class="form-label">File name</label>
+              <div class="aig-row"><input type="text" class="form-input" id="acg-fn-${i}" value="${escHtml(img.filename)}" />
+              <button class="btn-sm" data-copy="acg-fn-${i}">Copy</button></div></div>
+            <div class="acg-field"><label class="form-label">Image brief <span class="aig-hint">edit, then regenerate</span></label>
+              <textarea class="form-textarea" id="acg-brief-${i}" rows="2">${escHtml(img.brief)}</textarea></div>
+            <div class="acg-img-actions">
+              <button class="btn-sm" data-regen="${i}">Regenerate this one</button>
+              ${img.dataUrl ? `<button class="btn-sm" data-dl="${i}">Download</button>` : ''}
+              ${img.prompt ? `<button class="btn-sm" data-prompt="${i}">Copy prompt</button>` : ''}
+            </div>
+          </div>
+        </div>`).join('')}
+    </div>` : '';
+
+  document.getElementById('acg-output').innerHTML = `
+    <div class="form-card">
+      <h3 class="acg-h3">Meta &amp; checks</h3>
+      ${metaHtml}
+      ${linksHtml}
+    </div>
+    ${imgHtml}
+    <div class="form-card">
+      <div class="acg-sub-head">
+        <h3 class="acg-h3">Article</h3>
+        <div class="form-actions" style="margin:0">
+          <button class="btn btn-secondary" id="acg-copyMdBtn">Copy Markdown</button>
+          <button class="btn btn-secondary" id="acg-copyHtmlBtn">Copy HTML</button>
+          <button class="btn btn-secondary" id="acg-copyTextBtn">Copy plain text</button>
+        </div>
+      </div>
+      <div class="acg-preview" id="acg-preview"></div>
+    </div>`;
+
+  acgRenderPreview();
+  acgWireOutput();
+}
+
+function acgWireOutput() {
+  const out = document.getElementById('acg-output');
+
+  out.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click', e => {
+    const src = document.getElementById(e.currentTarget.dataset.copy);
+    acgSyncEdits();
+    copyText(e.currentTarget, src ? src.value : '');
+  }));
+
+  out.querySelectorAll('[data-dl]').forEach(b => b.addEventListener('click', e => {
+    acgSyncEdits();
+    const img = acgState.images[Number(e.currentTarget.dataset.dl)];
+    if (img?.dataUrl) downloadDataUrl(img.dataUrl, img.filename);
+  }));
+
+  out.querySelectorAll('[data-prompt]').forEach(b => b.addEventListener('click', e => {
+    const img = acgState.images[Number(e.currentTarget.dataset.prompt)];
+    copyText(e.currentTarget, img?.prompt || '');
+  }));
+
+  out.querySelectorAll('[data-regen]').forEach(b => b.addEventListener('click', e => {
+    acgSyncEdits();
+    acgRegenerateOne(Number(e.currentTarget.dataset.regen), e.currentTarget);
+  }));
+
+  document.getElementById('acg-imgBtn')?.addEventListener('click', () => { acgSyncEdits(); acgGenerateImages(); });
+  document.getElementById('acg-downloadAllBtn')?.addEventListener('click', () => { acgSyncEdits(); acgDownloadAllImages(); });
+  document.getElementById('acg-copyMdBtn').addEventListener('click', e => { acgSyncEdits(); copyText(e.currentTarget, acgToMarkdown()); });
+  document.getElementById('acg-copyHtmlBtn').addEventListener('click', e => { acgSyncEdits(); copyText(e.currentTarget, acgToHtml()); });
+  document.getElementById('acg-copyTextBtn').addEventListener('click', e => {
+    acgSyncEdits();
+    const plain = acgState.article.markdown
+      .replace(/^[ \t]*\[IMAGE:\d+\][ \t]*$/gm, '')
+      .replace(/\[([^\]\n]+)\]\([^)\s]+\)/g, '$1')
+      .replace(/^#{1,3} /gm, '').replace(/\*\*/g, '')
+      .replace(/\n{3,}/g, '\n\n').trim();
+    copyText(e.currentTarget, plain);
+  });
+
+  // Live character counter in each alt field's label.
+  acgState.images.forEach((_, i) => {
+    const el = document.getElementById(`acg-alt-${i}`);
+    el?.addEventListener('input', () => {
+      const counter = el.closest('.acg-field')?.querySelector('.acg-count');
+      if (!counter) return;
+      counter.textContent = `${el.value.length}/125`;
+      counter.className = `acg-count ${el.value.length > 125 ? 'acg-warn' : 'acg-ok'}`;
+    });
+  });
+}
+
+/* Pull any hand-edits out of the inputs before we copy, export or regenerate —
+   the fields are the source of truth once the user has touched them. */
+function acgSyncEdits() {
+  acgState.images.forEach((img, i) => {
+    const alt = document.getElementById(`acg-alt-${i}`);
+    const cap = document.getElementById(`acg-cap-${i}`);
+    const fn  = document.getElementById(`acg-fn-${i}`);
+    const br  = document.getElementById(`acg-brief-${i}`);
+    if (alt) img.alt = alt.value.trim();
+    if (cap) img.caption = cap.value.trim();
+    if (fn)  img.filename = fn.value.trim();
+    if (br)  img.brief = br.value.trim();
+  });
+  if (acgState.meta) {
+    const mt = document.getElementById('acg-metaTitle');
+    const md = document.getElementById('acg-metaDesc');
+    const sl = document.getElementById('acg-slug');
+    if (mt) acgState.meta.metaTitle = mt.value.trim();
+    if (md) acgState.meta.metaDescription = md.value.trim();
+    if (sl) acgState.meta.slug = sl.value.trim();
+  }
+}
+
+async function acgRegenerateOne(i, btn) {
+  const img = acgState.images[i];
+  if (!img) return;
+  const input = acgState.inputs;
+  let key;
+  try { key = await getApiKey(); }
+  catch (e) { acgStatus('acg-imgStatus', escHtml(e.message), 'err'); return; }
+
+  const cfg  = AIG_RATIOS[input.ratioKey] || AIG_RATIOS['16:9'];
+  const ext  = input.format === 'png' ? 'png' : 'jpg';
+  const cell = document.getElementById(`acg-imgcell-${i}`);
+  btn.disabled = true;
+  if (cell) cell.innerHTML = '<div class="spinner"></div>';
+  try {
+    const prompt = acgBuildImagePrompt({ brief: img.brief, style: input.style, extra: input.extra, negative: input.negative });
+    img.prompt = prompt;
+    const out = await aigCropToRatio(await generateImage(key, prompt, cfg.size), cfg.ratio, ext);
+    img.dataUrl = out.dataUrl; img.width = out.width; img.height = out.height; img.error = null;
+    acgRenderOutput();
+    document.getElementById('acg-downloadAllBtn')?.classList.remove('hidden');
+  } catch (e) {
+    if (cell) cell.innerHTML = `<div class="img-error">⚠ ${escHtml(e.message)}</div>`;
+    btn.disabled = false;
+  }
+}
+
+/* ── the form ── */
+function acgRender() {
+  const root = document.getElementById('acg-root');
+  if (!root || root.dataset.ready) return;   // keep results when switching tabs
+  root.dataset.ready = '1';
+
+  const styleOpts = Object.entries(AIG_STYLE_GROUPS).map(([group, opts]) =>
+    `<optgroup label="${group}">` +
+    Object.entries(opts).map(([v, l]) => `<option value="${v}">${l}</option>`).join('') +
+    '</optgroup>').join('');
+  const ratioOpts = Object.entries(AIG_RATIOS).map(([k, c]) => `<option value="${k}">${c.label}</option>`).join('');
+  const toneOpts  = Object.entries(ACG_TONES).map(([k, l]) => `<option value="${k}">${l}</option>`).join('');
+  const modelOpts = ACG_MODELS.map(m => `<option value="${m}">${m}</option>`).join('');
+
+  root.innerHTML = `
+    <div class="db-header">
+      <h2 class="db-title">Article Content</h2>
+      <p class="db-sub">Set the intention, keyword and length — get a full article with its images generated in place, each one text-free and delivered with alt text, a caption and a recommended file name.</p>
+    </div>
+
+    <div class="form-card">
+      <div class="acg-grid-2">
+        <div class="form-group">
+          <label class="form-label">Main keyword</label>
+          <input type="text" id="acg-keyword" class="form-input" placeholder="e.g. cold plunge recovery" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Word count</label>
+          <input type="number" id="acg-words" class="form-input" min="200" max="5000" step="100" value="1200" />
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Article intention <span class="aig-hint">what it is for, who it is for, the angle, what the reader should do next</span></label>
+        <textarea id="acg-intention" class="form-textarea" rows="3" placeholder="e.g. Convince busy office workers that a 3-minute cold plunge beats a long ice bath. Practical, evidence-led, no hype. Ends by steering them to our recovery programme."></textarea>
+      </div>
+
+      <div class="acg-grid-3">
+        <div class="form-group">
+          <label class="form-label">Tone</label>
+          <select id="acg-tone" class="form-select">${toneOpts}</select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Language</label>
+          <input type="text" id="acg-language" class="form-input" value="English" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Model</label>
+          <select id="acg-model" class="form-select">${modelOpts}</select>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Internal links <span class="aig-hint">one per line — <code>URL | anchor text</code>. Each is placed once, with the anchor exactly as you type it.</span></label>
+        <textarea id="acg-links" class="form-textarea" rows="4" placeholder="https://example.com/recovery-programme | our recovery programme&#10;https://example.com/blog/ice-bath-guide | full ice bath guide"></textarea>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Content instructions <span class="aig-hint">optional — one per line, followed while writing</span></label>
+        <textarea id="acg-instructions" class="form-textarea" rows="2" placeholder="e.g. Mention the 2024 Huberman study&#10;Never claim medical outcomes"></textarea>
+      </div>
+    </div>
+
+    <div class="form-card">
+      <h3 class="acg-h3">Images</h3>
+      <div class="acg-grid-4">
+        <div class="form-group">
+          <label class="form-label">How many</label>
+          <input type="number" id="acg-imgCount" class="form-input" min="0" max="${ACG_MAX_IMAGES}" value="3" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Visual style</label>
+          <select id="acg-style" class="form-select">${styleOpts}</select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Aspect ratio</label>
+          <select id="acg-ratio" class="form-select">${ratioOpts}</select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Format</label>
+          <select id="acg-format" class="form-select">
+            <option value="jpg">JPG</option>
+            <option value="png">PNG</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Extra direction <span class="aig-hint">optional — applies to every image</span></label>
+        <input type="text" id="acg-extra" class="form-input" placeholder="e.g. cool blue palette, shot on 35mm" />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Avoid</label>
+        <textarea id="acg-negative" class="form-textarea" rows="2">${escHtml(IMG_DEFAULT_NEGATIVE)}</textarea>
+      </div>
+
+      <label class="acg-check">
+        <input type="checkbox" id="acg-renderImages" checked />
+        <span>Render the image files too <span class="aig-hint">off = plan only: you still get the prompt, alt, caption and file name for each slot</span></span>
+      </label>
+
+      <div class="form-actions">
+        <button class="btn btn-primary" id="acg-runBtn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+          Write article + images
+        </button>
+        <div class="aig-status" id="acg-runStatus" style="margin:0"></div>
+      </div>
+    </div>
+
+    <div id="acg-output" class="hidden"></div>`;
+
+  document.getElementById('acg-runBtn').addEventListener('click', acgRun);
 }
 
 /* ── START ── */
