@@ -1161,6 +1161,20 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
    visually welded together as one block. */
 .gsc-ai-todo { padding: 12px 0 4px; margin-top: 6px; border-top: 1px solid var(--border); }
 .gsc-ai-todolist > .gsc-ai-todo:first-child { border-top: none; margin-top: 0; padding-top: 4px; }
+
+/* Finished copy — a title tag, a meta description — meant to be taken verbatim.
+   Indented to sit under the to-do it belongs to. */
+.gsc-ai-paste { margin: 6px 0 12px 18px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: var(--surface); }
+.gsc-ai-paste-head { display: flex; align-items: center; gap: 10px; padding: 6px 10px; background: var(--surface-alt); border-bottom: 1px solid var(--border); }
+.gsc-ai-paste-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--accent); }
+.gsc-ai-len { font-size: 11px; color: var(--text-muted); margin-right: auto; font-variant-numeric: tabular-nums; }
+.gsc-ai-len.over { color: #c48a00; font-weight: 600; }
+.gsc-ai-copy { padding: 3px 10px; font-size: 11px; font-weight: 600; border-radius: 4px; border: 1px solid var(--accent);
+               color: var(--accent); background: transparent; cursor: pointer; white-space: nowrap; }
+.gsc-ai-copy:hover  { background: var(--accent); color: #fff; }
+.gsc-ai-copy.copied { border-color: var(--success, #2d9e6b); color: var(--success, #2d9e6b); background: transparent; }
+.gsc-ai-pre { margin: 0; padding: 10px 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+              font-size: 12.5px; line-height: 1.55; color: var(--text-primary); white-space: pre-wrap; word-break: break-word; }
 .gsc-ai-todo label { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; font-size: 13px; color: var(--text-primary); font-weight: 600; }
 .gsc-ai-check { margin-top: 3px; accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
 .gsc-ai-done { opacity: .5; }

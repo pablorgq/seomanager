@@ -4759,6 +4759,25 @@ Under each of those three priority headings, list the to-dos. **Every to-do uses
 
 Aim for 3–5 items under 🔴, 3–5 under 🟡, and 2–4 under 🟢. Order them within each group by size of gain. Do not put anything in 🔴 unless the data shows a real, quantified loss.
 
+### Write the copy — never ask the reader to write it
+When the fix is a piece of text the reader would otherwise have to write themselves — a title tag, a meta description, an H1, an FAQ question and answer, anchor text, alt text — **write the finished text for them**. "Rewrite the title tag to lead with the keyword" is not an instruction they can act on; the actual title is. Put each finished piece in a fenced block tagged \`paste\`, with a label, directly after the to-do's four sub-bullets:
+
+\`\`\`paste Title tag
+DUI Lawyer Queens NY | Aggressive DUI Defense Attorney
+\`\`\`
+
+\`\`\`paste Meta description
+Charged with DUI in Queens? Get a former prosecutor on your side. Free case review, available 24/7. Call today before your first court date.
+\`\`\`
+
+Rules for these blocks:
+- Title tags: 50–60 characters, target keyword first.
+- Meta descriptions: 140–155 characters, one clear call to action.
+- Write real, finished copy. **Never use placeholders** — no [Brand], no [City], no "Your Firm Name", no blanks to fill in. If you don't know the brand name, write a line that reads correctly without it.
+- Base the wording on the actual query and what the data says the searcher wants.
+- Give the blocks for every to-do where text is the deliverable, and give more than one block when the fix needs more than one piece (title + meta, or several FAQs).
+- If the fix is not text — an internal link, a redirect, a tracking change — write no block. Do not invent one.
+
 ## 📊 Query Performance
 - Branded vs. non-branded split, and intent mix (transactional / informational / navigational), with counts.
 - CTR vs. position benchmarking against typical curves (pos 1 ≈ 25–35%, pos 2–3 ≈ 10–20%, pos 4–6 ≈ 5–10%, pos 7–10 ≈ 2–4%). Call out every query performing well below its position's expected CTR and say what usually causes that.
@@ -4918,6 +4937,7 @@ function gscShowReport(siteUrl, days) {
 
 function gscWireReport(container, key) {
   gscWireTabs(container);
+  gscWireCopy(container);
 
   container.querySelectorAll('.gsc-ai-check').forEach(cb => {
     cb.addEventListener('change', () => {
@@ -4958,6 +4978,18 @@ function gscWireTabs(container) {
   }
 }
 
+/* Read the copy off the <pre> at click time rather than stashing it in an
+   attribute — it is the same text the reader sees, with no escaping round-trip
+   to get wrong. */
+function gscWireCopy(container) {
+  container.querySelectorAll('.gsc-ai-copy').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const pre = btn.closest('.gsc-ai-paste')?.querySelector('.gsc-ai-pre');
+      if (pre) copyText(btn, pre.textContent);
+    });
+  });
+}
+
 /* A table wider than its panel scrolls, but silently — which is what made a
    clipped table read as a truncated report. Flag the ones that actually overflow
    so they can say so. */
@@ -4995,8 +5027,30 @@ function gscRenderMd(rawText, checkedItems = []) {
     const out   = [];
     const stack = [];          // open list tags, one per nesting level
     let tableLines = [];
+    let fence = null;          // open ```paste block, if any
 
     const closeLists = (depth = 0) => { while (stack.length > depth) out.push(`</${stack.pop().tag}>`); };
+
+    /* A ```paste block is finished copy — a title tag, a meta description — that
+       the reader is meant to take verbatim. Render it to be taken: monospaced,
+       one click to copy, and counted against the length Google actually shows,
+       since a title the reader has to re-trim isn't finished after all. */
+    const flushFence = () => {
+      if (!fence) return;
+      const text  = fence.lines.join('\n').replace(/^\n+|\n+$/g, '');
+      const label = fence.label || 'Ready to paste';
+      const limit = /title/i.test(label) ? 60 : /meta|descri/i.test(label) ? 155 : 0;
+      const over  = limit && text.length > limit;
+      const count = limit
+        ? `<span class="gsc-ai-len${over ? ' over' : ''}" title="${over ? 'Longer than Google usually shows' : 'Within the length Google usually shows'}">${text.length} / ${limit}</span>`
+        : `<span class="gsc-ai-len">${text.length} chars</span>`;
+      out.push(
+        '<div class="gsc-ai-paste"><div class="gsc-ai-paste-head">' +
+        `<span class="gsc-ai-paste-label">${escHtml(label)}</span>${count}` +
+        '<button type="button" class="gsc-ai-copy">Copy</button></div>' +
+        `<pre class="gsc-ai-pre">${escHtml(text)}</pre></div>`);
+      fence = null;
+    };
 
     const flushTable = () => {
       if (!tableLines.length) return;
@@ -5021,6 +5075,25 @@ function gscRenderMd(rawText, checkedItems = []) {
     for (const raw of lines) {
       const line    = raw.replace(/\t/g, '  ').trimEnd();
       const trimmed = line.trim();
+
+      // Inside a fence everything is literal until the closing ```, including
+      // lines that would otherwise look like headings or bullets.
+      if (fence) {
+        if (/^```/.test(trimmed)) flushFence();
+        else fence.lines.push(line.slice(Math.min(fence.indent, line.length - line.trimStart().length)));
+        continue;
+      }
+      const open = trimmed.match(/^```+\s*([A-Za-z0-9_-]+)?[ \t]*(.*)$/);
+      if (open) {
+        fence = {
+          // ```paste Title tag → label "Title tag". A bare ``` or a plain
+          // language tag gets the generic heading instead.
+          label:  (open[1] || '').toLowerCase() === 'paste' ? (open[2] || '').trim() : '',
+          indent: line.length - line.trimStart().length,
+          lines:  [],
+        };
+        continue;
+      }
 
       if (trimmed.startsWith('|')) {
         closeLists();
@@ -5081,17 +5154,23 @@ function gscRenderMd(rawText, checkedItems = []) {
     }
 
     flushTable();
+    flushFence();     // a run cut off inside a paste block still yields its copy
     closeLists();
     return out.join('');
   }
 
   // Split into tab sections at `##`. Anything before the first one is preamble.
+  // Fence-aware: pasted copy is literal text and may well contain a line that
+  // looks like a heading, which must not tear the report into a bogus section.
   const sections = [];
   let cur = { title: null, lines: [] };
+  let inFence = false;
   for (const raw of String(rawText).split('\n')) {
-    if (/^##\s+\S/.test(raw.trimEnd()) && !raw.trimEnd().startsWith('###')) {
+    const t = raw.trim();
+    if (t.startsWith('```')) inFence = !inFence;
+    if (!inFence && /^##\s+\S/.test(t) && !t.startsWith('###')) {
       if (cur.title !== null || cur.lines.some(l => l.trim())) sections.push(cur);
-      cur = { title: raw.trim().replace(/^##\s+/, ''), lines: [] };
+      cur = { title: t.replace(/^##\s+/, ''), lines: [] };
     } else {
       cur.lines.push(raw);
     }
@@ -8014,6 +8093,7 @@ async function ahrefsGenerateStrategy() {
     // Render markdown
     result.innerHTML = '<div class="gsc-ai-result"><div class="gsc-ai-content">' + gscRenderMd(text) + '</div></div>';
     gscWireTabs(result);
+    gscWireCopy(result);
   } catch (e) {
     result.innerHTML = `<div class="gsc-msg gsc-error">Error: ${escHtml(e.message)}</div>`;
   } finally {
