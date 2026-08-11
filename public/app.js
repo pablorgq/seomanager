@@ -4507,10 +4507,32 @@ function gscTagRow(row) {
   return '';
 }
 
-function gscAllTrackedKeywords() {
-  return (rtData?.clients ?? [])
-    .flatMap(c => (c.keywords || []).map(k => (k.keyword || '').toLowerCase().trim()))
-    .filter(Boolean);
+function gscHost(url) {
+  const s   = String(url || '').trim();
+  const raw = s.startsWith('sc-domain:') ? s.slice(10) : s;
+  if (!raw) return '';
+  try { return new URL(raw.includes('://') ? raw : 'https://' + raw).hostname.replace(/^www\./, '').toLowerCase(); }
+  catch { return raw.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].toLowerCase(); }
+}
+
+/* Rank Tracker keeps every client's keywords in one list, so cross-referencing
+   a GSC property against all of them made one client's keywords surface as
+   "not ranking" inside another client's audit. Bind the property to a single
+   client by domain, and say how sure we are — an unconfirmed guess must not be
+   passed to the model as fact.
+   Returns { client, matched, keywords }; matched is false when we fell back to
+   whichever client is selected in the header. */
+function gscTrackedForSite(siteUrl) {
+  const host    = gscHost(siteUrl);
+  const clients = rtData?.clients ?? [];
+  const kws     = c => (c?.keywords || []).map(k => (k.keyword || '').toLowerCase().trim()).filter(Boolean);
+
+  const byDomain = host && clients.find(c =>
+    gscHost(c.wpUrl) === host || (c.keywords || []).some(k => k.url && gscHost(k.url) === host));
+  if (byDomain) return { client: byDomain, matched: true, keywords: kws(byDomain) };
+
+  const active = clients.find(c => c.id === rtData?.activeClientId) || null;
+  return { client: active, matched: false, keywords: kws(active) };
 }
 
 async function gscCheckStatus() {
@@ -4568,7 +4590,8 @@ function gscRenderResults(siteUrl, days, startDate, endDate) {
     return;
   }
 
-  const tracked  = new Set(gscAllTrackedKeywords());
+  const rt       = gscTrackedForSite(siteUrl);
+  const tracked  = new Set(rt.keywords);
   const total    = gscRows.length;
   const totClicks = gscRows.reduce((s, r) => s + r.clicks, 0);
   const totImpr   = gscRows.reduce((s, r) => s + r.impressions, 0);
@@ -4634,7 +4657,7 @@ function gscRenderResults(siteUrl, days, startDate, endDate) {
         <div class="gsc-insight-card gsc-card-new">
           <div class="gsc-insight-n">${untracked.length}</div>
           <div class="gsc-insight-label">Untracked</div>
-          <div class="gsc-insight-desc">Clicks but not in Rank Tracker — add to monitoring</div>
+          <div class="gsc-insight-desc">Clicks but not in ${rt.client ? escHtml(rt.client.name) + '&rsquo;s' : ''} Rank Tracker — add to monitoring</div>
         </div>
       </div>
 
@@ -4657,6 +4680,11 @@ function gscRenderResults(siteUrl, days, startDate, endDate) {
         <button id="gsc-ai-btn" class="btn-sm btn-accent">Run Full SEO Audit</button>
         <span class="gsc-ai-note">Powered by Claude · turns your top queries into a ranked to-do list, each item with the reason behind it</span>
       </div>
+      <div class="gsc-ai-scope ${rt.client && !rt.matched ? 'gsc-ai-scope-warn' : ''}">${
+        rt.matched  ? `Cross-referencing Rank Tracker keywords for <strong>${escHtml(rt.client.name)}</strong> (matched to this property by domain).`
+        : rt.client ? `⚠ No Rank Tracker client is linked to this property. Using the selected client <strong>${escHtml(rt.client.name)}</strong> — if that is the wrong client, switch it in the header or the keyword comparison will be meaningless.`
+        :             'No Rank Tracker client selected — the audit will skip the keyword cross-check rather than guess.'
+      }</div>
       <div id="gsc-ai-result" class="gsc-ai-result" style="display:none"></div>
     </div>`;
 
@@ -4692,7 +4720,7 @@ async function gscRunAI(siteUrl, days) {
     return;
   }
 
-  const tracked   = gscAllTrackedKeywords();
+  const rt        = gscTrackedForSite(siteUrl);
   const rows      = gscRows.slice(0, 100);
   const tableText = rows.map(r =>
     `${r.keys?.[0] || ''} | clicks:${r.clicks} | imp:${r.impressions} | ctr:${(r.ctr*100).toFixed(1)}% | pos:${r.position.toFixed(1)}`
@@ -4751,6 +4779,8 @@ Queries pulling meaningful impressions with no obviously matching page, and quer
 ## 👁 Not Being Tracked
 Keywords earning clicks that are not in the Rank Tracker list. Short table: Keyword | Clicks | Position. One line on why each is worth monitoring.
 
+The Rank Tracker list belongs to a single client. Only compare against it if the data below confirms that client owns this property. If the link is unconfirmed, or there is no list, say the cross-check could not be made and move on. Never explain a tracked keyword's absence from this site's search data as a targeting or content problem — it may simply belong to a different client, and calling that a finding is worse than saying nothing.
+
 ## ℹ️ Data Notes
 What this audit could not see, and what would make the next one better — a longer date range, a comparison period, page-level or date-level dimensions, a bigger sample. Flag any finding above that rests on a sample too small to trust.
 
@@ -4769,8 +4799,13 @@ TOP QUERIES:
 Query | Clicks | Impressions | CTR | Avg Position
 ${tableText}
 
-KEYWORDS CURRENTLY IN RANK TRACKER:
-${tracked.slice(0, 40).join(', ') || 'none'}
+RANK TRACKER CROSS-CHECK: ${
+  rt.matched  ? `CONFIRMED — the keywords below belong to "${rt.client.name}", which is verified by domain as the owner of this property. Comparing them against this data is valid.`
+  : rt.client ? `UNCONFIRMED — the keywords below belong to "${rt.client.name}", the client currently selected in the app. Nothing verifies that this client owns ${siteUrl}. Do NOT report these keywords as missing, mistargeted or underperforming on this site; they may belong to an entirely different client. State that the cross-check could not be confirmed and skip the "Not Being Tracked" section.`
+  :             'NONE — no client is selected, so there are no tracked keywords to compare. Skip the "Not Being Tracked" section and say why.'
+}
+KEYWORDS ${rt.client ? `TRACKED FOR "${rt.client.name}"` : 'TRACKED'}:
+${rt.keywords.slice(0, 40).join(', ') || 'none'}
 
 Run the audit on this data in the exact format specified. Every to-do must carry its Problem, Why it's happening, Fix and Expected gain.`;
 

@@ -1109,8 +1109,14 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
 .gsc-insight-label { font-size: 12px; font-weight: 700; color: var(--text-primary); margin: 4px 0 2px; }
 .gsc-insight-desc  { font-size: 11px; color: var(--text-muted); line-height: 1.4; }
 
-.gsc-ai-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.gsc-ai-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
 .gsc-ai-note { font-size: 11px; color: var(--text-muted); }
+/* Which client's keywords this audit is comparing against — visible before the
+   run, because an audit cross-referencing the wrong client looks authoritative. */
+.gsc-ai-scope { font-size: 12px; color: var(--text-secondary); line-height: 1.5; background: var(--surface);
+                border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; margin-bottom: 16px; }
+.gsc-ai-scope-warn { color: #c48a00; background: rgba(232,168,56,.10); border-color: rgba(232,168,56,.3); }
+.gsc-ai-scope-warn strong { color: inherit; }
 .gsc-ai-result { background: var(--surface-alt); border: 1px solid var(--border); border-radius: 12px; padding: 20px 24px; margin-bottom: 20px; }
 .gsc-ai-h3 { font-size: 13px; font-weight: 700; color: var(--accent); margin: 14px 0 4px; text-transform: uppercase; letter-spacing: .05em; }
 .gsc-ai-h4 { font-size: 13px; font-weight: 700; color: var(--text-primary); margin: 18px 0 6px; }
