@@ -160,6 +160,11 @@ async function init() {
     dbRender();
     if (document.querySelector('.tab-btn.active')?.dataset.tab === 'indexy') indexySyncClient();
   }).catch(() => {});
+  // Saved GSC audits — needed before the GSC tab renders its results panel, but
+  // the panel only exists after a data load, so a late arrival is harmless.
+  fetch('/api/gscreports').then(r => r.ok ? r.json() : {}).then(d => {
+    gscReports = d || {};
+  }).catch(() => {});
   dbRender();
 
   // Hide POP key field when key is configured server-side
@@ -4468,6 +4473,22 @@ let gscStatus  = { configured: false, connected: false };
 let gscSites   = [];
 let gscRows    = [];        // raw GSC query rows
 let gscLoaded  = false;
+// Audits are expensive to generate and used to die on any re-render of the
+// results panel. Keyed by site + period so switching either shows the right one.
+// { [`${siteUrl}|${days}d`]: { ts, days, queries, truncated, text, checkedItems: string[] } }
+let gscReports = {};
+
+function gscReportKey(siteUrl, days) { return `${siteUrl}|${days}d`; }
+
+async function gscSaveReport(key) {
+  try {
+    await fetch('/api/gscreports', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ [key]: gscReports[key] }),
+    });
+  } catch (_) {}
+}
 
 function gscDateRange(days) {
   const end = new Date(); end.setDate(end.getDate() - 1);
@@ -4634,7 +4655,7 @@ function gscRenderResults(siteUrl, days, startDate, endDate) {
     <div class="gsc-stab-panel" id="gsc-tab-ai">
       <div class="gsc-ai-bar">
         <button id="gsc-ai-btn" class="btn-sm btn-accent">Run Full SEO Audit</button>
-        <span class="gsc-ai-note">Powered by Claude · analyses top queries against a 13-section senior SEO framework</span>
+        <span class="gsc-ai-note">Powered by Claude · turns your top queries into a ranked to-do list, each item with the reason behind it</span>
       </div>
       <div id="gsc-ai-result" class="gsc-ai-result" style="display:none"></div>
     </div>`;
@@ -4646,8 +4667,15 @@ function gscRenderResults(siteUrl, days, startDate, endDate) {
       document.querySelectorAll('.gsc-stab').forEach(b => b.classList.toggle('active', b === btn));
       document.querySelectorAll('.gsc-stab-panel').forEach(p =>
         p.classList.toggle('active', p.id === `gsc-tab-${stab}`));
+      // The AI panel was display:none when its tables were rendered, so their
+      // widths could not be measured until now.
+      if (stab === 'ai') document.querySelectorAll('.gsc-ai-content').forEach(gscMarkScrollables);
     });
   });
+
+  // This function rebuilds #gsc-results from scratch on every load and on tab
+  // activation, so the audit has to be put back or it disappears.
+  gscShowReport(siteUrl, days);
 }
 
 async function gscRunAI(siteUrl, days) {
@@ -4665,111 +4693,411 @@ async function gscRunAI(siteUrl, days) {
   }
 
   const tracked   = gscAllTrackedKeywords();
-  const top50     = gscRows.slice(0, 50);
-  const tableText = top50.map(r =>
+  const rows      = gscRows.slice(0, 100);
+  const tableText = rows.map(r =>
     `${r.keys?.[0] || ''} | clicks:${r.clicks} | imp:${r.impressions} | ctr:${(r.ctr*100).toFixed(1)}% | pos:${r.position.toFixed(1)}`
   ).join('\n');
 
-  const systemPrompt = `You are a senior SEO analyst with 10+ years of hands-on experience auditing Google Search Console (GSC) data for clients across e-commerce, SaaS, content, and local business sites. You think like a consultant, not a report generator: you prioritize findings by business impact, flag what's urgent vs. nice-to-have, and always translate raw numbers into a clear action plan a non-technical client can understand.
+  const systemPrompt = `You are a senior SEO analyst with 10+ years of hands-on experience auditing Google Search Console (GSC) data. You think like a consultant, not a report generator. The person reading this is not a technical SEO — they need to know WHAT to do, WHY the problem exists, and IN WHAT ORDER.
 
-You are precise, evidence-based, and never invent data. If a metric isn't in the data provided, say so explicitly rather than guessing. If a report is missing, note the gap and skip that section rather than fabricating numbers.
+You are precise and evidence-based, and you never invent data. If a metric isn't in the data provided, say so rather than guessing.
 
-Work through every section below that you have data for. For each finding, state: what you found → why it matters → recommended action. Use bullet points and tables where useful. Cite the actual numbers from the data for every claim.
+# The one rule that matters
+Every single thing you tell the reader to do must carry its reason. A recommendation with no diagnosis behind it is useless to them. Never write an action without explaining what in the data caused it and why that number is a problem.
 
-## 1. Performance Report — Query Analysis
-- Query segmentation: branded vs. non-branded, and by intent (transactional / informational / navigational).
-- CTR vs. position benchmarking: compare actual CTR against typical curves (pos 1 ≈ 25-35%, pos 2-3 ≈ 10-20%). Flag underperformers (title/meta issue) and overperformers at low positions (quick-win candidates).
-- Long-tail vs. head-term ratio: healthy growth usually shows long-tail queries outpacing head terms.
+# Output format — follow this exactly
 
-## 2. Striking-Distance Keywords
-- Queries at position 8-20 with meaningful impression volume (top 20% of impressions in this band).
-- Rank by estimated opportunity (impressions × realistic CTR uplift if moved to position 5 or better — label as estimate).
-- Note which already have a matching page vs. need new content.
+Open with one line, no heading:
+**Bottom line:** <one sentence naming the single biggest opportunity and its rough size>
 
-## 3. Keyword Cannibalization
-- Queries where multiple URLs from the site may be competing — infer from query patterns and position volatility.
-- Recommend consolidation, canonicalization, or internal linking fixes where likely.
+Then write these sections, each as a level-2 heading, in this order. Skip any section the data genuinely cannot support, and say why in Data Notes.
 
-## 4. Decay Patterns
-- Flag queries/keywords showing signs of click or impression decline based on current position and CTR data.
-- Distinguish real decay from likely seasonality where possible.
+## 🎯 Action Plan
 
-## 5. New/Unplanned Query Opportunities & Impression Spikes
-- Surface queries generating meaningful impressions with no obviously targeted page.
-- Flag queries where impressions are high but clicks are disproportionately low (possible algo testing, irrelevant match, or SERP feature stealing clicks).
+### The short version
+3–5 plain-language bullets. No jargon. What is working, what is broken, what the month should be spent on.
 
-## 6. Untracked Performers
-- Keywords getting clicks that aren't in the Rank Tracker list — recommend adding to monitoring.
+### 🔴 Do first
+### 🟡 Do next
+### 🟢 Do later
 
-## Output Structure
-1. **Executive Summary** (3-5 bullets, plain language, client-facing tone)
-2. **Findings by Category** (sections 1-6 above, only include where data supports a finding)
-3. **Priority Action Plan** — table with columns: Finding | Impact (High/Med/Low) | Effort (High/Med/Low) | Recommended Action
-4. **Data Gaps** — note any analysis that would benefit from a longer date range or a comparison period, and flag where the query sample size is too small to draw a reliable conclusion
+Under each of those three priority headings, list the to-dos. **Every to-do uses exactly this shape — a checkbox line, then four indented sub-bullets, all four every time, never fewer:**
 
-Be direct and specific — cite real numbers, not vague language. Never present an estimate as a fact; label projections as estimates. If the data shows a clearly positive trend, say so.`;
+- [ ] **<action, verb first, max 12 words>**
+  - **Problem:** <what the data shows — name the exact query and quote its real numbers>
+  - **Why it's happening:** <the diagnosis: the SEO reason those numbers look like that>
+  - **Fix:** <the concrete step, naming the page or query it applies to>
+  - **Expected gain:** <estimated clicks/month or position move, always labelled "(estimate)">
+
+Aim for 3–5 items under 🔴, 3–5 under 🟡, and 2–4 under 🟢. Order them within each group by size of gain. Do not put anything in 🔴 unless the data shows a real, quantified loss.
+
+## 📊 Query Performance
+- Branded vs. non-branded split, and intent mix (transactional / informational / navigational), with counts.
+- CTR vs. position benchmarking against typical curves (pos 1 ≈ 25–35%, pos 2–3 ≈ 10–20%, pos 4–6 ≈ 5–10%, pos 7–10 ≈ 2–4%). Call out every query performing well below its position's expected CTR and say what usually causes that.
+- Long-tail vs. head-term ratio.
+
+## 🔍 Striking Distance
+Queries at position 8–20 with real impression volume — the ones one push from page 1. Table, max 4 columns: Query | Position | Impressions | Est. clicks if moved to pos 5. Follow the table with 2–3 sentences on what these have in common and why they've stalled.
+
+## 🖱 CTR Problems
+Queries ranking well but under-earning clicks. For each, state the likely cause (weak title tag, missing meta description, SERP feature above you, intent mismatch, brand unfamiliarity) — the cause is the point of this section, not the list.
+
+## 🧩 Overlap & Cannibalization
+Query clusters that likely point at the same page or compete with each other, inferred from query wording and position patterns. Say what the consolidation or internal-linking fix is. If the data is query-only and you cannot confirm which URLs rank, say that plainly here.
+
+## 🆕 Untapped Opportunities
+Queries pulling meaningful impressions with no obviously matching page, and queries where impressions are high but clicks are disproportionately low. For each, say which one it is and why.
+
+## 👁 Not Being Tracked
+Keywords earning clicks that are not in the Rank Tracker list. Short table: Keyword | Clicks | Position. One line on why each is worth monitoring.
+
+## ℹ️ Data Notes
+What this audit could not see, and what would make the next one better — a longer date range, a comparison period, page-level or date-level dimensions, a bigger sample. Flag any finding above that rests on a sample too small to trust.
+
+# Style rules
+- Cite real numbers from the data for every claim. No vague language.
+- Label every projection as an estimate. Never present one as fact.
+- Keep markdown tables to 4 columns maximum and keep cells short — they are rendered in a narrow panel.
+- Use \`##\` for the section headings above and \`###\` for sub-headings. Never use \`####\`.
+- Say so when something in the data is genuinely healthy.`;
 
   const userMessage = `SITE: ${siteUrl}
 PERIOD: Last ${days} days
+QUERIES SUPPLIED: ${rows.length} (top by impressions, out of ${gscRows.length} returned)
 
-TOP QUERIES (by impressions):
+TOP QUERIES:
 Query | Clicks | Impressions | CTR | Avg Position
 ${tableText}
 
 KEYWORDS CURRENTLY IN RANK TRACKER:
 ${tracked.slice(0, 40).join(', ') || 'none'}
 
-Please run the full GSC audit on this data. Be specific — cite query names and actual numbers for every finding.`;
+Run the audit on this data in the exact format specified. Every to-do must carry its Problem, Why it's happening, Fix and Expected gain.`;
+
+  const key = gscReportKey(siteUrl, days);
+
+  result.style.display = '';
+  result.innerHTML = '<div class="gsc-msg">Claude is auditing your search data…</div>';
 
   try {
+    const { text, truncated } = await claudeChatFull({
+      model:      'claude-haiku-4-5',
+      max_tokens: 8192,
+      system:     systemPrompt,
+      messages:   [{ role: 'user', content: userMessage }],
+    }, {
+      onProgress: turn => {
+        result.innerHTML = `<div class="gsc-msg">Report is long — writing part ${turn + 1}…</div>`;
+      },
+    });
+
+    if (!text) {
+      result.innerHTML = '<div class="gsc-msg gsc-error">AI returned no content. Check ANTHROPIC_API_KEY is set in Railway and try again.</div>';
+      return;
+    }
+
+    gscReports[key] = {
+      ts:           new Date().toISOString(),
+      days,
+      queries:      rows.length,
+      truncated,
+      text,
+      checkedItems: [],
+    };
+    gscSaveReport(key);
+    gscShowReport(siteUrl, days);
+  } catch (e) {
+    result.innerHTML = `<div class="gsc-msg gsc-error">AI error: ${escHtml(e.message)}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = gscReports[key] ? 'Re-run Audit' : 'Run Full SEO Audit';
+  }
+}
+
+/* Anthropic stops mid-sentence and returns stop_reason:'max_tokens' when the
+   answer outgrows the budget. The old code rendered that as if it were the whole
+   report, which is exactly why long audits looked cut off. Re-send the partial
+   answer as a trailing assistant turn — the API treats that as a prefill and
+   carries on from the last character — then stitch the pieces back together.
+   Returns { text, truncated }; truncated stays true only if we ran out of turns. */
+async function claudeChatFull(body, { maxTurns = 4, onProgress } = {}) {
+  const base = body.messages;
+  let full = '', turns = 0, truncated = false;
+
+  while (true) {
+    // A prefill may not end in whitespace, and `full` is kept right-trimmed for
+    // exactly that reason — so it can be handed straight back as the prefill.
+    const messages = full ? [...base, { role: 'assistant', content: full }] : base;
+
     const r = await fetch('/api/claude/chat', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({
-        model:      'claude-haiku-4-5',
-        max_tokens: 4000,
-        system:     systemPrompt,
-        messages:   [{ role: 'user', content: userMessage }],
-      }),
+      body:    JSON.stringify({ ...body, messages }),
     });
     if (!r.ok) {
       let msg;
       try { const d = await r.json(); msg = d.error?.message; } catch {}
       throw new Error(msg || `HTTP ${r.status} — server may be restarting, try again`);
     }
-    const d = await r.json();
-    const text = d.content?.find(b => b.type === 'text')?.text || '';
-    if (!text) {
-      result.style.display = '';
-      result.innerHTML = '<div class="gsc-msg gsc-error">AI returned no content. Check ANTHROPIC_API_KEY is set in Railway and try again.</div>';
-      return;
-    }
-    result.style.display = '';
-    const inl = s => s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    let mdHtml = escHtml(text);
-    // Convert markdown tables before the newline→<br> pass
-    mdHtml = mdHtml.replace(/^\|.+\|\n\|[-| :]+\|\n(?:\|.+\|(?:\n|$))*/gm, blk => {
-      const lines = blk.trim().split('\n');
-      const hdrs = lines[0].split('|').slice(1, -1).map(s => s.trim());
-      const rows = lines.slice(2).filter(Boolean).map(r => r.split('|').slice(1, -1).map(s => s.trim()));
-      return '<div class="gsc-ai-table-wrap"><table class="gsc-ai-table"><thead><tr>' +
+
+    const d    = await r.json();
+    const part = d.content?.find(b => b.type === 'text')?.text || '';
+    // The prefill had its trailing newlines stripped (the API rejects them), so a
+    // continuation resuming at a block boundary can come back glued to the end of
+    // the previous line — which would break the heading or table it starts with.
+    const glued = full && !part.startsWith('\n') && /^(#{1,6} |[-*+] |\d+[.)] |\|)/.test(part);
+    full        = (full + (glued ? '\n\n' : '') + part).replace(/\s+$/, '');
+    truncated   = d.stop_reason === 'max_tokens';
+
+    if (!truncated || !part.trim() || ++turns >= maxTurns) return { text: full, truncated };
+    onProgress?.(turns);
+  }
+}
+
+/* ── Saved-audit rendering ──────────────────────────────────────────────── */
+
+function gscShowReport(siteUrl, days) {
+  const result = document.getElementById('gsc-ai-result');
+  const key    = gscReportKey(siteUrl, days);
+  const saved  = gscReports[key];
+  if (!result || !saved?.text) return;
+
+  const when = new Date(saved.ts);
+  const meta = `Generated ${when.toLocaleDateString()} ${when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` +
+               ` · ${saved.queries} queries · last ${saved.days} days`;
+  const warn = saved.truncated
+    ? '<div class="gsc-ai-warn">⚠ This report hit the length limit even after continuing. The last section may be incomplete — re-run to regenerate.</div>'
+    : '';
+
+  result.style.display = '';
+  result.innerHTML =
+    `<div class="gsc-ai-meta"><span>${escHtml(meta)}</span><span class="gsc-ai-progress" id="gsc-ai-progress"></span></div>` +
+    warn +
+    '<div class="gsc-ai-content">' + gscRenderMd(saved.text, saved.checkedItems || []) + '</div>';
+
+  gscWireReport(result, key);
+
+  const btn = document.getElementById('gsc-ai-btn');
+  if (btn) btn.textContent = 'Re-run Audit';
+}
+
+function gscWireReport(container, key) {
+  gscWireTabs(container);
+
+  container.querySelectorAll('.gsc-ai-check').forEach(cb => {
+    cb.addEventListener('change', () => {
+      cb.closest('li')?.classList.toggle('gsc-ai-done', cb.checked);
+      const rec = gscReports[key];
+      if (!rec) return;
+      const set = new Set(rec.checkedItems || []);
+      // data-task is written by gscRenderMd and is the same string it looks up
+      // on re-render, so ticked items survive a reload by construction.
+      if (cb.checked) set.add(cb.dataset.task); else set.delete(cb.dataset.task);
+      rec.checkedItems = [...set];
+      gscUpdateReportProgress(container);
+      gscSaveReport(key);
+    });
+  });
+
+  gscUpdateReportProgress(container);
+}
+
+function gscWireTabs(container) {
+  container.querySelectorAll('.gsc-ai-tab-nav .gsc-ai-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const scope = btn.closest('.gsc-ai-content');
+      if (!scope) return;
+      scope.querySelectorAll('.gsc-ai-tab').forEach(b => b.classList.remove('active'));
+      scope.querySelectorAll('.gsc-ai-panel').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      const panel = scope.querySelector('#' + btn.dataset.panel);
+      panel?.classList.add('active');
+      // Hidden panels have zero width, so the check can only run once visible.
+      if (panel) gscMarkScrollables(panel);
+    });
+  });
+  gscMarkScrollables(container);
+  if (!gscMarkScrollables._bound) {
+    window.addEventListener('resize', () => document.querySelectorAll('.gsc-ai-content').forEach(gscMarkScrollables));
+    gscMarkScrollables._bound = true;
+  }
+}
+
+/* A table wider than its panel scrolls, but silently — which is what made a
+   clipped table read as a truncated report. Flag the ones that actually overflow
+   so they can say so. */
+function gscMarkScrollables(scope) {
+  scope.querySelectorAll('.gsc-ai-table-wrap').forEach(wrap => {
+    if (!wrap.clientWidth) return;               // panel is hidden — re-checked on show
+    const over = wrap.scrollWidth > wrap.clientWidth + 2;
+    wrap.classList.toggle('is-scrollable', over);
+    wrap.previousElementSibling?.classList.toggle('on',
+      over && wrap.previousElementSibling.classList.contains('gsc-ai-scroll-hint'));
+  });
+}
+
+function gscUpdateReportProgress(container) {
+  const el = container.querySelector('#gsc-ai-progress');
+  if (!el) return;
+  const boxes = container.querySelectorAll('.gsc-ai-check');
+  if (!boxes.length) { el.textContent = ''; return; }
+  const done = [...boxes].filter(b => b.checked).length;
+  el.textContent = `${done} / ${boxes.length} to-dos done`;
+}
+
+/* Markdown → HTML for the AI report panels (GSC audit, Ahrefs strategy).
+   Deliberately narrow: it handles what these models actually emit — tables,
+   #–#### headings, rules, nested bullets, numbered lists and `- [ ]` to-dos —
+   and nothing else. Splits on `##` so a long audit becomes tabs instead of one
+   unreadable wall of text. `checkedItems` re-ticks to-dos on re-render. */
+function gscRenderMd(rawText, checkedItems = []) {
+  const checkedSet = new Set(checkedItems);
+  const inl = s => escHtml(s)
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`]+)`/g, '<code class="gsc-code">$1</code>');
+
+  function renderLines(lines) {
+    const out   = [];
+    const stack = [];          // open list tags, one per nesting level
+    let tableLines = [];
+
+    const closeLists = (depth = 0) => { while (stack.length > depth) out.push(`</${stack.pop().tag}>`); };
+
+    const flushTable = () => {
+      if (!tableLines.length) return;
+      const cells = l => l.split('|').slice(1, -1).map(s => s.trim());
+      const hdrs  = cells(tableLines[0]);
+      const rows  = tableLines.slice(1)
+        .filter(l => !/^\|[\s:|-]+\|$/.test(l))        // the |---|---| separator
+        .map(cells)
+        // A run that was cut off mid-table leaves a short final row; pad it so
+        // the columns still line up rather than collapsing the table.
+        .map(r => r.length < hdrs.length ? [...r, ...Array(hdrs.length - r.length).fill('')] : r);
+      out.push(
+        '<p class="gsc-ai-scroll-hint">⇄ Scroll sideways to see all columns</p>' +
+        '<div class="gsc-ai-table-wrap"><table class="gsc-ai-table"><thead><tr>' +
         hdrs.map(h => `<th>${inl(h)}</th>`).join('') +
         '</tr></thead><tbody>' +
         rows.map(r => '<tr>' + r.map(c => `<td>${inl(c)}</td>`).join('') + '</tr>').join('') +
-        '</tbody></table></div>';
-    });
-    mdHtml = mdHtml
-      .replace(/^## (.+)$/gm, '</div><h3 class="gsc-ai-h3">$1</h3><div class="gsc-ai-body">')
-      .replace(/^### (.+)$/gm, '<h4 class="gsc-ai-h4">$1</h4>')
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/\n/g, '<br>');
-    result.innerHTML = '<div class="gsc-ai-content">' + mdHtml + '</div>';
-  } catch (e) {
-    result.style.display = '';
-    result.innerHTML = `<div class="gsc-msg gsc-error">AI error: ${escHtml(e.message)}</div>`;
-  } finally {
-    btn.disabled = false; btn.textContent = 'Run Full SEO Audit';
+        '</tbody></table></div>');
+      tableLines = [];
+    };
+
+    for (const raw of lines) {
+      const line    = raw.replace(/\t/g, '  ').trimEnd();
+      const trimmed = line.trim();
+
+      if (trimmed.startsWith('|')) {
+        closeLists();
+        // A truncated last row can be missing its closing pipe — put it back so
+        // the cell split below doesn't silently drop the final column.
+        tableLines.push(trimmed.endsWith('|') ? trimmed : trimmed + '|');
+        continue;
+      }
+      if (tableLines.length) flushTable();
+
+      const h = trimmed.match(/^(#{1,6})\s+(.+)$/);
+      if (h) {
+        closeLists();
+        const lvl = Math.min(h[1].length, 4);
+        const tag = lvl <= 2 ? 'h3' : lvl === 3 ? 'h4' : 'h5';
+        out.push(`<${tag} class="gsc-ai-${tag}">${inl(h[2])}</${tag}>`);
+        continue;
+      }
+
+      if (/^([-*_])\1{2,}$/.test(trimmed)) { closeLists(); out.push('<hr class="gsc-ai-hr">'); continue; }
+
+      const li = line.match(/^( *)(?:([-*+])|(\d+)[.)])\s+(.+)$/);
+      if (li) {
+        const depth = Math.min(Math.floor(li[1].length / 2), 3) + 1;
+        const tag   = li[2] ? 'ul' : 'ol';
+        closeLists(depth);
+        while (stack.length < depth) {
+          stack.push({ tag, idx: out.length });
+          out.push(`<${tag} class="gsc-ai-list gsc-ai-list-${stack.length}">`);
+        }
+        const cb = li[4].match(/^\[([ xX])\]\s*(.*)$/);
+        if (cb) {
+          const taskText = cb[2].trim();
+          const taskKey  = taskText.replace(/\*\*(.+?)\*\*/g, '$1');
+          const checked  = cb[1].toLowerCase() === 'x' || checkedSet.has(taskKey);
+          // Only a list that actually holds to-dos drops its bullet markers —
+          // plain bullet lists in the same report still need theirs.
+          const open = stack[stack.length - 1];
+          if (!open.todo) {
+            open.todo = true;
+            out[open.idx] = out[open.idx].replace(/class="gsc-ai-list /, 'class="gsc-ai-list gsc-ai-todolist ');
+          }
+          out.push(
+            `<li class="gsc-ai-todo${checked ? ' gsc-ai-done' : ''}">` +
+            `<label><input type="checkbox" class="gsc-ai-check" data-task="${escHtml(taskKey)}"${checked ? ' checked' : ''}>` +
+            `<span>${inl(taskText)}</span></label></li>`);
+        } else {
+          out.push(`<li>${inl(li[4])}</li>`);
+        }
+        continue;
+      }
+
+      // An indented plain line right under a list item is a continuation of it.
+      if (stack.length && /^ {2,}\S/.test(line)) { out.push(`<li class="gsc-ai-cont">${inl(trimmed)}</li>`); continue; }
+
+      closeLists();
+      if (trimmed) out.push(`<p>${inl(trimmed)}</p>`);
+    }
+
+    flushTable();
+    closeLists();
+    return out.join('');
   }
+
+  // Split into tab sections at `##`. Anything before the first one is preamble.
+  const sections = [];
+  let cur = { title: null, lines: [] };
+  for (const raw of String(rawText).split('\n')) {
+    if (/^##\s+\S/.test(raw.trimEnd()) && !raw.trimEnd().startsWith('###')) {
+      if (cur.title !== null || cur.lines.some(l => l.trim())) sections.push(cur);
+      cur = { title: raw.trim().replace(/^##\s+/, ''), lines: [] };
+    } else {
+      cur.lines.push(raw);
+    }
+  }
+  if (cur.title !== null || cur.lines.some(l => l.trim())) sections.push(cur);
+
+  const preamble = sections.find(s => s.title === null);
+  const tabs     = sections.filter(s => s.title !== null);
+
+  if (!tabs.length) return renderLines(String(rawText).split('\n'));
+
+  const uid   = 'gtab' + Date.now().toString(36);
+  const parts = [];
+
+  if (preamble) {
+    const pre = renderLines(preamble.lines).trim();
+    if (pre) parts.push(`<div class="gsc-ai-preamble">${pre}</div>`);
+  }
+
+  // Long headings are fine in the panel but wreck the tab strip — trim the
+  // " — subtitle" tail and cap the rest.
+  const tabLabel = t => {
+    const short = t.replace(/\s*[—–-]\s*.+$/, '').trim() || t.trim();
+    return short.length > 26 ? short.slice(0, 25).trimEnd() + '…' : short;
+  };
+
+  parts.push('<div class="gsc-ai-tab-nav">');
+  tabs.forEach((s, i) => parts.push(
+    `<button class="gsc-ai-tab${i === 0 ? ' active' : ''}" data-panel="${uid}-${i}" title="${escHtml(s.title)}">${escHtml(tabLabel(s.title))}</button>`));
+  parts.push('</div>');
+
+  tabs.forEach((s, i) => {
+    parts.push(`<div class="gsc-ai-panel${i === 0 ? ' active' : ''}" id="${uid}-${i}">`);
+    // Only repeat the heading inside the panel when the tab strip had to shorten
+    // it — otherwise it just says the same thing twice.
+    if (tabLabel(s.title) !== s.title.trim()) parts.push(`<h3 class="gsc-ai-h3">${inl(s.title)}</h3>`);
+    parts.push(renderLines(s.lines));
+    parts.push('</div>');
+  });
+
+  return parts.join('');
 }
 
 async function gscRender() {
@@ -7649,7 +7977,8 @@ async function ahrefsGenerateStrategy() {
     if (!text) throw new Error('No response from Claude');
 
     // Render markdown
-    result.innerHTML = '<div class="gsc-ai-result">' + gscRenderMd(text) + '</div>';
+    result.innerHTML = '<div class="gsc-ai-result"><div class="gsc-ai-content">' + gscRenderMd(text) + '</div></div>';
+    gscWireTabs(result);
   } catch (e) {
     result.innerHTML = `<div class="gsc-msg gsc-error">Error: ${escHtml(e.message)}</div>`;
   } finally {

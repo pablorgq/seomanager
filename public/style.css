@@ -1113,9 +1113,52 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
 .gsc-ai-note { font-size: 11px; color: var(--text-muted); }
 .gsc-ai-result { background: var(--surface-alt); border: 1px solid var(--border); border-radius: 12px; padding: 20px 24px; margin-bottom: 20px; }
 .gsc-ai-h3 { font-size: 13px; font-weight: 700; color: var(--accent); margin: 14px 0 4px; text-transform: uppercase; letter-spacing: .05em; }
-.gsc-ai-h4 { font-size: 12px; font-weight: 600; color: var(--text-primary); margin: 10px 0 2px; }
+.gsc-ai-h4 { font-size: 13px; font-weight: 700; color: var(--text-primary); margin: 18px 0 6px; }
+.gsc-ai-h5 { font-size: 12px; font-weight: 600; color: var(--text-secondary); margin: 12px 0 4px; }
 .gsc-ai-body { font-size: 13px; color: var(--text-secondary); line-height: 1.6; }
-.gsc-ai-content > div:first-child { display: none; }
+.gsc-ai-content { font-size: 13px; color: var(--text-secondary); line-height: 1.6; }
+.gsc-ai-content p  { margin: 4px 0; }
+.gsc-ai-hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+
+/* Audit header: when it ran, and how much of the to-do list is ticked off. */
+.gsc-ai-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+               font-size: 11px; color: var(--text-muted); padding-bottom: 10px; margin-bottom: 12px; border-bottom: 1px solid var(--border); }
+.gsc-ai-progress { font-weight: 600; color: var(--accent); white-space: nowrap; }
+.gsc-ai-warn { font-size: 12px; color: #c48a00; background: rgba(232,168,56,.12); border: 1px solid rgba(232,168,56,.3);
+               border-radius: 6px; padding: 8px 12px; margin-bottom: 14px; }
+.gsc-ai-preamble { font-size: 14px; color: var(--text-primary); line-height: 1.6; margin-bottom: 14px; }
+.gsc-ai-preamble p { margin: 0; }
+
+/* Section tabs — the audit is long, so only one section is on screen at a time. */
+.gsc-ai-tab-nav { display: flex; gap: 2px; flex-wrap: wrap; padding: 4px 0 0; border-bottom: 1px solid var(--border); margin-bottom: 14px; }
+.gsc-ai-tab     { padding: 8px 14px; border: none; background: none; color: var(--text-muted); font-size: 13px; font-weight: 500;
+                  cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; border-radius: 4px 4px 0 0; }
+.gsc-ai-tab:hover  { color: var(--text-primary); background: var(--surface); }
+.gsc-ai-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.gsc-ai-panel        { display: none; }
+.gsc-ai-panel.active { display: block; }
+.gsc-ai-panel > .gsc-ai-h3:first-child { margin-top: 0; }
+
+/* Lists. Level 1 is the to-do itself; deeper levels are its Problem / Why / Fix
+   / Gain lines, indented and rule-free so the reasoning reads as one block. */
+.gsc-ai-content ul, .gsc-ai-content ol { margin: 4px 0 12px; padding: 0 0 0 18px; }
+.gsc-ai-content ul.gsc-ai-todolist { list-style: none; padding-left: 0; }
+.gsc-ai-content li { margin: 3px 0; }
+/* The Problem / Why / Fix / Gain lines are the whole point of a to-do — they get
+   full body contrast, not the muted treatment of an aside. */
+.gsc-ai-list-2, .gsc-ai-list-3, .gsc-ai-list-4 { margin: 4px 0 10px !important; font-size: 12.5px; color: var(--text-secondary); }
+.gsc-ai-list-2 > li { margin: 4px 0; }
+.gsc-ai-list-2 strong { color: var(--text-primary); }
+.gsc-ai-cont { list-style: none; color: var(--text-muted); font-size: 12.5px; }
+
+/* Separator sits ABOVE each to-do so the item and its four reason-lines stay
+   visually welded together as one block. */
+.gsc-ai-todo { padding: 12px 0 4px; margin-top: 6px; border-top: 1px solid var(--border); }
+.gsc-ai-todolist > .gsc-ai-todo:first-child { border-top: none; margin-top: 0; padding-top: 4px; }
+.gsc-ai-todo label { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; font-size: 13px; color: var(--text-primary); font-weight: 600; }
+.gsc-ai-check { margin-top: 3px; accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
+.gsc-ai-done { opacity: .5; }
+.gsc-ai-done > label span { text-decoration: line-through; }
 /* ── INDEXY ── */
 .indexy-client-select { padding: 7px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text-primary); font-size: 13px; min-width: 180px; }
 .indexy-form       { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 20px 24px; background: var(--surface-alt); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 12px; }
@@ -1192,9 +1235,18 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
 .gsc-stab.active { color: var(--accent); border-bottom-color: var(--accent); }
 .gsc-stab-panel        { display: none; }
 .gsc-stab-panel.active { display: block; }
+/* The table now fits the panel by default (cells wrap) and only scrolls when the
+   column min-widths genuinely can't fit. When that happens gscMarkScrollables()
+   sets .is-scrollable, which shows a hint — a clipped table should never be
+   mistaken for a truncated report. */
 .gsc-ai-table-wrap { overflow-x: auto; margin: 8px 0 16px; border-radius: 6px; border: 1px solid var(--border); }
-.gsc-ai-table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px; }
-.gsc-ai-table th, .gsc-ai-table td { padding: 7px 12px; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); text-align: left; vertical-align: top; white-space: normal; max-width: 280px; }
+.gsc-ai-table-wrap.is-scrollable { border-top-left-radius: 0; border-top-right-radius: 0; }
+.gsc-ai-scroll-hint { display: none; font-size: 11px; color: var(--text-muted); background: var(--surface);
+                      border: 1px solid var(--border); border-bottom: none; border-radius: 6px 6px 0 0;
+                      padding: 4px 10px; margin: 8px 0 0; }
+.gsc-ai-scroll-hint.on { display: block; }
+.gsc-ai-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.gsc-ai-table th, .gsc-ai-table td { padding: 7px 12px; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); text-align: left; vertical-align: top; white-space: normal; min-width: 72px; max-width: 320px; }
 .gsc-ai-table th:last-child, .gsc-ai-table td:last-child { border-right: none; }
 .gsc-ai-table thead th { background: var(--surface-2, var(--surface)); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); position: sticky; top: 0; }
 .gsc-ai-table tbody tr:last-child td { border-bottom: none; }

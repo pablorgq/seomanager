@@ -687,6 +687,30 @@ app.post('/api/auditdata', apiGuard, (req, res) => {
   res.json({ ok: true });
 });
 
+/* ─────────────────────────────────────────────
+   GSC AI REPORTS  (per site + period: audit markdown + ticked to-dos)
+   Same full-replace-by-key shape as /api/auditdata.
+───────────────────────────────────────────── */
+const GSCREPORTS_FILE = join(DATA_DIR, '.gscreports.json');
+function loadGscReports() {
+  if (!existsSync(GSCREPORTS_FILE)) return {};
+  try { return JSON.parse(readFileSync(GSCREPORTS_FILE, 'utf8')); }
+  catch { return {}; }
+}
+function saveGscReports(data) {
+  try { writeFileSync(GSCREPORTS_FILE, JSON.stringify(data)); }
+  catch (e) { console.warn('[gscreports] Failed to persist:', e.message); }
+}
+
+app.get('/api/gscreports', apiGuard, (req, res) => res.json(loadGscReports()));
+
+app.post('/api/gscreports', apiGuard, (req, res) => {
+  const body = req.body;
+  if (!body || typeof body !== 'object') return res.status(400).json({ error: { message: 'Invalid body.' } });
+  saveGscReports({ ...loadGscReports(), ...body });
+  res.json({ ok: true });
+});
+
 app.get('/api/weeklydata', apiGuard, (req, res) => {
   res.json(loadWeeklyData());
 });
