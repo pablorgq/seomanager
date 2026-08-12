@@ -1320,12 +1320,21 @@ function agHighlightTerms(html, termClassMap) {
 
 /* The target frequency band for one content-brief term. POP returns the bounds
    as min/max on some payloads and targetMin/targetMax on others — reading only
-   one pair silently scored every term against 0. */
+   one pair silently scored every term against 0.
+
+   POP hands back plenty of bands that open at zero — "0-1", "0-2" — and NLP
+   terms especially. A model reading "0-2 times" takes the zero: the term it was
+   asked to include never appears, and the term still counted as covered because
+   0 sat inside the band. If POP wants a term at all (max >= 1) the floor is 1,
+   so it has to be used and has to be earned. Bands POP zeroed out entirely
+   (max 0 — the term is not wanted) are left alone, otherwise the subheading
+   list, which is not filtered on max, would ask for "1-0 times". */
 function agTermBand(t) {
   const cb = t?.contentBrief || {};
   const num = v => (v == null || v === '' || isNaN(Number(v))) ? null : Number(v);
-  const min = num(cb.min) ?? num(cb.targetMin) ?? 0;
+  let min = num(cb.min) ?? num(cb.targetMin) ?? 0;
   const max = num(cb.max) ?? num(cb.targetMax) ?? num(cb.target) ?? 0;
+  if (max >= 1 && min < 1) min = 1;
   return { min, max };
 }
 
@@ -2390,9 +2399,11 @@ ${titleTerms.length ? titleTerms.map(t => `  "${t}"`).join('\n') : `  "${keyword
 H2 SUBHEADINGS — write exactly ${h2Target} H2s, distribute these terms across them:
 ${h2Lines || `  use: ${selectedVars.slice(0, 4).join(', ')}`}
 
-MAIN CONTENT — use each term at the indicated frequency in body paragraphs:
+MAIN CONTENT — use each term at the indicated frequency in body paragraphs.
+The first number is a floor, not a suggestion: every term listed below must
+appear at least that many times. None of them may be left out.
 ${bodyLines}
-${nlpEntityNames.length ? '\nGOOGLE NLP ENTITIES — weave these in naturally in body text:\n' + nlpEntityNames.map(t => `  "${t}"`).join('\n') : ''}
+${nlpEntityNames.length ? '\nGOOGLE NLP ENTITIES — each of these must appear at least once in body text:\n' + nlpEntityNames.map(t => `  "${t}"`).join('\n') : ''}
 
 KEYWORD VARIATIONS — use naturally throughout (not all in one place):
 ${selectedVars.join(', ')}
@@ -2434,7 +2445,9 @@ ABSOLUTE CONSTRAINTS — failure to follow = task failed:
 • While inserting terms, do not introduce new calls to action, superlatives ("the largest", "the first"), or credibility claims. Nothing you add may be an unverifiable claim.
   (Contradictions and repetition already in the original are left alone here — the "Trust & readability pass" button handles those.)
 
-TERMS TO WEAVE IN (insert where they fit naturally; do not force every term):
+TERMS TO WEAVE IN — the counts are floors. Work through every term on this list
+and get it to its minimum. Skip one only if there is genuinely nowhere it can go
+without mangling a sentence, and never pad or invent content to place it:
 ${insertTermLines}
 
 H1 must contain: ${titleTerms.join(', ') || keyword}
