@@ -1895,6 +1895,15 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
   white-space: nowrap;
 }
 
+/* What kind of page this keyword targets — decides the shape Optimize writes */
+.rt-pagetype {
+  font-size: 9px; font-weight: 700; letter-spacing: .5px;
+  border: 1px solid var(--border); border-radius: 3px; padding: 0 4px;
+  color: var(--text-muted); white-space: nowrap; vertical-align: middle;
+}
+.rt-pagetype-service { color: var(--accent); border-color: var(--accent); opacity: .75; }
+.rt-pagetype-article { color: var(--text-secondary); }
+
 /* ── POP target-location autocomplete (client modal) ── */
 .rt-ac-wrap { position: relative; }
 .rt-ac-list {

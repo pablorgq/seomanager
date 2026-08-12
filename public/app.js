@@ -261,6 +261,9 @@ function bindEvents() {
     });
   }
 
+  // Picking a page type resumes an Optimize handoff that stopped to ask for it.
+  document.getElementById('ag-pageType')?.addEventListener('change', rtResumePendingOptimize);
+
   // Error close buttons (delegated)
   document.addEventListener('click', (e) => {
     if (e.target.classList.contains('error-close')) {
@@ -901,27 +904,107 @@ const AG_NOTES_MARKER = '===NOTES===';
 
 /* Guardrails folded into every generation prompt. These only stop patterns that
    read as filler or as unverifiable puffery — they never ask the model to add
-   anything, so term placement and the POP brief are unaffected. */
-const AG_TRUST_RULES = `── TRUST & READABILITY (applies to everything you write) ──
+   anything, so term placement and the POP brief are unaffected.
+
+   Split in two: the core rules hold for any page, while the local ones (CTA cap,
+   single geographic focus) only make sense for a page selling a service in a
+   place. An informational article has no CTA to cap and no city to stay in, so
+   the SEO Article flow composes core + the page type's own rules instead. */
+const AG_TRUST_CORE = `── TRUST & READABILITY (applies to everything you write) ──
 - Never state two different figures for the same fact (years in business, team size, jobs completed). One figure, used consistently.
 - No unverifiable superlatives. "The largest fleet in the country", "the first company to do X", "the best in the industry" are not allowed unless the source material backs them up. Use a defensible form instead ("one of the largest fleets serving the region").
-- At most 2 calls to action in the whole piece, worded differently. Do NOT end each section with a "Don't let X happen — contact us today" formula.
 - Say each idea once. If a cause-and-effect chain (e.g. dust → allergens → health → productivity) belongs to one section, do not restate it in others with new wording.
-- Keep one consistent geographic focus from the H1 to the final paragraph. Do not open with a city and close with the whole country.
 - Anything that is a genuine enumeration ("A - B - C" run together in a sentence) becomes a real markdown bullet list. Do not invent list items to pad.
 - Invent nothing. No certifications, awards, founding years, staff names or testimonials that are not in the source material.`;
 
+const AG_TRUST_LOCAL_RULES = `
+- At most 2 calls to action in the whole piece, worded differently. Do NOT end each section with a "Don't let X happen — contact us today" formula.
+- Keep one consistent geographic focus from the H1 to the final paragraph. Do not open with a city and close with the whole country.`;
+
+/* The combined set, unchanged from before the split — the Article Content tool
+   (acgWriteArticle) still uses it as-is. */
+const AG_TRUST_RULES = AG_TRUST_CORE + AG_TRUST_LOCAL_RULES;
+
+/* What kind of page we are writing. This decides the shape of the piece: a
+   service/local page sells to someone ready to buy in a place, an article
+   answers a question. Before this existed the generator wrote one shape for
+   both, and the guardrails silently assumed a local service business. */
+const AG_PAGE_TYPES = {
+  service: {
+    label: 'Service / Local page',
+    short: 'SVC',
+    intent: 'A commercial service page for a business that sells this service to people in this area. The reader is close to hiring someone — the page has to say what the service is, what it includes, who it is for, that the business covers their area, and how to get in touch.',
+    // POP fixes the H2 count, so the running order is a priority list to fill
+    // that budget with, not a fixed five sections.
+    format: h2Target => `- Output: one # H1 title, ${h2Target} ## H2 sections, one short closing paragraph
+- Cover these in this order, as many as the ${h2Target} sections allow, folding the required subheading terms into them:
+    1. what the service is and the problem it solves
+    2. what is included — the concrete scope of the work
+    3. who it is for / when it is needed
+    4. service area and local proof — the places served, how the business works locally
+    5. a short FAQ of 2-4 questions a buyer would actually ask, each answered in 1-2 sentences
+- Prefer flowing paragraphs; use a markdown bullet list only where the content is a genuine enumeration
+- Close with ONE call to action. Do not put a CTA at the end of every section`,
+    rules: AG_TRUST_LOCAL_RULES,
+  },
+  article: {
+    label: 'Article',
+    short: 'ART',
+    intent: 'An informational article that answers the reader\'s question. This is NOT a sales page — the reader is researching, not buying. Do not pitch a business, do not describe service packages, do not add a service-area section.',
+    format: h2Target => `- Output: one # H1 title, a 2-3 sentence introduction, ${h2Target} ## H2 sections, one conclusion paragraph
+- Each H2 explains one part of the topic and answers it properly — no section exists just to hold a keyword
+- Prefer flowing paragraphs; use a markdown bullet list only where the content is a genuine enumeration
+- No sales calls to action. Close by summing up what the reader now knows, not by asking them to get in touch
+- Do not force a city or region into the copy — name a place only where the topic genuinely calls for it`,
+    rules: '',
+  },
+};
+
+/* The trust block for a given page type: shared core plus whatever that type
+   adds. Falls back to the full historical set for an unknown/blank type. */
+function agTrustRulesFor(pageType) {
+  const pt = AG_PAGE_TYPES[pageType];
+  return pt ? AG_TRUST_CORE + pt.rules : AG_TRUST_RULES;
+}
+
 /* The full editorial pass, run on demand after generation. Unlike the rules
-   above this one is allowed to cut and restructure, so it stays opt-in. */
-const AG_TRUST_PASS_PROMPT = `You are editing a local service business's website copy to fix issues that hurt trust with readers and search engines (Google's helpful-content / E-E-A-T signals). Rewrite the content below, applying these fixes:
+   above this one is allowed to cut and restructure, so it stays opt-in.
+
+   Built per page type: the CTA and geographic-targeting fixes are real problems
+   on a service page and nonsense on an informational article, where flagging a
+   missing city or a stray CTA would push the piece the wrong way. */
+function agTrustPassPrompt(pageType) {
+  const isArticle = pageType === 'article';
+
+  const subject = isArticle
+    ? 'an informational article'
+    : "a local service business's website copy";
+
+  const ctaFix = isArticle
+    ? '3. Remove sales pitches. This is an informational article — cut any "contact us today" style calls to action and any paragraph that exists to sell a service rather than answer the reader.'
+    : '3. Eliminate repetitive CTA patterns. If the same "Don\'t let X happen — contact us today" structure repeats across sections, cut it to 1–2 well-placed, naturally varied calls to action.';
+
+  const geoFix = isArticle
+    ? '5. Remove forced local targeting. Drop city or region names that were shoehorned in and do not serve the reader\'s question. Keep a place name only where the topic genuinely depends on it.'
+    : '5. Fix inconsistent geographic targeting. Keep the location focus consistent throughout — this matters for local SEO relevance.';
+
+  const factFix = isArticle
+    ? '7. Preserve all genuine facts. Keep real figures, technical detail, named methods and sourced claims — only the framing changes, not the underlying facts.'
+    : '7. Preserve all genuine facts. Keep real details like equipment specs, service types, phone numbers, and building/industry types served — only the framing changes, not the underlying facts.';
+
+  const askFor = isArticle
+    ? 'what specific, verifiable details (data, cited sources, named methods, expert quotes, worked examples) would strengthen the article further if supplied'
+    : 'what specific, verifiable details (certifications, real founding year, named staff, local landmarks/neighbourhoods, testimonials) would strengthen the page further if supplied';
+
+  return `You are editing ${subject} to fix issues that hurt trust with readers and search engines (Google's helpful-content / E-E-A-T signals). Rewrite the content below, applying these fixes:
 
 1. Resolve contradictory or unverifiable credibility claims. If the page states two different "years of experience" figures, or makes an implausible experience claim (e.g. "a century of expertise" for a company that cannot be that old), keep only the specific, verifiable figure and drop the other.
 2. Soften or remove unverifiable superlatives. Claims like "the largest fleet in [country]" or "the first company to do X" should either be backed by something checkable or downgraded to a defensible version (e.g. "one of the largest fleets serving [region]").
-3. Eliminate repetitive CTA patterns. If the same "Don't let X happen — contact us today" structure repeats across sections, cut it to 1–2 well-placed, naturally varied calls to action.
+${ctaFix}
 4. Cut redundant content loops. If the same idea is restated with slightly different wording across sections, consolidate it into one clear section.
-5. Fix inconsistent geographic targeting. Keep the location focus consistent throughout — this matters for local SEO relevance.
+${geoFix}
 6. Convert inline dash-separated text into real lists. Anything written as "Item A - Item B - Item C" as running text becomes a proper markdown bulleted list.
-7. Preserve all genuine facts. Keep real details like equipment specs, service types, phone numbers, and building/industry types served — only the framing changes, not the underlying facts.
+${factFix}
 
 Keep the tone professional and consistent with the original. Do not invent facts that were not in the source. Do not pad sections to hit a word count. Keep the markdown heading structure (# for the H1, ## for section headings).
 
@@ -930,7 +1013,8 @@ First, the rewritten article in markdown. Nothing before it, no preamble.
 Then a line containing only ${AG_NOTES_MARKER}
 Then a short "Notes" section with two parts:
 (a) what was changed and why — one bullet per change
-(b) what specific, verifiable details (certifications, real founding year, named staff, local landmarks/neighbourhoods, testimonials) would strengthen the page further if supplied`;
+(b) ${askFor}`;
+}
 
 /* Shrink a POP cleanedContentBrief to just what the Article Generator reads.
    rtData is round-tripped whole through /api/rankdata, so the raw brief (which
@@ -1407,7 +1491,7 @@ async function agTrustPass() {
       method: 'POST', headers: chatHeaders,
       body: JSON.stringify({
         model, max_tokens: 4000,
-        messages: [{ role: 'user', content: `${AG_TRUST_PASS_PROMPT}\n\nCONTENT TO REWRITE:\n---\n${agArticleText}\n---` }],
+        messages: [{ role: 'user', content: `${agTrustPassPrompt(agLastRun?.pageType)}\n\nCONTENT TO REWRITE:\n---\n${agArticleText}\n---` }],
       }),
     });
     if (!res.ok) {
@@ -2028,10 +2112,12 @@ async function agStartFlow() {
   const locName  = document.getElementById('ag-locationName').value;
   const targLang = document.getElementById('ag-targetLanguage').value;
   const compRaw  = document.getElementById('ag-competitors').value.trim();
+  const pageType = document.getElementById('ag-pageType').value;
 
   if (!hasPop && !popKey) { alert('Enter your POP API key.'); return; }
   if (!keyword) { alert('Enter a keyword.');         return; }
   if (keyword.length > 200) { alert('Keyword too long (max 200 characters).'); return; }
+  if (!pageType) { alert('Choose the page type — service/local page or article.'); return; }
   if (!hasServerKey) {
     const k = apiKey || await Store.get('seomanager_api_key');
     if (!k) { alert('Enter your OpenAI API key in Settings first.'); return; }
@@ -2040,6 +2126,7 @@ async function agStartFlow() {
   if (!hasPop && popKey) await Store.set('seomanager_pop_key', popKey);
 
   agSavedRun = null;   // a fresh run never reuses a stored Score report
+  _rtPendingOptimize = null;   // starting by hand cancels a parked Optimize
   document.getElementById('ag-reusedNote')?.style.setProperty('display', 'none');
 
   const btn = document.getElementById('ag-genBtn');
@@ -2081,7 +2168,7 @@ async function agStartFlow() {
     agShowTermEditors(td.variations, td.lsaPhrases, brandTokens);
     agLog('Terms loaded — possible brand/competitor names are unchecked & locked out automatically. Review, then click Continue.');
 
-    window._agFlow = { popKey, keyword, targetUrl, pageNotBuilt, locName, targLang, competitors };
+    window._agFlow = { popKey, keyword, targetUrl, pageNotBuilt, locName, targLang, competitors, pageType };
 
   } catch(e) {
     agLog('ERROR: ' + e.message);
@@ -2099,7 +2186,11 @@ async function agStartFlow() {
 async function agStartFromSavedRun(kw, competitors) {
   const run = kw.popRun;
   const popKey = hasPop ? '' : document.getElementById('ag-popKey').value.trim();
+  // rtOptimizeInAG has already put kw.pageType into the select; read it back so
+  // a manual change there before pressing Optimize still counts.
+  const pageType = document.getElementById('ag-pageType').value;
 
+  if (!pageType) { alert('Choose the page type — service/local page or article.'); return; }
   if (!hasServerKey) {
     const k = apiKey || await Store.get('seomanager_api_key');
     if (!k) { alert('Enter your OpenAI API key in Settings first.'); return; }
@@ -2148,12 +2239,13 @@ async function agStartFromSavedRun(kw, competitors) {
 
   window._agFlow = {
     popKey, keyword: run.keyword, targetUrl: run.targetUrl, pageNotBuilt: run.pageNotBuiltYet ? 1 : 0,
-    locName: run.locName, targLang: run.targLang, competitors,
+    locName: run.locName, targLang: run.targLang, competitors, pageType,
   };
 }
 
 async function agContinueWithSelected() {
-  const { popKey, keyword, targetUrl, pageNotBuilt, locName, targLang, competitors } = window._agFlow;
+  const { popKey, keyword, targetUrl, pageNotBuilt, locName, targLang, competitors, pageType } = window._agFlow;
+  const pageTypeSpec = AG_PAGE_TYPES[pageType] || AG_PAGE_TYPES.service;
   const enableNlp = document.getElementById('ag-enableNlp').checked ? 1 : 0;
   const overOpt   = document.getElementById('ag-overOpt').checked ? 1 : 0;
   const strategy  = document.getElementById('ag-strategy').value;
@@ -2283,6 +2375,9 @@ TARGET WORD COUNT: ~${wcTarget} words
 LANGUAGE: ${targLang}
 TONE: ${existingContent ? 'match the original page tone' : tone}
 
+PAGE TYPE: ${pageTypeSpec.label}
+${pageTypeSpec.intent}
+
 ── PLACEMENT RULES ──────────────────────────────────────
 
 SEO/META TITLE (write a meta title including these terms):
@@ -2301,11 +2396,10 @@ ${nlpEntityNames.length ? '\nGOOGLE NLP ENTITIES — weave these in naturally in
 KEYWORD VARIATIONS — use naturally throughout (not all in one place):
 ${selectedVars.join(', ')}
 ${contentInstructions ? `\nCONTENT INSTRUCTIONS — follow these exactly:\n${contentInstructions}\n` : ''}
-${AG_TRUST_RULES}
+${agTrustRulesFor(pageType)}
 
 ── FORMAT ───────────────────────────────────────────────
-- Output: one # H1 title, ${h2Target} ## H2 sections, one conclusion paragraph
-- Prefer flowing paragraphs; use a markdown bullet list only where the content is a genuine enumeration
+${pageTypeSpec.format(h2Target)}
 - Every term must read naturally — never forced or stuffed
 - Do NOT include the meta title in the article body
 - Do NOT mention SEO, word counts, or these instructions`;
@@ -2323,6 +2417,10 @@ ${AG_TRUST_RULES}
 
     const prompt = existingContent
       ? `You are an SEO copy-editor. Return the EXISTING PAGE below with the minimum edits needed to naturally include the listed terms. This is NOT a rewrite.
+
+PAGE TYPE: ${pageTypeSpec.label}
+${pageTypeSpec.intent}
+Use this only to judge where a term reads naturally and which wording suits the page. It does NOT license restructuring — the constraints below still win.
 
 ABSOLUTE CONSTRAINTS — failure to follow = task failed:
 • Copy every sentence from the original verbatim UNLESS that exact sentence is the one receiving a term insertion
@@ -2380,7 +2478,7 @@ ${popBriefSpecs}`;
 
     // Everything the re-score and the trust pass need to work on this article
     agLastRun = {
-      popKey, keyword, targetUrl, locName, targLang,
+      popKey, keyword, targetUrl, locName, targLang, pageType,
       variations: selectedVars, lsaPhrases: fullLsa,
       overOpt, enableNlp, strategy, approach, model,
       popBefore: pageScore, bodyTerms, titleTerms, h2Items,
@@ -2474,6 +2572,7 @@ ${popBriefSpecs}`;
         legendHtml:     document.getElementById('ag-hlLegend')?.innerHTML || '',
         termsSummary:   document.getElementById('ag-termsSummary')?.innerHTML || '',
         competitors:    competitors || [],
+        pageType,
         strategy,
         approach,
         enableNlp:      !!enableNlp,
@@ -2789,7 +2888,7 @@ function rtRowHtml(kw, client) {
           : kw.pageNotBuilt
             ? '<span class="rt-notbuilt" title="Page not built yet — POP scores the keyword without a live page">not built yet</span>'
             : '<span class="rt-na">—</span>'
-      }</td>
+      }${rtPageTypeChip(kw)}</td>
       <td class="rt-td-vol">${kw.volume ? escHtml(String(kw.volume)) : '<span class="rt-na">—</span>'}</td>
       <td class="rt-td-delta">${rtDeltaCell(kw.rank, kw.prevRank)}</td>
       <td class="rt-td-pop">${rtPopCell(kw)}</td>
@@ -2800,6 +2899,15 @@ function rtRowHtml(kw, client) {
       <td class="rt-td-check">${escHtml(rtFormatDate(kw.lastCheck) || '')}</td>
       <td class="rt-td-del"><button class="rt-del-btn" title="Delete row">✕</button></td>
     </tr>`;
+}
+
+/* The page type shown inline on the row, so you can see what Optimize will write
+   without opening the edit modal. Blank for keywords set before page types
+   existed — those get asked once, rather than silently defaulted. */
+function rtPageTypeChip(kw) {
+  const pt = AG_PAGE_TYPES[kw.pageType];
+  if (!pt) return '';
+  return ` <span class="rt-pagetype rt-pagetype-${escHtml(kw.pageType)}" title="Page type: ${escHtml(pt.label)}">${escHtml(pt.short)}</span>`;
 }
 
 function rtShortUrl(url) {
@@ -2878,6 +2986,7 @@ function repDownloadDoc(clientId, keyword) {
     ['Keyword',               rep.keyword],
     ['URL',                   rep.url],
     ['Competitors',           (rep.competitors || []).join(', ')],
+    ['Page Type',              AG_PAGE_TYPES[rep.pageType]?.label],
     ['Strategy',               rep.strategy],
     ['Approach',               rep.approach],
     ['Google NLP Analysis',    rep.enableNlp ? 'Yes' : 'No'],
@@ -3355,6 +3464,11 @@ async function rtLoadSerpTitles(kwId) {
   }
 }
 
+/* An Optimize handoff paused on the page-type question, waiting for the answer.
+   Holds the keyword and competitor list so the run resumes with the saved POP
+   report rather than paying for a fresh one. */
+let _rtPendingOptimize = null;
+
 /* Open the Article Generator pre-loaded with everything from this keyword's POP
    score (keyword, URL, location, language, strategy, approach, competitors),
    auto-fetch the current page, and kick off the improve flow so the article is
@@ -3366,6 +3480,8 @@ async function rtOptimizeInAG(kwId) {
     if (found) { kw = found; client = c; break; }
   }
   if (!kw) return;
+
+  _rtPendingOptimize = null;   // a new handoff supersedes any unanswered one
 
   const setSelect = (id, val) => {
     const sel = document.getElementById(id);
@@ -3392,6 +3508,10 @@ async function rtOptimizeInAG(kwId) {
   setSelect('ag-strategy', kw.popStrategy || 'focus');
   setSelect('ag-approach', kw.popApproach || 'regular');
 
+  // Page type decides the shape of the piece, so it is never guessed — a keyword
+  // without one stops the handoff below instead of defaulting.
+  document.getElementById('ag-pageType').value = kw.pageType || '';
+
   // Competitors: POP's picks from the score + the user's own SERP picks (deduped)
   const comps = [...new Set([...(kw.popReport?.competitors || []), ...(kw.customCompetitors || [])])];
   document.getElementById('ag-competitors').value = comps.join('\n');
@@ -3403,7 +3523,7 @@ async function rtOptimizeInAG(kwId) {
   if (pnb) { pnb.checked = !!kw.pageNotBuilt; pnb.dispatchEvent(new Event('change')); }
 
   // Flash the pre-filled fields so it's clear what was carried over
-  ['ag-keyword','ag-targetUrl','ag-locationName','ag-targetLanguage','ag-strategy','ag-approach','ag-competitors'].forEach(id => {
+  ['ag-keyword','ag-targetUrl','ag-pageType','ag-locationName','ag-targetLanguage','ag-strategy','ag-approach','ag-competitors'].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
     el.classList.add('ag-prefill-flash');
@@ -3417,6 +3537,23 @@ async function rtOptimizeInAG(kwId) {
     try { await agFetchPageContent(); } catch { /* non-fatal — user can paste/fetch manually */ }
   }
 
+  // Nothing gets written until we know what kind of page this is — a service
+  // page and an article are different pieces of writing, not different tones.
+  // Park the handoff rather than dropping it, so answering the question resumes
+  // it with the saved POP report still in hand.
+  if (!kw.pageType) {
+    _rtPendingOptimize = { kwId: kw.id, comps };
+    document.getElementById('ag-pageType').focus();
+    agLog('Choose the page type for this keyword — service/local page or article — and the run starts. It is remembered on the keyword, so this is asked once.');
+    return;
+  }
+
+  rtRunOptimize(kw, comps);
+}
+
+/* The half of rtOptimizeInAG that spends money, split out so the page-type
+   question can sit between the prefill and the run. */
+function rtRunOptimize(kw, comps) {
   // Reuse the report the Score button already built rather than paying for a
   // second one — that second report was the reason "before" never matched the
   // Rank Tracker badge. "Re-run POP fresh" falls back to the full flow.
@@ -3425,6 +3562,28 @@ async function rtOptimizeInAG(kwId) {
   } else {
     agStartFlow();
   }
+}
+
+/* Continue an Optimize that stopped to ask for the page type. Records the answer
+   on the keyword so it is only ever asked once, then runs. */
+function rtResumePendingOptimize() {
+  const pending = _rtPendingOptimize;
+  const pageType = document.getElementById('ag-pageType').value;
+  if (!pending || !pageType) return;
+  _rtPendingOptimize = null;
+
+  let kw;
+  for (const c of rtData.clients || []) {
+    const found = c.keywords?.find(k => k.id === pending.kwId);
+    if (found) { kw = found; break; }
+  }
+  if (!kw) return;
+
+  kw.pageType = pageType;
+  rtSave();
+
+  agLog(`Page type set to "${AG_PAGE_TYPES[pageType].label}" and saved on this keyword — starting the run.`);
+  rtRunOptimize(kw, pending.comps);
 }
 
 /* Force a full get-terms → create-report run, discarding the saved Score report. */
@@ -5761,11 +5920,14 @@ function rtOpenEditModal(kwId, field) {
   }
 
   // "Page not built yet" belongs to the Target URL — it lets Score run POP for a
-  // page that does not exist yet, instead of demanding a URL.
+  // page that does not exist yet, instead of demanding a URL. Page type sits with
+  // it because both answer "what kind of target is this".
   const pnbWrap = document.getElementById('rt-editPnbWrap');
   if (pnbWrap) {
     pnbWrap.style.display = field === 'targetUrl' ? 'block' : 'none';
     document.getElementById('rt-editPageNotBuilt').checked = !!kw.pageNotBuilt;
+    const ptSel = document.getElementById('rt-editPageType');
+    if (ptSel) ptSel.value = kw.pageType || '';
   }
 
   rtOpenModal('rt-editModal');
@@ -5800,6 +5962,7 @@ function rtEditSave() {
 
   if (field === 'targetUrl') {
     kw.pageNotBuilt = document.getElementById('rt-editPageNotBuilt')?.checked || false;
+    kw.pageType     = document.getElementById('rt-editPageType')?.value || '';
   }
 
   rtSave();

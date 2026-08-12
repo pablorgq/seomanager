@@ -273,6 +273,15 @@
               <label class="form-label">Page URL</label>
               <input type="url" id="ag-targetUrl" class="form-input" placeholder="https://yoursite.com/page">
             </div>
+            <div class="form-group" style="margin-bottom:10px">
+              <label class="form-label">Page type</label>
+              <select id="ag-pageType" class="form-select">
+                <option value="">Choose page type…</option>
+                <option value="service">Service / Local page</option>
+                <option value="article">Article</option>
+              </select>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:4px">Decides the shape of the piece — a service page sells in an area, an article answers a question.</div>
+            </div>
             <label class="toggle-label">
               <input type="checkbox" id="ag-pageNotBuilt" class="toggle-input">
               <span class="toggle-track"><span class="toggle-thumb"></span></span>
@@ -656,6 +665,17 @@
             </label>
             <div style="font-size:11px;color:var(--text-secondary);margin-top:6px">
               Tick this to run POP without a live page — you get the term targets and word count to build against, but no "current" score.
+            </div>
+            <div class="form-group" style="margin-top:12px;margin-bottom:0">
+              <label class="form-label">Page type</label>
+              <select id="rt-editPageType" class="form-select">
+                <option value="">Not set — Optimize will ask</option>
+                <option value="service">Service / Local page</option>
+                <option value="article">Article</option>
+              </select>
+              <div style="font-size:11px;color:var(--text-secondary);margin-top:6px">
+                Carried into the Article Generator when you press Optimize, and it decides the shape of what gets written.
+              </div>
             </div>
           </div>
           <div class="rt-modal-actions" style="margin-top:12px">
