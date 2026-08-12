@@ -936,7 +936,7 @@ const AG_PAGE_TYPES = {
     intent: 'A commercial service page for a business that sells this service to people in this area. The reader is close to hiring someone — the page has to say what the service is, what it includes, who it is for, that the business covers their area, and how to get in touch.',
     // POP fixes the H2 count, so the running order is a priority list to fill
     // that budget with, not a fixed five sections.
-    format: h2Target => `- Output: one # H1 title, ${h2Target} ## H2 sections, one short closing paragraph
+    format: h2Target => `- Output: one # H1 title and ${h2Target} ## H2 sections. Nothing else.
 - Cover these in this order, as many as the ${h2Target} sections allow, folding the required subheading terms into them:
     1. what the service is and the problem it solves
     2. what is included — the concrete scope of the work
@@ -944,7 +944,8 @@ const AG_PAGE_TYPES = {
     4. service area and local proof — the places served, how the business works locally
     5. a short FAQ of 2-4 questions a buyer would actually ask, each answered in 1-2 sentences
 - Prefer flowing paragraphs; use a markdown bullet list only where the content is a genuine enumeration
-- Close with ONE call to action. Do not put a CTA at the end of every section`,
+- Do NOT write a conclusion, summary or wrap-up paragraph. A service page has nothing to conclude — the reader came to find out what you do and how to reach you, and restating the page back at them wastes the last thing they read.
+- The page ends on the last H2 section, closed by ONE call to action of a sentence or two. No CTA at the end of every section.`,
     rules: AG_TRUST_LOCAL_RULES,
   },
   article: {
