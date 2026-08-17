@@ -635,6 +635,7 @@ app.get('/api/config', (req, res) => res.json({
   hasGcs:       !!(gcs && GCS_BUCKET),
   hasAA:        !!AA_KEY,
   hasPop:       !!POP_KEY,
+  hasAhrefs:    !!AHREFS_KEY,
   commit:       GIT_COMMIT,
   // Whether the JSON data files survive a redeploy. False means DATA_DIR fell
   // back to the app directory, which the platform rebuilds on every deploy —
@@ -953,12 +954,38 @@ app.post('/api/ahrefs', apiGuard, async (req, res) => {
   }
 });
 
+/* Technical-audit prompt. Unlike the strategy prompt (which reasons over link and
+   keyword data), this one reads Ahrefs Site Audit crawl issues, so it has to
+   prioritise by how many URLs an issue actually touches. The "write the finished
+   text" rule mirrors the GSC audit prompt in app.js — a recommendation the reader
+   still has to write themselves is not one they can act on. */
+const AHREFS_TECHNICAL_PROMPT = `You are a senior technical SEO auditing a website's Ahrefs Site Audit crawl results.
+
+Work only from the crawl data given. Never invent issues that are not in it.
+
+Prioritise by impact × reach: an issue affecting 400 URLs outranks one affecting 3, unless the smaller one blocks indexing. Errors outrank warnings outrank notices.
+
+For each recommendation give:
+- **Problem** — what the crawl found, with the affected URL count
+- **Why it matters** — the concrete ranking or crawl consequence, not theory
+- **Fix** — the specific change, at the template or CMS level where the issue repeats across many URLs
+- **Effort** — Low / Medium / High
+
+When the fix is a piece of text the reader would otherwise have to write themselves — a title tag, a meta description, an H1, alt text — write the finished text for them in a fenced block tagged \`paste\`, labelled, directly after the recommendation.
+
+Group under: ## 🔴 CRITICAL, ## 🟡 IMPORTANT, ## 🟢 NICE TO HAVE. Use markdown. Skip any group with nothing in it.`;
+
+const AHREFS_STRATEGY_PROMPT = `You are a senior SEO strategist analyzing Ahrefs data for a website. Give actionable, specific recommendations an SEO expert would act on — not generic advice. Structure your response with clear sections. Use markdown.`;
+
 app.post('/api/ahrefs/ai', apiGuard, async (req, res) => {
   if (!ANTHROPIC_KEY) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured.' });
-  const { domain, data } = req.body || {};
+  const { domain, data, mode = 'strategy' } = req.body || {};
   if (!domain || !data) return res.status(400).json({ error: 'domain and data required' });
-  const system = `You are a senior SEO strategist analyzing Ahrefs data for a website. Give actionable, specific recommendations an SEO expert would act on — not generic advice. Structure your response with clear sections. Use markdown.`;
-  const userMsg = `Analyze this Ahrefs data for ${domain} and provide a comprehensive SEO strategy with specific action items:\n\n${JSON.stringify(data, null, 2)}`;
+  const technical = mode === 'technical';
+  const system = technical ? AHREFS_TECHNICAL_PROMPT : AHREFS_STRATEGY_PROMPT;
+  const userMsg = technical
+    ? `Analyze this Ahrefs Site Audit crawl data for ${domain} and give prioritised technical SEO recommendations:\n\n${JSON.stringify(data, null, 2)}`
+    : `Analyze this Ahrefs data for ${domain} and provide a comprehensive SEO strategy with specific action items:\n\n${JSON.stringify(data, null, 2)}`;
   try {
     const r = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -1002,8 +1029,53 @@ For each image provided, write a concise (under 125 characters), descriptive alt
 - For logos: use "{Brand} logo" format
 - For decorative spacers, icons, or tracking pixels: return ""
 
+Also recommend an SEO filename for each image:
+- Lowercase, words separated by hyphens, no spaces or underscores
+- Lead with the primary keyword, then brand or city where relevant
+- Keep the original file extension exactly as it appears in the src
+- No stopword padding ("the", "a", "of") and no dates or camera codes
+- Maximum 60 characters including the extension
+- For decorative images (those getting "" alt text): return ""
+
 Return ONLY a valid JSON array — no text before or after. Each object:
-{"src":"<exact src from input>","page":"<page url>","currentAlt":"<current alt>","issue":"<Missing|Vague|Too long|OK>","recommended":"<your alt text>"}`;
+{"src":"<exact src from input>","page":"<page url>","currentAlt":"<current alt>","issue":"<Missing|Vague|Too long|OK>","recommended":"<your alt text>","recommendedFilename":"<your filename>"}`;
+
+/* Grade one alt attribute. `null` means the attribute was absent entirely; ''
+   means it was present but empty — both are equally missing to a screen reader.
+   Shared by the crawler path and the Ahrefs Site Audit path so the two agree. */
+function classifyAlt(alt) {
+  const isFilename = alt && /^[\w.\-]+$/.test(alt); // no spaces = just a filename slug
+  return alt === null     ? 'Missing'
+       : alt === ''       ? 'Missing'
+       : isFilename       ? 'Vague'
+       : alt.length < 10  ? 'Vague'
+       : alt.length > 125 ? 'Too long'
+       : 'OK';
+}
+
+/* Ask Claude for alt text + filename recommendations. Capped at 60 images to stay
+   inside the Haiku token budget; callers report `totalFound` so the UI can say how
+   many were left out. */
+async function recommendAltText(images, clientName = '') {
+  const batch = images.slice(0, 60);
+  const imgList = batch.map((img, i) =>
+    `${i + 1}. src="${img.src}" | page="${img.page}" | pageTitle="${img.pageTitle}" | h1="${img.h1}" | currentAlt="${img.currentAlt}" | issue="${img.issue}" | brand="${clientName}"`
+  ).join('\n');
+
+  const up = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5',
+      max_tokens: 8192,
+      system: ALT_TEXT_SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: `Generate alt text for these ${batch.length} images:\n\n${imgList}` }],
+    }),
+  });
+  const data = await up.json();
+  const text = data.content?.find(b => b.type === 'text')?.text || '[]';
+  try { return JSON.parse(text); } catch { return []; }
+}
 
 async function crawlForImages(startUrl, maxPages) {
   let base;
@@ -1042,7 +1114,9 @@ async function crawlForImages(startUrl, maxPages) {
     const h1    = html.match(/<h1[^>]*>([^<]*)<\/h1>/i)?.[1]?.replace(/<[^>]+>/g,'').trim() || '';
 
     let pageImgCount = 0;
-    const imgRe = /<img([^>\/]+)\/?>/gi;
+    // Attributes may contain slashes — src="/img/x.jpg" and src="https://…" both
+    // do — so the character class must exclude only '>', not '/'.
+    const imgRe = /<img\b([^>]*?)\/?>/gi;
     let m;
     while ((m = imgRe.exec(html)) !== null) {
       const attrs = m[1];
@@ -1059,14 +1133,7 @@ async function crawlForImages(startUrl, maxPages) {
       let absUrl;
       try { absUrl = new URL(src, pageUrl).href; } catch { continue; }
 
-      // Classify: missing, vague (no spaces = probably filename), too long, or OK
-      const isFilename = alt && /^[\w.\-]+$/.test(alt); // no spaces = just a filename slug
-      const issue = alt === null           ? 'Missing'
-                  : alt === ''             ? 'Missing'
-                  : isFilename             ? 'Vague'
-                  : alt.length < 10        ? 'Vague'
-                  : alt.length > 125       ? 'Too long'
-                  : 'OK';
+      const issue = classifyAlt(alt);
       if (issue === 'OK') continue;
 
       pageImgCount++;
@@ -1102,28 +1169,43 @@ app.post('/api/alttext/scrape', apiGuard, async (req, res) => {
       return res.json({ images: [], debug: debugPages });
     }
 
-    // Cap at 60 images to stay within Haiku token budget
-    const batch = images.slice(0, 60);
-    const imgList = batch.map((img, i) =>
-      `${i + 1}. src="${img.src}" | page="${img.page}" | pageTitle="${img.pageTitle}" | h1="${img.h1}" | currentAlt="${img.currentAlt}" | issue="${img.issue}" | brand="${clientName}"`
-    ).join('\n');
-
-    const up = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5',
-        max_tokens: 8192,
-        system: ALT_TEXT_SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: `Generate alt text for these ${batch.length} images:\n\n${imgList}` }],
-      }),
-    });
-    const data = await up.json();
-    const text = data.content?.find(b => b.type === 'text')?.text || '[]';
-
-    let parsed;
-    try { parsed = JSON.parse(text); } catch { parsed = []; }
+    const parsed = await recommendAltText(images, clientName);
     res.json({ images: parsed, debug: debugPages, totalFound: images.length });
+  } catch (e) {
+    res.status(502).json({ error: { message: e.message } });
+  }
+});
+
+/* Recommend alt text for images discovered elsewhere — currently the Ahrefs Site
+   Audit page-explorer, which reports every page Ahrefs crawled rather than the ten
+   the built-in crawler can reach. Callers supply the raw src/alt pairs; grading and
+   the OK-filter happen here so both paths apply identical rules. */
+app.post('/api/alttext/recommend', apiGuard, async (req, res) => {
+  if (!ANTHROPIC_KEY) return res.status(503).json({ error: { message: 'ANTHROPIC_API_KEY not configured.' } });
+  const { pages, clientName = '' } = req.body || {};
+  if (!Array.isArray(pages)) return res.status(400).json({ error: { message: 'pages array required.' } });
+
+  const images = [];
+  for (const p of pages) {
+    if (!Array.isArray(p?.images)) continue;
+    for (const img of p.images) {
+      if (!img?.src || /^data:/i.test(img.src) || /\.(svg|ico|gif)(\?|$)/i.test(img.src)) continue;
+      // An absent alt attribute must stay null — '' is a deliberate decorative marker
+      const alt   = img.alt === undefined || img.alt === null ? null : String(img.alt).trim();
+      const issue = classifyAlt(alt);
+      if (issue === 'OK') continue;
+      images.push({
+        page: p.url || '', pageTitle: p.title || '', h1: p.h1 || '',
+        src: img.src, currentAlt: alt ?? '(missing)', issue,
+      });
+    }
+  }
+
+  if (!images.length) return res.json({ images: [], totalFound: 0 });
+
+  try {
+    const parsed = await recommendAltText(images, clientName);
+    res.json({ images: parsed, totalFound: images.length });
   } catch (e) {
     res.status(502).json({ error: { message: e.message } });
   }

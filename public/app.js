@@ -7458,8 +7458,8 @@ async function indexyAltTextScrape() {
         });
       });
     });
-    document.getElementById('alttext-csv-btn')?.addEventListener('click', () => indexyAltTextCsv(images));
-    document.getElementById('alttext-push-btn')?.addEventListener('click', () => indexyAltTextPushWP(images));
+    result.querySelector('#alttext-csv-btn')?.addEventListener('click', () => indexyAltTextCsv(images));
+    result.querySelector('#alttext-push-btn')?.addEventListener('click', () => indexyAltTextPushWP(images, result));
   } catch (e) {
     result.innerHTML = `<div class="gsc-msg gsc-error">Error: ${escHtml(e.message)}</div>`;
   } finally {
@@ -7476,6 +7476,12 @@ function indexyAltTextTable(images, siteUrl) {
   const rows = images.map(img => {
     const pagePath = img.page?.replace(/^https?:\/\/[^/]+/, '') || '/';
     const imgName  = img.src?.split('/').pop()?.split('?')[0] || img.src || '';
+    // Decorative images come back with an empty filename by design — show a dash
+    // rather than an empty cell with a Copy button that would copy nothing.
+    const newName  = img.recommendedFilename || '';
+    const nameCell = newName
+      ? `${escHtml(newName)}<button class="alttext-copy-btn" data-text="${escHtml(newName)}">Copy</button>`
+      : '<span class="alttext-current">—</span>';
     return `<tr>
       <td title="${escHtml(img.page)}">${escHtml(pagePath)}</td>
       <td class="alttext-img-cell" title="${escHtml(img.src)}">${escHtml(imgName)}</td>
@@ -7484,6 +7490,7 @@ function indexyAltTextTable(images, siteUrl) {
       <td class="alttext-recommended">${escHtml(img.recommended || '')}
         <button class="alttext-copy-btn" data-text="${escHtml(img.recommended || '')}">Copy</button>
       </td>
+      <td class="alttext-recommended">${nameCell}</td>
     </tr>`;
   }).join('');
 
@@ -7497,6 +7504,7 @@ function indexyAltTextTable(images, siteUrl) {
     </div>
     <div id="alttext-wp-panel" class="alttext-wp-panel" style="display:none">
       <p class="alttext-wp-help">Go to <strong>WP Admin → Users → Profile → Application Passwords</strong>, create one named "SEOManager", copy it below.</p>
+      <p class="alttext-wp-help">This writes <strong>alt text only</strong>. WordPress cannot rename an uploaded file through its API — to apply a recommended filename, re-upload the image under the new name and swap the reference.</p>
       <div class="alttext-wp-form">
         <input id="alttext-wp-url"  type="url"  placeholder="https://example.com (WordPress site URL)" class="indexy-url-input">
         <input id="alttext-wp-user" type="text" placeholder="WordPress username" class="indexy-url-input" style="max-width:200px">
@@ -7508,46 +7516,51 @@ function indexyAltTextTable(images, siteUrl) {
     <div class="gsc-ai-table-wrap">
       <table class="gsc-ai-table alttext-table" id="alttext-main-table">
         <thead><tr>
-          <th>Page</th><th>Image</th><th>Current Alt</th><th>Issue</th><th>Recommended Alt Text</th><th></th>
+          <th>Page</th><th>Image</th><th>Current Alt</th><th>Issue</th><th>Recommended Alt Text</th><th>Recommended Filename</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>`;
 }
 
-function indexyAltTextPrefill() {
+function indexyAltTextPrefill(root = document) {
   const clientId = rtData.activeClientId;
   const c = rtData?.clients?.find(cl => cl.id === clientId);
-  // Auto-fill scan URL from client's WP site URL
+  // Auto-fill scan URL from client's WP site URL — Indexy's crawler input only,
+  // so this always looks document-wide rather than inside the passed root
   const scanUrl = document.getElementById('alttext-url');
   if (scanUrl && c?.wpUrl) scanUrl.value = c.wpUrl;
   // Auto-fill WP credentials panel
-  const urlEl  = document.getElementById('alttext-wp-url');
-  const userEl = document.getElementById('alttext-wp-user');
-  const passEl = document.getElementById('alttext-wp-pass');
+  const urlEl  = root.querySelector('#alttext-wp-url');
+  const userEl = root.querySelector('#alttext-wp-user');
+  const passEl = root.querySelector('#alttext-wp-pass');
   if (!urlEl) return;
   if (c?.wpUrl)  urlEl.value  = c.wpUrl;
   if (c?.wpUser) userEl.value = c.wpUser;
   if (c?.wpPass) passEl.value = c.wpPass;
 }
 
-function indexyAltTextPushWP(images) {
-  const panel = document.getElementById('alttext-wp-panel');
+/* `root` scopes the lookups to one rendered table. The same markup now appears in
+   two panels — Indexy's crawler results and the Ahrefs Images tab — and the Ahrefs
+   panel sits earlier in the DOM, so document-wide getElementById would let one
+   table's buttons drive the other's fields. */
+function indexyAltTextPushWP(images, root = document) {
+  const panel = root.querySelector('#alttext-wp-panel');
   if (!panel) return;
   // Pre-fill from saved client credentials before toggling
-  indexyAltTextPrefill();
+  indexyAltTextPrefill(root);
   const isVisible = panel.style.display !== 'none';
   panel.style.display = isVisible ? 'none' : 'block';
   if (!isVisible) {
-    document.getElementById('alttext-wp-go').onclick = async () => {
-      const siteUrl    = document.getElementById('alttext-wp-url').value.trim();
-      const username   = document.getElementById('alttext-wp-user').value.trim();
-      const appPassword = document.getElementById('alttext-wp-pass').value.trim();
-      const status     = document.getElementById('alttext-wp-status');
+    root.querySelector('#alttext-wp-go').onclick = async () => {
+      const siteUrl    = root.querySelector('#alttext-wp-url').value.trim();
+      const username   = root.querySelector('#alttext-wp-user').value.trim();
+      const appPassword = root.querySelector('#alttext-wp-pass').value.trim();
+      const status     = root.querySelector('#alttext-wp-status');
       if (!siteUrl || !username || !appPassword) {
         status.innerHTML = '<div class="gsc-msg gsc-error">Fill in all three fields.</div>'; return;
       }
-      const btn = document.getElementById('alttext-wp-go');
+      const btn = root.querySelector('#alttext-wp-go');
       btn.disabled = true; btn.textContent = 'Pushing…';
       status.innerHTML = '<div class="gsc-msg">Connecting to WordPress and updating images…</div>';
       try {
@@ -7566,13 +7579,13 @@ function indexyAltTextPushWP(images) {
           else if (res.status === 'not_found') notFound++;
           else if (res.status === 'error') errors++;
 
-          // Update status cell in table row
-          const tbl = document.getElementById('alttext-main-table');
+          // Update status cell in table row — index 6, after the filename column
+          const tbl = root.querySelector('#alttext-main-table');
           if (tbl) {
             tbl.querySelectorAll('tbody tr').forEach(tr => {
               const copyBtn = tr.querySelector('.alttext-copy-btn');
               if (copyBtn?.dataset.text === res.recommended || tr.cells[1]?.title?.endsWith(res.src?.split('/').pop()?.split('?')[0])) {
-                const cell = tr.cells[5] || tr.insertCell(5);
+                const cell = tr.cells[6] || tr.insertCell(6);
                 cell.innerHTML = res.status === 'updated'
                   ? '<span class="alttext-badge alttext-badge-ok">✓ Updated</span>'
                   : res.status === 'not_found'
@@ -7593,13 +7606,14 @@ function indexyAltTextPushWP(images) {
 }
 
 function indexyAltTextCsv(images) {
-  const header = ['Page', 'Image', 'Current Alt', 'Issue', 'Recommended Alt Text'];
+  const header = ['Page', 'Image', 'Current Alt', 'Issue', 'Recommended Alt Text', 'Recommended Filename'];
   const rows   = images.map(img => [
     img.page || '',
     img.src?.split('/').pop()?.split('?')[0] || '',
     img.currentAlt || '',
     img.issue || '',
     img.recommended || '',
+    img.recommendedFilename || '',
   ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(','));
   const csv  = [header.join(','), ...rows].join('\n');
   const blob = new Blob([csv], { type: 'text/csv' });
@@ -7920,13 +7934,30 @@ function indexyWireTabs(container) {
 let ahrefsCache = {};   // domain → { overview, backlinks, keywords, pages, broken }
 let ahrefsDomain = '';
 
+/* Site Audit is scoped to a project, not a domain — you cannot audit an arbitrary
+   URL, the site has to already exist as a project in the Ahrefs account. So these
+   two panels are driven by a project picker rather than the domain box that the
+   Site Explorer pulls use. */
+let ahrefsProjects  = [];   // [{ project_id, project_name, target_url, health_score, … }]
+let ahrefsProjectId = null;
+let ahrefsAuditCache = {};  // project_id → { health, issues, images, summary }
+
+/* Compare hostnames the way the rest of the app does — gscHost and rtLoadSerpTitles
+   both strip www., and matching a client to its project fails silently without it. */
+function ahrefsBareHost(urlOrHost) {
+  if (!urlOrHost) return '';
+  let h = String(urlOrHost).trim();
+  try { h = new URL(/^https?:\/\//i.test(h) ? h : `https://${h}`).hostname; } catch { /* use as-is */ }
+  return h.toLowerCase().replace(/^www\./, '');
+}
+
 function ahrefsRender() {
   const root = document.getElementById('ahrefs-root');
   if (!root) return;
 
   // Sync domain from active client's wpUrl
   const c = rtActiveClient();
-  const domainFromClient = c?.wpUrl ? (() => { try { return new URL(c.wpUrl).hostname; } catch { return ''; } })() : '';
+  const domainFromClient = ahrefsBareHost(c?.wpUrl);
   if (!ahrefsDomain && domainFromClient) ahrefsDomain = domainFromClient;
 
   root.innerHTML = `
@@ -7944,12 +7975,20 @@ function ahrefsRender() {
       <span id="ah-status" class="ah-status"></span>
     </div>
 
+    <div class="ah-toolbar">
+      <label class="indexy-label-inline">Site Audit project:</label>
+      <select id="ah-project" class="indexy-select-sm"><option value="">Loading…</option></select>
+      <span id="ah-project-status" class="ah-status"></span>
+    </div>
+
     <div class="gsc-stab-nav" id="ah-tab-nav">
       <button class="gsc-stab active" data-ahtab="overview">📊 Overview</button>
       <button class="gsc-stab" data-ahtab="backlinks">🔗 Backlinks</button>
       <button class="gsc-stab" data-ahtab="keywords">🔑 Keywords</button>
       <button class="gsc-stab" data-ahtab="pages">📄 Top Pages</button>
       <button class="gsc-stab" data-ahtab="opportunities">⚡ Opportunities</button>
+      <button class="gsc-stab" data-ahtab="siteaudit">🩺 Site Audit</button>
+      <button class="gsc-stab" data-ahtab="images">🖼️ Images</button>
       <button class="gsc-stab" data-ahtab="strategy">🤖 AI Strategy</button>
     </div>
 
@@ -7958,6 +7997,24 @@ function ahrefsRender() {
     <div id="ah-panel-keywords"      class="gsc-stab-panel"><div class="ah-empty">Pull data to see keywords.</div></div>
     <div id="ah-panel-pages"         class="gsc-stab-panel"><div class="ah-empty">Pull data to see top pages.</div></div>
     <div id="ah-panel-opportunities" class="gsc-stab-panel"><div class="ah-empty">Pull data to see opportunities.</div></div>
+
+    <div id="ah-panel-siteaudit" class="gsc-stab-panel">
+      <div class="ah-toolbar">
+        <button id="ah-audit-btn" class="btn-sm btn-accent">Run Site Audit</button>
+        <span id="ah-audit-status" class="ah-status"></span>
+      </div>
+      <div id="ah-audit-result"><div class="ah-empty">Pick a Site Audit project above, then run the audit.</div></div>
+    </div>
+
+    <div id="ah-panel-images" class="gsc-stab-panel">
+      <div class="ah-toolbar">
+        <button id="ah-images-btn" class="btn-sm btn-accent">Find Image Gaps</button>
+        <span class="indexy-note">Reads every page Ahrefs crawled — finds images with missing or vague alt text and recommends alt text plus an SEO filename</span>
+        <span id="ah-images-status" class="ah-status"></span>
+      </div>
+      <div id="ah-images-result"><div class="ah-empty">Pick a Site Audit project above, then find image gaps.</div></div>
+    </div>
+
     <div id="ah-panel-strategy"      class="gsc-stab-panel"><div class="ah-empty">Pull data first, then click "Generate Strategy".</div></div>`;
 
   // Tab switching
@@ -7971,10 +8028,91 @@ function ahrefsRender() {
   });
 
   document.getElementById('ah-pull-btn').addEventListener('click', ahrefsPullAll);
+  document.getElementById('ah-audit-btn').addEventListener('click', ahrefsRunSiteAudit);
+  document.getElementById('ah-images-btn').addEventListener('click', ahrefsFindImageGaps);
+  document.getElementById('ah-project').addEventListener('change', e => {
+    ahrefsProjectId = e.target.value || null;
+    ahrefsRestoreAudit();
+  });
 
   // If we have cached data for this domain, restore it
   const cached = ahrefsCache[ahrefsDomain];
   if (cached) ahrefsRenderAll(cached);
+
+  ahrefsLoadProjects();   // free call — no API units consumed
+}
+
+/* Populate the Site Audit project picker. Runs on every tab render; the underlying
+   endpoint costs nothing, and the project list changes rarely enough that a cached
+   list would mostly just go stale. */
+async function ahrefsLoadProjects() {
+  const sel    = document.getElementById('ah-project');
+  const status = document.getElementById('ah-project-status');
+  if (!sel) return;
+
+  const disable = msg => {
+    sel.innerHTML = '<option value="">— unavailable —</option>';
+    sel.disabled = true;
+    ahrefsProjectId = null;
+    status.style.color = '#dc3c3c';
+    status.textContent = msg;
+    const fallback = `<div class="ah-error-box">${escHtml(msg)}<br>
+      You can still scan up to 10 pages with the built-in crawler under <strong>Indexy → Alt Text Generator</strong>.</div>`;
+    document.getElementById('ah-audit-result').innerHTML  = fallback;
+    document.getElementById('ah-images-result').innerHTML = fallback;
+  };
+
+  try {
+    const res  = await ahrefsQuery('site-audit/projects', {});
+    const list = res.projects || (Array.isArray(res) ? res : Object.values(res).find(Array.isArray)) || [];
+    ahrefsProjects = list;
+
+    if (!list.length) { disable('No Site Audit projects found in this Ahrefs account.'); return; }
+
+    sel.disabled = false;
+    sel.innerHTML = list.map(p =>
+      `<option value="${escHtml(String(p.project_id))}">${escHtml(p.project_name || p.target_url || 'Untitled')} — ${escHtml(p.target_url || '')}</option>`
+    ).join('');
+
+    // Auto-select the project matching the active client's site
+    const want  = ahrefsBareHost(rtActiveClient()?.wpUrl);
+    const match = want && list.find(p => ahrefsBareHost(p.target_url) === want);
+    ahrefsProjectId = String((match || list[0]).project_id);
+    sel.value = ahrefsProjectId;
+
+    status.style.color = '';
+    status.textContent = match ? '✓ matched to active client' : (want ? '⚠ no project matches this client — pick one' : '');
+    ahrefsRestoreAudit();
+  } catch (e) {
+    const msg = e.message || '';
+    disable(/not configured|AHREFS_API_KEY/.test(msg)
+      ? 'Ahrefs API key not configured on the server.'
+      : `Site Audit unavailable: ${msg}. Your Ahrefs plan may not include Site Audit API access.`);
+  }
+}
+
+/* Re-render whatever this project already fetched, so switching sub-tabs or
+   projects does not re-spend API units (page-explorer and issues are 50 each). */
+function ahrefsRestoreAudit() {
+  const cached = ahrefsAuditCache[ahrefsProjectId];
+  const auditEl  = document.getElementById('ah-audit-result');
+  const imagesEl = document.getElementById('ah-images-result');
+  if (!auditEl || !imagesEl) return;
+
+  if (cached?.auditHtml) {
+    auditEl.innerHTML = cached.auditHtml;
+    // innerHTML discards listeners — re-attach the button the cached markup carries
+    auditEl.querySelector('#ah-tech-btn')?.addEventListener('click', ahrefsGenerateTechnical);
+  } else {
+    auditEl.innerHTML = '<div class="ah-empty">Run the audit to see health score and technical issues.</div>';
+  }
+
+  if (cached?.images) ahrefsRenderImageGaps(cached.images, cached.summary);
+  else imagesEl.innerHTML = '<div class="ah-empty">Find image gaps to see alt text and filename recommendations.</div>';
+}
+
+function ahrefsSelectedProject() {
+  return ahrefsProjects.find(p => String(p.project_id) === String(ahrefsProjectId)) || null;
 }
 
 async function ahrefsQuery(endpoint, params) {
@@ -8276,6 +8414,275 @@ async function ahrefsGenerateStrategy() {
   } finally {
     btn.disabled = false; btn.textContent = '🤖 Generate AI Strategy';
   }
+}
+
+/* ── AHREFS SITE AUDIT ──
+   Health score and crawl issues for the selected project, plus AI technical
+   recommendations. Unlike the Site Explorer pulls above, this reads Ahrefs' own
+   crawl of the site, so the issues are on-page and technical rather than link
+   and keyword based. */
+async function ahrefsRunSiteAudit() {
+  const btn    = document.getElementById('ah-audit-btn');
+  const status = document.getElementById('ah-audit-status');
+  const result = document.getElementById('ah-audit-result');
+  if (!ahrefsProjectId) { result.innerHTML = '<div class="gsc-msg gsc-error">Pick a Site Audit project first.</div>'; return; }
+
+  btn.disabled = true; btn.textContent = 'Running…';
+  status.style.color = '';
+  status.textContent = 'Fetching crawl issues…';
+
+  try {
+    const res    = await ahrefsQuery('site-audit/issues', { project_id: ahrefsProjectId });
+    const issues = res.issues || (Array.isArray(res) ? res : Object.values(res).find(Array.isArray)) || [];
+    const proj   = ahrefsSelectedProject() || {};
+
+    const html = ahrefsAuditHtml(proj, issues);
+    result.innerHTML = html;
+    const entry = (ahrefsAuditCache[ahrefsProjectId] ||= {});
+    entry.auditHtml = html;
+    entry.issues    = issues;
+
+    result.querySelector('#ah-tech-btn')?.addEventListener('click', ahrefsGenerateTechnical);
+    status.style.color = '#2d9e6b';
+    status.textContent = `✓ ${issues.length} issue type${issues.length !== 1 ? 's' : ''}`;
+  } catch (e) {
+    status.style.color = '#dc3c3c';
+    status.textContent = '';
+    result.innerHTML = `<div class="ah-error-box"><strong>Site Audit failed.</strong><br>${escHtml(e.message)}<br>
+      If your Ahrefs plan does not include Site Audit API access, use <strong>Indexy → Alt Text Generator</strong> instead.</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Run Site Audit';
+  }
+}
+
+function ahrefsAuditHtml(proj, issues) {
+  const cards = `<div class="ah-metrics-row">
+    ${ahMetric('Health Score', proj.health_score ?? '—')}
+    ${ahMetric('URLs Crawled', (proj.total ?? 0).toLocaleString())}
+    ${ahMetric('With Errors', (proj.urls_with_errors ?? 0).toLocaleString())}
+    ${ahMetric('With Warnings', (proj.urls_with_warnings ?? 0).toLocaleString())}
+    ${ahMetric('With Notices', (proj.urls_with_notices ?? 0).toLocaleString())}
+  </div>`;
+
+  if (!issues.length) return cards + '<div class="ah-empty">No issues reported for this crawl.</div>';
+
+  // Group by category so the Images issues sit together with the rest of the
+  // technical picture rather than scattered through one long list
+  const byCat = {};
+  for (const i of issues) (byCat[i.category || 'Other'] ||= []).push(i);
+
+  const sections = Object.entries(byCat)
+    .sort((a, b) => b[1].reduce((s, i) => s + (i.crawled ?? 0), 0) - a[1].reduce((s, i) => s + (i.crawled ?? 0), 0))
+    .map(([cat, list]) => {
+      const rows = list
+        .sort((a, b) => (b.crawled ?? 0) - (a.crawled ?? 0))
+        .map(i => {
+          // More affected URLs than last crawl is a regression, fewer is progress
+          const change = i.change ?? 0;
+          const color  = change > 0 ? '#dc3c3c' : change < 0 ? '#2d9e6b' : 'var(--text-muted)';
+          const chTxt  = change === 0 ? '—' : (change > 0 ? `+${change}` : String(change));
+          return `<tr>
+            <td>${escHtml(i.name ?? i.issue ?? '—')}</td>
+            <td>${(i.crawled ?? 0).toLocaleString()}</td>
+            <td style="color:${color}">${escHtml(chTxt)}</td>
+          </tr>`;
+        }).join('');
+      return `<h4 class="indexy-h4" style="margin-top:20px">${escHtml(cat)}</h4>
+        <div class="gsc-ai-table-wrap"><table class="gsc-ai-table">
+          <thead><tr><th>Issue</th><th>URLs Affected</th><th>Change</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>`;
+    }).join('');
+
+  return `${cards}
+    <div class="ah-toolbar">
+      <button id="ah-tech-btn" class="btn-sm btn-accent">🤖 Generate Technical Recommendations</button>
+    </div>
+    <div id="ah-tech-result"></div>
+    ${sections}`;
+}
+
+async function ahrefsGenerateTechnical() {
+  const btn    = document.getElementById('ah-tech-btn');
+  const result = document.getElementById('ah-tech-result');
+  const proj   = ahrefsSelectedProject() || {};
+  const issues = ahrefsAuditCache[ahrefsProjectId]?.issues || [];
+  if (!issues.length) { result.innerHTML = '<div class="gsc-msg gsc-error">Run the site audit first.</div>'; return; }
+
+  btn.disabled = true; btn.textContent = 'Generating…';
+  result.innerHTML = '<div class="gsc-msg">Claude is analyzing your crawl issues…</div>';
+
+  const summary = {
+    healthScore:  proj.health_score,
+    urlsCrawled:  proj.total,
+    urlsWithErrors:   proj.urls_with_errors,
+    urlsWithWarnings: proj.urls_with_warnings,
+    urlsWithNotices:  proj.urls_with_notices,
+    issues: issues
+      .filter(i => (i.crawled ?? 0) > 0)
+      .sort((a, b) => (b.crawled ?? 0) - (a.crawled ?? 0))
+      .slice(0, 60)
+      .map(i => ({ issue: i.name ?? i.issue, category: i.category, urlsAffected: i.crawled, change: i.change })),
+  };
+
+  try {
+    const r = await fetch('/api/ahrefs/ai', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ domain: proj.target_url || ahrefsDomain, data: summary, mode: 'technical' }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    const text = d.content?.find(b => b.type === 'text')?.text || '';
+    if (!text) throw new Error('No response from Claude');
+
+    result.innerHTML = '<div class="gsc-ai-result"><div class="gsc-ai-content">' + gscRenderMd(text) + '</div></div>';
+    gscWireTabs(result);
+    gscWireCopy(result);
+  } catch (e) {
+    result.innerHTML = `<div class="gsc-msg gsc-error">Error: ${escHtml(e.message)}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = '🤖 Generate Technical Recommendations';
+  }
+}
+
+/* ── AHREFS IMAGE GAPS ──
+   page-explorer returns each crawled page's images alongside their alt text, so
+   the whole site is covered rather than the ten pages the built-in crawler can
+   reach. Ordering by pages with the most missing alt puts the worst offenders
+   first, which matters because one request returns at most `limit` pages. */
+const AH_IMAGE_PAGE_LIMIT = 200;
+
+async function ahrefsFindImageGaps() {
+  const btn    = document.getElementById('ah-images-btn');
+  const status = document.getElementById('ah-images-status');
+  const result = document.getElementById('ah-images-result');
+  if (!ahrefsProjectId) { result.innerHTML = '<div class="gsc-msg gsc-error">Pick a Site Audit project first.</div>'; return; }
+
+  btn.disabled = true; btn.textContent = 'Scanning…';
+  status.style.color = '';
+  status.textContent = 'Reading crawled pages…';
+  result.innerHTML = '<div class="gsc-msg">Pulling image data from Ahrefs…</div>';
+
+  try {
+    const res = await ahrefsQuery('site-audit/page-explorer', {
+      project_id: ahrefsProjectId,
+      limit:      AH_IMAGE_PAGE_LIMIT,
+      order_by:   'links_count_images_without_alt:desc',
+      select:     'url,title,h1,links_count_images,links_count_images_without_alt,links_images,links_images_alt,links_images_without_alt',
+    });
+    const rows = res.pages || (Array.isArray(res) ? res : Object.values(res).find(Array.isArray)) || [];
+    if (!rows.length) {
+      result.innerHTML = '<div class="ah-empty">Ahrefs returned no crawled pages for this project.</div>';
+      status.textContent = '';
+      return;
+    }
+
+    const summary = { pages: rows.length, totalImages: 0, missingAlt: 0 };
+    const pages   = [];
+    for (const r of rows) {
+      summary.totalImages += r.links_count_images ?? 0;
+      summary.missingAlt  += r.links_count_images_without_alt ?? 0;
+      const images = ahrefsZipImages(r);
+      if (images.length) pages.push({ url: r.url, title: r.title || '', h1: r.h1 || '', images });
+    }
+
+    if (!pages.length) {
+      result.innerHTML = ahrefsImageSummaryHtml(summary) + '<div class="ah-empty">No images found on the crawled pages.</div>';
+      status.textContent = '';
+      return;
+    }
+
+    status.textContent = 'Writing alt text and filenames…';
+    result.innerHTML = '<div class="gsc-msg">Claude is writing alt text and filename recommendations…</div>';
+
+    const rec = await fetch('/api/alttext/recommend', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pages, clientName: rtActiveClient()?.name || '' }),
+    });
+    let d;
+    try { d = await rec.json(); } catch { throw new Error(`HTTP ${rec.status} — server may be restarting`); }
+    if (!rec.ok) throw new Error(d.error?.message || `HTTP ${rec.status}`);
+
+    const images = d.images || [];
+    summary.needingAttention = d.totalFound ?? images.length;
+
+    ahrefsAuditCache[ahrefsProjectId] ||= {};
+    ahrefsAuditCache[ahrefsProjectId].images  = images;
+    ahrefsAuditCache[ahrefsProjectId].summary = summary;
+
+    ahrefsRenderImageGaps(images, summary);
+    status.style.color = '#2d9e6b';
+    status.textContent = '✓ done';
+  } catch (e) {
+    status.style.color = '#dc3c3c';
+    status.textContent = '';
+    result.innerHTML = `<div class="ah-error-box"><strong>Could not read image data.</strong><br>${escHtml(e.message)}<br>
+      If your Ahrefs plan does not include Site Audit API access, use <strong>Indexy → Alt Text Generator</strong> instead.</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Find Image Gaps';
+  }
+}
+
+/* Pair each image URL with its alt text. The two arrays are index-aligned, but a
+   length mismatch would silently attach the wrong alt to the wrong image — so when
+   they disagree, fall back to the explicit without-alt list and report only what
+   we can be certain about. */
+function ahrefsZipImages(row) {
+  const srcs = Array.isArray(row.links_images) ? row.links_images : [];
+  const alts = Array.isArray(row.links_images_alt) ? row.links_images_alt : [];
+
+  if (srcs.length && srcs.length === alts.length) {
+    return srcs.map((src, i) => ({ src, alt: alts[i] ?? null }));
+  }
+  const without = Array.isArray(row.links_images_without_alt) ? row.links_images_without_alt : [];
+  return without.map(src => ({ src, alt: null }));
+}
+
+function ahrefsImageSummaryHtml(s) {
+  const covered  = (s.totalImages ?? 0) - (s.missingAlt ?? 0);
+  const coverage = s.totalImages ? Math.round((covered / s.totalImages) * 100) : 0;
+  const capped   = s.pages >= AH_IMAGE_PAGE_LIMIT
+    ? `<p class="indexy-note">Showing the ${AH_IMAGE_PAGE_LIMIT} pages with the most missing alt text. Fix these, re-crawl in Ahrefs, then run again for the next batch.</p>`
+    : '';
+  return `<div class="ah-metrics-row">
+      ${ahMetric('Alt Text Coverage', `${coverage}%`)}
+      ${ahMetric('Images Crawled', (s.totalImages ?? 0).toLocaleString())}
+      ${ahMetric('Missing Alt', (s.missingAlt ?? 0).toLocaleString())}
+      ${ahMetric('Pages Scanned', (s.pages ?? 0).toLocaleString())}
+    </div>${capped}`;
+}
+
+/* Renders through the same table the Indexy crawler uses, so both sources share
+   one set of copy / CSV / WordPress-push behaviour. */
+function ahrefsRenderImageGaps(images, summary) {
+  const result = document.getElementById('ah-images-result');
+  if (!result) return;
+
+  if (!images.length) {
+    result.innerHTML = ahrefsImageSummaryHtml(summary || {}) +
+      '<div class="ah-empty">Every crawled image already has usable alt text.</div>';
+    return;
+  }
+
+  const capNote = summary?.needingAttention > images.length
+    ? `<p class="indexy-note">${summary.needingAttention} images need attention; recommendations were written for the first ${images.length}.</p>`
+    : '';
+
+  result.innerHTML = ahrefsImageSummaryHtml(summary || {}) + capNote +
+    indexyAltTextTable(images, ahrefsSelectedProject()?.target_url || ahrefsDomain);
+
+  result.querySelectorAll('.alttext-copy-btn').forEach(b => {
+    b.addEventListener('click', () => {
+      navigator.clipboard.writeText(b.dataset.text).then(() => {
+        const orig = b.textContent; b.textContent = 'Copied!';
+        setTimeout(() => b.textContent = orig, 1500);
+      });
+    });
+  });
+  result.querySelector('#alttext-csv-btn')?.addEventListener('click', () => indexyAltTextCsv(images));
+  result.querySelector('#alttext-push-btn')?.addEventListener('click', () => indexyAltTextPushWP(images, result));
 }
 
 /* ═══════════════════════════════════════════════
