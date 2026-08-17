@@ -8140,15 +8140,27 @@ async function ahrefsPullAll() {
   btn.disabled = true;
   status.style.color = '';
 
+  // Ahrefs v3 requires an explicit `date` on the point-in-time metric endpoints and
+  // an explicit `select` on every row endpoint — omitting either is an error, not a
+  // default. There is no `overview`, `backlinks` or `best-by-links` endpoint in v3;
+  // the equivalents are metrics + backlinks-stats, all-backlinks and pages-by-backlinks.
+  const today = new Date().toISOString().slice(0, 10);
   const steps = [
-    ['Overview',          'site-explorer/overview',          { target: domain, mode: 'domain', country }],
-    ['Domain Rating',     'site-explorer/domain-rating',     { target: domain }],
-    ['Backlinks',         'site-explorer/backlinks',         { target: domain, mode: 'domain', limit: 100, order_by: 'domain_rating_source:desc' }],
-    ['Referring Domains', 'site-explorer/refdomains',        { target: domain, mode: 'domain', limit: 100, order_by: 'domain_rating:desc' }],
-    ['Keywords',          'site-explorer/organic-keywords',  { target: domain, mode: 'domain', limit: 100, country, order_by: 'traffic:desc' }],
-    ['Top Pages',         'site-explorer/top-pages',         { target: domain, mode: 'domain', limit: 50,  country }],
-    ['Broken Backlinks',  'site-explorer/broken-backlinks',  { target: domain, mode: 'domain', limit: 100 }],
-    ['Best by Links',     'site-explorer/best-by-links',     { target: domain, mode: 'domain', limit: 50 }],
+    ['Metrics',           'site-explorer/metrics',            { target: domain, mode: 'domain', country, date: today }],
+    ['Backlink Totals',   'site-explorer/backlinks-stats',    { target: domain, mode: 'domain', date: today }],
+    ['Domain Rating',     'site-explorer/domain-rating',      { target: domain, date: today }],
+    ['Backlinks',         'site-explorer/all-backlinks',      { target: domain, mode: 'domain', limit: 100, order_by: 'domain_rating_source:desc',
+                                                                select: 'url_from,url_to,domain_rating_source,anchor,is_dofollow,first_seen' }],
+    ['Referring Domains', 'site-explorer/refdomains',         { target: domain, mode: 'domain', limit: 100, order_by: 'domain_rating:desc',
+                                                                select: 'domain,domain_rating,links_to_target,traffic_domain' }],
+    ['Keywords',          'site-explorer/organic-keywords',   { target: domain, mode: 'domain', limit: 100, country, date: today, order_by: 'sum_traffic:desc',
+                                                                select: 'keyword,best_position,volume,sum_traffic,keyword_difficulty,best_position_url' }],
+    ['Top Pages',         'site-explorer/top-pages',          { target: domain, mode: 'domain', limit: 50, country, date: today, order_by: 'sum_traffic:desc',
+                                                                select: 'url,sum_traffic,keywords,top_keyword,referring_domains' }],
+    ['Broken Backlinks',  'site-explorer/broken-backlinks',   { target: domain, mode: 'domain', limit: 100,
+                                                                select: 'url_from,url_to,domain_rating_source,anchor,first_seen' }],
+    ['Pages by Backlinks','site-explorer/pages-by-backlinks', { target: domain, mode: 'domain', limit: 50, order_by: 'links_to_target:desc',
+                                                                select: 'url_to,links_to_target,refdomains_target,url_rating_target,title_target' }],
   ];
 
   const data = {};
@@ -8207,19 +8219,26 @@ function ahMetric(label, value, sub = '') {
   return `<div class="ah-metric"><div class="ah-metric-val">${escHtml(String(value ?? '—'))}</div><div class="ah-metric-label">${label}</div>${sub ? `<div class="ah-metric-sub">${sub}</div>` : ''}</div>`;
 }
 
+/* Format a possibly-null count without turning it into "0" when it is genuinely
+   absent — an unknown backlink count and a real zero read very differently. */
+function ahNum(v) {
+  return v === null || v === undefined ? '—' : Number(v).toLocaleString();
+}
+
 function ahrefsRenderOverview(data) {
-  const ov = data.overview || {};
-  const dr = data['domain-rating'] || {};
+  const m     = data.metrics?.metrics ?? {};
+  const bl    = data['backlinks-stats']?.metrics ?? {};
+  const dr    = data['domain-rating']?.domain_rating ?? {};
   const panel = document.getElementById('ah-panel-overview');
   if (!panel) return;
 
   const metrics = `<div class="ah-metrics-row">
-    ${ahMetric('Domain Rating', dr.domain?.domain_rating ?? ov.domain_rating ?? '—')}
-    ${ahMetric('Backlinks', (ov.backlinks ?? ov.metrics?.backlinks ?? '—').toLocaleString?.() ?? '—')}
-    ${ahMetric('Referring Domains', (ov.refdomains ?? ov.metrics?.refdomains ?? '—').toLocaleString?.() ?? '—')}
-    ${ahMetric('Organic Traffic', (ov.org_traffic ?? ov.metrics?.org_traffic ?? '—').toLocaleString?.() ?? '—', 'est. monthly visits')}
-    ${ahMetric('Organic Keywords', (ov.org_keywords ?? ov.metrics?.org_keywords ?? '—').toLocaleString?.() ?? '—')}
-    ${ahMetric('Paid Traffic', (ov.paid_traffic ?? ov.metrics?.paid_traffic ?? 0).toLocaleString?.() ?? '0')}
+    ${ahMetric('Domain Rating', dr.domain_rating ?? '—')}
+    ${ahMetric('Backlinks', ahNum(bl.live), 'live')}
+    ${ahMetric('Referring Domains', ahNum(bl.live_refdomains))}
+    ${ahMetric('Organic Traffic', ahNum(m.org_traffic), 'est. monthly visits')}
+    ${ahMetric('Organic Keywords', ahNum(m.org_keywords))}
+    ${ahMetric('Paid Traffic', ahNum(m.paid_traffic))}
   </div>`;
 
   // Top refdomains preview
@@ -8229,10 +8248,10 @@ function ahrefsRenderOverview(data) {
     <div class="gsc-ai-table-wrap"><table class="gsc-ai-table">
       <thead><tr><th>Domain</th><th>DR</th><th>Links</th><th>Traffic</th></tr></thead>
       <tbody>${refs.slice(0, 10).map(r => `<tr>
-        <td>${escHtml(r.refdomains ?? r.domain ?? '')}</td>
+        <td>${escHtml(r.domain ?? '')}</td>
         <td>${r.domain_rating ?? '—'}</td>
-        <td>${(r.backlinks ?? 0).toLocaleString()}</td>
-        <td>${(r.org_traffic ?? 0).toLocaleString()}</td>
+        <td>${ahNum(r.links_to_target)}</td>
+        <td>${ahNum(r.traffic_domain)}</td>
       </tr>`).join('')}</tbody>
     </table></div>` : '';
 
@@ -8242,18 +8261,18 @@ function ahrefsRenderOverview(data) {
 function ahrefsRenderBacklinks(data) {
   const panel = document.getElementById('ah-panel-backlinks');
   if (!panel) return;
-  const bls = data.backlinks?.backlinks ?? [];
+  const bls = data['all-backlinks']?.backlinks ?? [];
   if (!bls.length) { panel.innerHTML = '<div class="ah-empty">No backlinks data.</div>'; return; }
   panel.innerHTML = `
     <p class="ah-info">${bls.length} backlinks loaded (sorted by DR)</p>
     <div class="gsc-ai-table-wrap"><table class="gsc-ai-table">
       <thead><tr><th>Source</th><th>DR</th><th>Anchor</th><th>Target URL</th><th>Type</th><th>First seen</th></tr></thead>
       <tbody>${bls.map(b => `<tr>
-        <td><a href="${escHtml(b.url_from??'')}" target="_blank" class="ah-link">${escHtml((b.domain_from??b.url_from??'').replace(/^https?:\/\//, '').split('/')[0])}</a></td>
+        <td><a href="${escHtml(b.url_from??'')}" target="_blank" class="ah-link">${escHtml((b.url_from??'').replace(/^https?:\/\//, '').split('/')[0])}</a></td>
         <td>${b.domain_rating_source ?? '—'}</td>
         <td class="ah-anchor">${escHtml(b.anchor ?? '—')}</td>
         <td class="ah-url" title="${escHtml(b.url_to??'')}">${escHtml((b.url_to??'').replace(/^https?:\/\/[^/]+/,'').slice(0,40)||'/')}</td>
-        <td>${b.link_type === 'nofollow' ? '<span class="ah-nf">nofollow</span>' : '<span class="ah-follow">dofollow</span>'}</td>
+        <td>${b.is_dofollow ? '<span class="ah-follow">dofollow</span>' : '<span class="ah-nf">nofollow</span>'}</td>
         <td>${b.first_seen?.slice(0,10) ?? '—'}</td>
       </tr>`).join('')}</tbody>
     </table></div>`;
@@ -8269,15 +8288,16 @@ function ahrefsRenderKeywords(data) {
     <div class="gsc-ai-table-wrap"><table class="gsc-ai-table">
       <thead><tr><th>Keyword</th><th>Position</th><th>Volume</th><th>Traffic</th><th>KD</th><th>URL</th></tr></thead>
       <tbody>${kws.map(k => {
-        const pos = k.pos ?? k.position ?? 0;
+        const pos = k.best_position ?? 0;
+        const url = k.best_position_url ?? '';
         const posCls = pos <= 3 ? 'ah-pos-top' : pos <= 10 ? 'ah-pos-p1' : 'ah-pos-p2';
         return `<tr>
           <td class="ah-kw">${escHtml(k.keyword ?? '')}</td>
           <td><span class="ah-pos ${posCls}">${pos}</span></td>
-          <td>${(k.volume ?? 0).toLocaleString()}</td>
-          <td>${(k.traffic ?? 0).toLocaleString()}</td>
-          <td>${k.difficulty ?? k.kd ?? '—'}</td>
-          <td class="ah-url" title="${escHtml(k.url??'')}">${escHtml((k.url??'').replace(/^https?:\/\/[^/]+/,'').slice(0,35)||'/')}</td>
+          <td>${ahNum(k.volume)}</td>
+          <td>${ahNum(k.sum_traffic)}</td>
+          <td>${k.keyword_difficulty ?? '—'}</td>
+          <td class="ah-url" title="${escHtml(url)}">${escHtml(url.replace(/^https?:\/\/[^/]+/,'').slice(0,35)||'/')}</td>
         </tr>`;
       }).join('')}</tbody>
     </table></div>`;
@@ -8287,7 +8307,7 @@ function ahrefsRenderPages(data) {
   const panel = document.getElementById('ah-panel-pages');
   if (!panel) return;
   const pages = data['top-pages']?.pages ?? [];
-  const bestByLinks = data['best-by-links']?.pages ?? [];
+  const bestByLinks = data['pages-by-backlinks']?.pages ?? [];
   if (!pages.length && !bestByLinks.length) { panel.innerHTML = '<div class="ah-empty">No pages data.</div>'; return; }
 
   const topTraffic = pages.length ? `
@@ -8296,8 +8316,8 @@ function ahrefsRenderPages(data) {
       <thead><tr><th>URL</th><th>Traffic</th><th>Keywords</th><th>Top Keyword</th></tr></thead>
       <tbody>${pages.slice(0, 30).map(p => `<tr>
         <td class="ah-url"><a href="${escHtml(p.url??'')}" target="_blank" class="ah-link">${escHtml((p.url??'').replace(/^https?:\/\/[^/]+/,'').slice(0,50)||'/')}</a></td>
-        <td>${(p.traffic ?? 0).toLocaleString()}</td>
-        <td>${(p.keywords ?? 0).toLocaleString()}</td>
+        <td>${ahNum(p.sum_traffic)}</td>
+        <td>${ahNum(p.keywords)}</td>
         <td class="ah-kw">${escHtml(p.top_keyword ?? '—')}</td>
       </tr>`).join('')}</tbody>
     </table></div>` : '';
@@ -8305,11 +8325,12 @@ function ahrefsRenderPages(data) {
   const topLinks = bestByLinks.length ? `
     <h4 class="indexy-h4" style="margin-top:20px">Pages with Most Backlinks</h4>
     <div class="gsc-ai-table-wrap"><table class="gsc-ai-table">
-      <thead><tr><th>URL</th><th>Backlinks</th><th>Ref Domains</th></tr></thead>
+      <thead><tr><th>URL</th><th>Backlinks</th><th>Ref Domains</th><th>UR</th></tr></thead>
       <tbody>${bestByLinks.slice(0, 20).map(p => `<tr>
-        <td class="ah-url"><a href="${escHtml(p.url??'')}" target="_blank" class="ah-link">${escHtml((p.url??'').replace(/^https?:\/\/[^/]+/,'').slice(0,50)||'/')}</a></td>
-        <td>${(p.backlinks ?? 0).toLocaleString()}</td>
-        <td>${(p.refdomains ?? 0).toLocaleString()}</td>
+        <td class="ah-url"><a href="${escHtml(p.url_to??'')}" target="_blank" class="ah-link">${escHtml((p.url_to??'').replace(/^https?:\/\/[^/]+/,'').slice(0,50)||'/')}</a></td>
+        <td>${ahNum(p.links_to_target)}</td>
+        <td>${ahNum(p.refdomains_target)}</td>
+        <td>${p.url_rating_target ?? '—'}</td>
       </tr>`).join('')}</tbody>
     </table></div>` : '';
 
@@ -8329,7 +8350,7 @@ function ahrefsRenderOpportunities(data) {
     <div class="gsc-ai-table-wrap"><table class="gsc-ai-table">
       <thead><tr><th>Source</th><th>DR</th><th>Broken URL</th><th>Anchor</th></tr></thead>
       <tbody>${broken.slice(0, 50).map(b => `<tr>
-        <td><a href="${escHtml(b.url_from??'')}" target="_blank" class="ah-link">${escHtml((b.domain_from??b.url_from??'').replace(/^https?:\/\//,'').split('/')[0])}</a></td>
+        <td><a href="${escHtml(b.url_from??'')}" target="_blank" class="ah-link">${escHtml((b.url_from??'').replace(/^https?:\/\//,'').split('/')[0])}</a></td>
         <td>${b.domain_rating_source ?? '—'}</td>
         <td class="ah-url ah-broken">${escHtml((b.url_to??'').replace(/^https?:\/\/[^/]+/,'').slice(0,50))}</td>
         <td>${escHtml(b.anchor ?? '—')}</td>
@@ -8337,7 +8358,7 @@ function ahrefsRenderOpportunities(data) {
     </table></div>` : '<p class="ah-info" style="color:var(--success,#2d9e6b)">✓ No broken backlinks found.</p>';
 
   // Low-hanging keywords: positions 4–20 with decent volume = quick wins
-  const quickWins = kws.filter(k => { const p = k.pos ?? k.position ?? 99; return p >= 4 && p <= 20 && (k.volume ?? 0) >= 100; });
+  const quickWins = kws.filter(k => { const p = k.best_position ?? 99; return p >= 4 && p <= 20 && (k.volume ?? 0) >= 100; });
   const quickWinsHtml = quickWins.length ? `
     <h4 class="indexy-h4" style="margin-top:24px">🚀 Quick Win Keywords — Positions 4–20 with Volume (${quickWins.length})</h4>
     <p class="ah-info">These keywords are close to page 1 or top-3. A content refresh or on-page optimization could move them up fast.</p>
@@ -8345,16 +8366,16 @@ function ahrefsRenderOpportunities(data) {
       <thead><tr><th>Keyword</th><th>Position</th><th>Volume</th><th>Traffic</th><th>URL</th></tr></thead>
       <tbody>${quickWins.slice(0, 50).map(k => `<tr>
         <td class="ah-kw">${escHtml(k.keyword ?? '')}</td>
-        <td><span class="ah-pos ${(k.pos??k.position??99)<=10?'ah-pos-p1':'ah-pos-p2'}">${k.pos ?? k.position}</span></td>
-        <td>${(k.volume ?? 0).toLocaleString()}</td>
-        <td>${(k.traffic ?? 0).toLocaleString()}</td>
-        <td class="ah-url">${escHtml((k.url??'').replace(/^https?:\/\/[^/]+/,'').slice(0,40)||'/')}</td>
+        <td><span class="ah-pos ${(k.best_position??99)<=10?'ah-pos-p1':'ah-pos-p2'}">${k.best_position ?? '—'}</span></td>
+        <td>${ahNum(k.volume)}</td>
+        <td>${ahNum(k.sum_traffic)}</td>
+        <td class="ah-url">${escHtml((k.best_position_url??'').replace(/^https?:\/\/[^/]+/,'').slice(0,40)||'/')}</td>
       </tr>`).join('')}</tbody>
     </table></div>` : '';
 
   // Pages with traffic but few backlinks = link building targets
   const pages = data['top-pages']?.pages ?? [];
-  const linkTargets = pages.filter(p => (p.traffic ?? 0) > 100 && (p.refdomains ?? 0) < 5);
+  const linkTargets = pages.filter(p => (p.sum_traffic ?? 0) > 100 && (p.referring_domains ?? 0) < 5);
   const linkTargetsHtml = linkTargets.length ? `
     <h4 class="indexy-h4" style="margin-top:24px">🎯 Link Building Targets — High Traffic, Low Links (${linkTargets.length})</h4>
     <p class="ah-info">These pages already get organic traffic but have few referring domains. Building links to them would amplify their performance.</p>
@@ -8362,8 +8383,8 @@ function ahrefsRenderOpportunities(data) {
       <thead><tr><th>URL</th><th>Traffic</th><th>Ref Domains</th><th>Top Keyword</th></tr></thead>
       <tbody>${linkTargets.slice(0, 20).map(p => `<tr>
         <td class="ah-url"><a href="${escHtml(p.url??'')}" target="_blank" class="ah-link">${escHtml((p.url??'').replace(/^https?:\/\/[^/]+/,'').slice(0,50)||'/')}</a></td>
-        <td>${(p.traffic ?? 0).toLocaleString()}</td>
-        <td>${p.refdomains ?? 0}</td>
+        <td>${ahNum(p.sum_traffic)}</td>
+        <td>${p.referring_domains ?? 0}</td>
         <td class="ah-kw">${escHtml(p.top_keyword ?? '—')}</td>
       </tr>`).join('')}</tbody>
     </table></div>` : '';
@@ -8385,13 +8406,13 @@ async function ahrefsGenerateStrategy() {
   // Build a compact summary to stay within tokens
   const summary = {
     domain,
-    domainRating: data['domain-rating']?.domain?.domain_rating,
-    overview: data.overview?.metrics ?? data.overview,
-    topRefdomains: (data.refdomains?.refdomains ?? []).slice(0, 20).map(r => ({ domain: r.refdomains ?? r.domain, dr: r.domain_rating, links: r.backlinks })),
-    brokenBacklinks: (data['broken-backlinks']?.backlinks ?? []).slice(0, 30).map(b => ({ from: b.domain_from ?? b.url_from, dr: b.domain_rating_source, brokenUrl: b.url_to, anchor: b.anchor })),
-    quickWinKeywords: (data['organic-keywords']?.keywords ?? []).filter(k => { const p = k.pos??k.position??99; return p>=4&&p<=20&&(k.volume??0)>=50; }).slice(0,30).map(k=>({ keyword:k.keyword, pos:k.pos??k.position, volume:k.volume, url:k.url })),
-    topPages: (data['top-pages']?.pages ?? []).slice(0,20).map(p=>({ url:p.url, traffic:p.traffic, keywords:p.keywords, topKw:p.top_keyword })),
-    pagesNeedingLinks: (data['top-pages']?.pages ?? []).filter(p=>(p.traffic??0)>100&&(p.refdomains??0)<5).slice(0,15).map(p=>({ url:p.url, traffic:p.traffic, refdomains:p.refdomains })),
+    domainRating: data['domain-rating']?.domain_rating?.domain_rating,
+    overview: { ...(data.metrics?.metrics ?? {}), ...(data['backlinks-stats']?.metrics ?? {}) },
+    topRefdomains: (data.refdomains?.refdomains ?? []).slice(0, 20).map(r => ({ domain: r.domain, dr: r.domain_rating, links: r.links_to_target })),
+    brokenBacklinks: (data['broken-backlinks']?.backlinks ?? []).slice(0, 30).map(b => ({ from: b.url_from, dr: b.domain_rating_source, brokenUrl: b.url_to, anchor: b.anchor })),
+    quickWinKeywords: (data['organic-keywords']?.keywords ?? []).filter(k => { const p = k.best_position??99; return p>=4&&p<=20&&(k.volume??0)>=50; }).slice(0,30).map(k=>({ keyword:k.keyword, pos:k.best_position, volume:k.volume, url:k.best_position_url })),
+    topPages: (data['top-pages']?.pages ?? []).slice(0,20).map(p=>({ url:p.url, traffic:p.sum_traffic, keywords:p.keywords, topKw:p.top_keyword })),
+    pagesNeedingLinks: (data['top-pages']?.pages ?? []).filter(p=>(p.sum_traffic??0)>100&&(p.referring_domains??0)<5).slice(0,15).map(p=>({ url:p.url, traffic:p.sum_traffic, refdomains:p.referring_domains })),
   };
 
   try {
