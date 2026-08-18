@@ -1288,6 +1288,15 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
 .ah-empty { color: var(--text-muted); font-size: 13px; padding: 32px; text-align: center; }
 .ah-info  { font-size: 12px; color: var(--text-secondary); margin: 0 0 8px; }
 
+/* ── SCHEMA AUDIT ── */
+.sch-code {
+  margin: 0; padding: 10px 12px; max-height: 340px; overflow: auto;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px; line-height: 1.5; color: var(--text-secondary);
+  white-space: pre; tab-size: 2;
+}
+
 .ah-link  { color: var(--accent); text-decoration: none; }
 .ah-link:hover { text-decoration: underline; }
 .ah-url   { font-size: 11px; color: var(--text-muted); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

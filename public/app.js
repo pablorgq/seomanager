@@ -98,6 +98,7 @@ const TAB_ROUTES = {
   images:    '/image-generator',
   indexy:    '/indexy',
   ahrefs:    '/ahrefs',
+  schema:    '/schema',
   artimage:  '/article-image',
   artcontent:'/article-content',
 };
@@ -116,6 +117,7 @@ function switchTab(tab, { pushState = true } = {}) {
   if (tab === 'weekly') weeklyRender();
   if (tab === 'indexy') { indexyRender(); indexySyncClient(); }
   if (tab === 'ahrefs') ahrefsRender();
+  if (tab === 'schema') { schemaSyncClient(); schemaRender(); }
   if (tab === 'artimage') aigRender();
   if (tab === 'artcontent') acgRender();
   if (pushState) {
@@ -152,6 +154,11 @@ async function init() {
   await rtInit();
   coraInit();
   await weeklyLoadFromServer();
+  // Same deal as auditData below — a deep link to /schema renders before this
+  // resolves, so re-render once the saved crawl is actually in hand.
+  schemaLoadStore().then(() => {
+    if (document.querySelector('.tab-btn.active')?.dataset.tab === 'schema') { schemaSyncClient(); schemaRender(); }
+  });
   // Not awaited — but the Indexy tab may already be on screen by the time this
   // lands (deep link / hard reload), and it renders straight from auditData, so
   // re-run it once the data is actually here or the list shows up empty.
@@ -5471,6 +5478,7 @@ async function rtInit() {
     const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
     if (activeTab === 'ranks') rtRender();
     if (activeTab === 'ahrefs') ahrefsRender();
+    if (activeTab === 'schema') { schemaSyncClient(); schemaRender(); }
     if (activeTab === 'indexy') { indexyLoadSaved(e.target.value); indexyAltTextPrefill(); }
   });
   document.getElementById('rt-addClientBtn').addEventListener('click', () => rtShowAddClient());
@@ -8704,6 +8712,514 @@ function ahrefsRenderImageGaps(images, summary) {
   });
   result.querySelector('#alttext-csv-btn')?.addEventListener('click', () => indexyAltTextCsv(images));
   result.querySelector('#alttext-push-btn')?.addEventListener('click', () => indexyAltTextPushWP(images, result));
+}
+
+/* ═══════════════════════════════════════════════
+   SCHEMA AUDIT
+   Crawl the active client's site, report what structured data each page really
+   has, and generate the advanced @graph JSON-LD it should have. The SCH column
+   in Rank Tracker and the schemaOpt weekly category are hand-ticked flags; this
+   is where the underlying fact comes from.
+════════════════════════════════════════════════ */
+
+let schemaStore  = {};     // clientId → { domain, scannedAt, source, pages, recs }
+let schemaState  = { domain: '', maxPages: 25, busy: false, subtab: 'status', message: null };
+
+/* What each page type owes. `any` is an alternatives list — LocalBusiness
+   satisfies the Organization slot, BlogPosting satisfies Article, and so on, so
+   a correctly-marked-up page is not reported as missing something. */
+const SCHEMA_EXPECTED = {
+  home: [
+    { label: 'Organization',   any: ['Organization', 'LocalBusiness', 'ProfessionalService', 'Corporation'] },
+    { label: 'WebSite',        any: ['WebSite'] },
+    { label: 'WebPage',        any: ['WebPage', 'CollectionPage'] },
+    { label: 'BreadcrumbList', any: ['BreadcrumbList'] },
+  ],
+  service: [
+    { label: 'Service',        any: ['Service', 'Product', 'Offer'] },
+    { label: 'LocalBusiness',  any: ['LocalBusiness', 'Organization', 'ProfessionalService'] },
+    { label: 'WebPage',        any: ['WebPage', 'ItemPage'] },
+    { label: 'BreadcrumbList', any: ['BreadcrumbList'] },
+  ],
+  article: [
+    { label: 'Article',        any: ['Article', 'BlogPosting', 'NewsArticle'] },
+    // `prop` rather than `any`: an Organization node satisfies no author slot —
+    // Yoast emits one as `publisher` on every post.
+    { label: 'Author',         prop: 'author' },
+    { label: 'WebPage',        any: ['WebPage', 'ItemPage'] },
+    { label: 'BreadcrumbList', any: ['BreadcrumbList'] },
+  ],
+  contact: [
+    { label: 'LocalBusiness',  any: ['LocalBusiness', 'Organization', 'ProfessionalService'] },
+    { label: 'ContactPoint',   any: ['ContactPoint', 'ContactPage'] },
+    { label: 'WebPage',        any: ['WebPage', 'ContactPage'] },
+    { label: 'BreadcrumbList', any: ['BreadcrumbList'] },
+  ],
+};
+
+const SCHEMA_TYPE_LABELS = { home: 'Homepage', service: 'Service', article: 'Article', contact: 'Contact' };
+
+/* Infer the page type from the URL shape, falling back to crawl signals. Keeps
+   the same service/article split the Article Generator uses (AG_PAGE_TYPES), so
+   the two tabs agree about what a page is. */
+function schemaPageType(page) {
+  let path = '';
+  try { path = new URL(page.url).pathname.replace(/\/+$/, '').toLowerCase(); } catch { path = ''; }
+  if (path === '' || path === '/index.html') return 'home';
+  if (/contact|get-in-touch|book|appointment/.test(path)) return 'contact';
+  if (/\/(blog|news|article|articles|post|posts|guide|guides|resources)\//.test(path + '/')) return 'article';
+  const s = page.signals || {};
+  if (s.hasDate && s.hasAuthor) return 'article';
+  return 'service';
+}
+
+/* Compare what the page has against what its type owes. */
+function schemaEvaluate(page) {
+  const type     = page.pageType || schemaPageType(page);
+  const found    = page.types || [];
+  const expected = (SCHEMA_EXPECTED[type] || SCHEMA_EXPECTED.service).slice();
+  // Gate on the questions actually extracted, not merely on an "FAQ" heading —
+  // the generator refuses to invent Q&A it cannot see, so flagging a page whose
+  // questions we could not read would report a gap with no available fix.
+  if ((page.signals?.questions?.length || 0) >= 2) expected.push({ label: 'FAQPage', any: ['FAQPage', 'QAPage'] });
+  if (page.signals?.hasSteps)                      expected.push({ label: 'HowTo',   any: ['HowTo'] });
+
+  const missing = expected.filter(e => e.prop
+    ? !page.props?.[e.prop]
+    : !e.any.some(t => found.includes(t))
+  ).map(e => e.label);
+  const issues  = [];
+  if (page.parseErrors?.length) issues.push(`${page.parseErrors.length} block(s) failed to parse`);
+  if (found.length && !found.some(t => /WebPage|ItemPage|CollectionPage|ContactPage/.test(t))) {
+    issues.push('No WebPage node to anchor the graph');
+  }
+
+  let status;
+  if (page.parseErrors?.length)   status = 'blocked';
+  else if (!found.length)         status = 'not';
+  else if (missing.length)        status = 'progress';
+  else                            status = 'done';
+
+  // Homepage and service pages convert — they lead the fix list
+  const weight   = (type === 'home' || type === 'service') ? 2 : 1;
+  const priority = status === 'done' ? 0 : (missing.length + (status === 'blocked' ? 3 : 0)) * weight;
+
+  return { type, found, missing, issues, status, priority };
+}
+
+const SCHEMA_STATUS_META = {
+  done:     { cls: 'wk-status-done',     label: 'Complete' },
+  progress: { cls: 'wk-status-progress', label: 'Partial'  },
+  not:      { cls: 'wk-status-not',      label: 'None'     },
+  blocked:  { cls: 'wk-status-blocked',  label: 'Invalid'  },
+};
+
+/* ── persistence (same full-replace-by-key shape as the Indexy audit store) ── */
+async function schemaLoadStore() {
+  try {
+    const r = await fetch('/api/schemadata');
+    if (r.ok) schemaStore = await r.json() || {};
+  } catch { schemaStore = {}; }
+}
+
+/* Takes the client id explicitly — a scan runs for minutes and the user may
+   switch client mid-run, so reading activeClientId here would file the result
+   under whoever happens to be selected when it lands. */
+async function schemaSaveStore(clientId) {
+  const id = clientId || rtData?.activeClientId;
+  if (!id || !schemaStore[id]) return true;
+  try {
+    const r = await fetch('/api/schemadata', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [id]: schemaStore[id] }),
+    });
+    return r.ok;
+  } catch { return false; }
+}
+
+/* The parsed blocks are only needed to derive `types` during the scan; keeping
+   them would push a 100-page payload past the server's 512kb JSON limit and the
+   resulting 413 would throw the whole crawl away. */
+function schemaSlimPage(p) {
+  const { blocks, ...rest } = p;
+  return rest;
+}
+
+function schemaCurrent() {
+  const id = rtData?.activeClientId;
+  return id ? (schemaStore[id] || null) : null;
+}
+
+function schemaSyncClient() {
+  if (schemaState.busy) return;              // a run in flight owns the domain box
+  const c = rtActiveClient();
+  const saved = schemaCurrent();
+  schemaState.domain  = saved?.domain || ahrefsBareHost(c?.wpUrl) || '';
+  schemaState.message = null;                // a result for the previous client is not a result for this one
+}
+
+/* ── actions ── */
+/* Status lives in state, not in the DOM — the finally-block re-render rebuilds
+   root.innerHTML and would otherwise wipe the message it just wrote. */
+function schemaSetMessage(text, tone) {
+  schemaState.message = text ? { text, tone: tone || '' } : null;
+}
+
+async function schemaScan() {
+  const id = rtData?.activeClientId;           // captured — the run outlives the selection
+  if (!id) return;
+  const domain = document.getElementById('sch-domain')?.value.trim();
+  if (!domain) return;
+  const maxPages = parseInt(document.getElementById('sch-maxpages')?.value) || 25;
+
+  schemaState.busy = true;
+  schemaSetMessage(`Crawling ${domain}…`);
+  schemaRender();
+
+  try {
+    const r = await fetch('/api/schema/scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: /^https?:\/\//i.test(domain) ? domain : `https://${domain}`, maxPages }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data?.error?.message || `Scan failed (${r.status})`);
+
+    const pages = (data.pages || []).map(p => schemaSlimPage({ ...p, pageType: schemaPageType(p) }));
+    // An empty result must not wipe a good earlier scan — a blocked crawl or a
+    // budget stop would otherwise cost the user everything they had.
+    if (!pages.length && schemaStore[id]?.pages?.length) {
+      throw new Error('Crawl returned no pages — keeping the previous scan. Check the domain is reachable.');
+    }
+
+    // Carry recommendations forward only for URLs that still exist, and keep the
+    // old page content they were written against so the UI can mark them stale.
+    const prevRecs = schemaStore[id]?.recs || {};
+    const stillHere = new Set(pages.map(p => p.url));
+    const recs = {};
+    for (const [url, rec] of Object.entries(prevRecs)) {
+      if (stillHere.has(url)) recs[url] = rec;
+    }
+
+    schemaStore[id] = {
+      domain,
+      scannedAt: Date.now(),
+      source:    data.source || 'crawl',
+      pages,
+      recs,
+    };
+    const saved = await schemaSaveStore(id);
+    const parts = [`✓ ${pages.length} page(s) scanned via ${data.source || 'crawl'}.`];
+    if (data.truncated) parts.push(`Stopped at the time limit with ${data.remaining || 0} still queued — scan again to go deeper.`);
+    if (!saved)         parts.push('Could not save to the server — the result is in this tab only.');
+    schemaSetMessage(parts.join(' '), saved && !data.truncated ? 'green' : 'amber');
+  } catch (e) {
+    schemaSetMessage(e.message, 'red');
+  } finally {
+    schemaState.busy = false;
+    schemaRender();
+  }
+}
+
+/* Trailing-slash and case differences would orphan a recommendation from its
+   page, so both sides of the join are normalised. */
+function schemaUrlKey(u) {
+  try {
+    const x = new URL(u);
+    return (x.origin + x.pathname.replace(/\/+$/, '')).toLowerCase();
+  } catch { return String(u || '').replace(/\/+$/, '').toLowerCase(); }
+}
+
+async function schemaGenerate() {
+  const id  = rtData?.activeClientId;          // captured — see schemaScan
+  const cur = schemaCurrent();
+  if (!id || !cur?.pages?.length) return;
+  const c = rtActiveClient();
+
+  schemaState.busy = true;
+  schemaSetMessage(`Writing advanced JSON-LD for ${cur.pages.length} page(s)… this takes a minute.`);
+  schemaRender();
+
+  try {
+    const r = await fetch('/api/schema/recommend', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pages: cur.pages.map(p => ({
+          url: p.url, pageType: p.pageType, title: p.title, h1: p.h1,
+          metaDesc: p.metaDesc, types: p.types, signals: p.signals,
+        })),
+        clientName: c?.name || '',
+        wpUrl:      c?.wpUrl || '',
+      }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data?.error?.message || `Generation failed (${r.status})`);
+
+    // Match the model's echoed url back to the page it came from, so a
+    // normalised or reformatted url still lands on the right record.
+    const byKey = new Map(cur.pages.map(p => [schemaUrlKey(p.url), p.url]));
+    cur.recs = cur.recs || {};
+    let orphaned = 0;
+    for (const rec of data.recommendations || []) {
+      if (!rec?.url) continue;
+      const target = byKey.get(schemaUrlKey(rec.url));
+      if (target) cur.recs[target] = { ...rec, url: target };
+      else orphaned++;
+    }
+    cur.generatedAt = Date.now();
+    const saved = await schemaSaveStore(id);
+
+    const ok     = cur.pages.filter(p => cur.recs[p.url]?.jsonld).length;
+    const failed = cur.pages.filter(p => cur.recs[p.url]?.error).length;
+    const parts  = [`✓ JSON-LD ready for ${ok} page(s).`];
+    if (failed)         parts.push(`${failed} failed.`);
+    if (data.skipped)   parts.push(`${data.skipped} page(s) beyond the 60-page limit were skipped.`);
+    if (orphaned)       parts.push(`${orphaned} result(s) did not match a scanned page.`);
+    if (!saved)         parts.push('Could not save to the server — the result is in this tab only.');
+    schemaSetMessage(parts.join(' '), (failed || data.skipped || orphaned || !saved) ? 'amber' : 'green');
+    schemaState.subtab = 'advanced';
+  } catch (e) {
+    schemaSetMessage(e.message, 'red');
+  } finally {
+    schemaState.busy = false;
+    schemaRender();
+  }
+}
+
+/* ── export ── */
+
+/* Excel caps a cell at 32,767 characters and a large @graph will blow past it.
+   Truncating loudly beats writing a file Excel refuses to open. */
+function schemaCell(v) {
+  let s = v === null || v === undefined ? '' : String(v);
+  if (s.length > 32000) s = s.slice(0, 31900) + '\n… [truncated — use Copy in the Advanced tab for the full block]';
+  // Neither exportAll() nor indexyAltTextCsv() guards this; a cell opening with
+  // = + - @ is executed as a formula by Excel and Sheets.
+  if (/^[=+\-@]/.test(s)) s = `'${s}`;
+  return s;
+}
+
+function schemaExportXlsx() {
+  const cur = schemaCurrent();
+  if (!cur?.pages?.length) return;
+  const c = rtActiveClient();
+
+  const rows = cur.pages.map(p => {
+    const ev = schemaEvaluate(p);
+    return { p, ev, rec: cur.recs?.[p.url] || null };
+  }).sort((a, b) => b.ev.priority - a.ev.priority);
+
+  const statusSheet = rows.map(({ p, ev }) => ({
+    'URL':          schemaCell(p.url),
+    'Page Title':   schemaCell(p.title),
+    'Page Type':    schemaCell(SCHEMA_TYPE_LABELS[ev.type] || ev.type),
+    'Types Found':  schemaCell(ev.found.join(', ')),
+    'Valid':        p.parseErrors?.length ? 'No' : (ev.found.length ? 'Yes' : '—'),
+    'Missing Types':schemaCell(ev.missing.join(', ')),
+    'Status':       SCHEMA_STATUS_META[ev.status].label,
+    'Priority':     ev.priority,
+    'Issues':       schemaCell([...(ev.issues || []), ...(p.parseErrors || []).map(e => e.message)].join(' | ')),
+  }));
+
+  const jsonldSheet = rows.filter(r => r.rec).map(({ p, ev, rec }) => ({
+    'URL':               schemaCell(p.url),
+    'Page Type':         schemaCell(SCHEMA_TYPE_LABELS[ev.type] || ev.type),
+    'Recommended Types': schemaCell((rec.recommendedTypes || []).join(', ')),
+    'Missing Before':    schemaCell((rec.missing || ev.missing).join(', ')),
+    'Why':               schemaCell(rec.rationale || rec.error || ''),
+    'JSON-LD':           schemaCell(schemaPrettyJsonld(rec.jsonld)),
+  }));
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(statusSheet), 'Schema Status');
+  XLSX.utils.book_append_sheet(
+    wb,
+    XLSX.utils.json_to_sheet(jsonldSheet.length ? jsonldSheet : [{ 'URL': 'Run "Generate Advanced Schema" first' }]),
+    'Recommended JSON-LD',
+  );
+  const slug = (c?.name || cur.domain || 'client').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  XLSX.writeFile(wb, `schema-advanced-${slug}.xlsx`);
+}
+
+/* The model returns the graph as a JSON-encoded string; pretty-print it when it
+   parses, and pass it through untouched when it does not. */
+function schemaPrettyJsonld(jsonld) {
+  if (!jsonld) return '';
+  if (typeof jsonld === 'object') return JSON.stringify(jsonld, null, 2);
+  try { return JSON.stringify(JSON.parse(jsonld), null, 2); } catch { return String(jsonld); }
+}
+
+function schemaScriptBlock(rec) {
+  const body = schemaPrettyJsonld(rec.jsonld);
+  return body ? `<script type="application/ld+json">\n${body}\n<\/script>` : '';
+}
+
+/* ── render ── */
+function schemaRenderButtons() {
+  const cur = schemaCurrent();
+  const scan = document.getElementById('sch-scan-btn');
+  const gen  = document.getElementById('sch-gen-btn');
+  const exp  = document.getElementById('sch-export-btn');
+  if (scan) { scan.disabled = schemaState.busy; scan.textContent = schemaState.busy ? 'Working…' : 'Scan Site'; }
+  if (gen)  gen.disabled  = schemaState.busy || !cur?.pages?.length;
+  if (exp)  exp.disabled  = schemaState.busy || !cur?.pages?.length;
+}
+
+function schemaStatusTableHtml(rows) {
+  if (!rows.length) return '<div class="ah-empty">Scan the site to see which pages carry structured data.</div>';
+  const body = rows.map(({ p, ev }) => {
+    const meta = SCHEMA_STATUS_META[ev.status];
+    let path = p.url;
+    try { path = new URL(p.url).pathname || '/'; } catch {}
+    return `
+      <tr>
+        <td class="rt-th-url"><a href="${escHtml(p.url)}" target="_blank" rel="noopener" title="${escHtml(p.url)}">${escHtml(path)}</a></td>
+        <td>${escHtml(SCHEMA_TYPE_LABELS[ev.type] || ev.type)}</td>
+        <td>${ev.found.length ? escHtml(ev.found.join(', ')) : '<span style="color:var(--text-muted)">—</span>'}</td>
+        <td>${ev.missing.length ? escHtml(ev.missing.join(', ')) : '<span style="color:var(--green)">—</span>'}</td>
+        <td><span class="log-pill ${meta.cls}">${escHtml(meta.label)}</span></td>
+        <td>${ev.priority || ''}</td>
+      </tr>`;
+  }).join('');
+
+  return `
+    <div class="rt-table-wrap">
+      <table class="rt-table">
+        <thead><tr>
+          <th class="rt-th-url">Page</th><th>Type</th><th>Schema Found</th>
+          <th>Missing</th><th>Status</th><th>Priority</th>
+        </tr></thead>
+        <tbody>${body}</tbody>
+      </table>
+    </div>`;
+}
+
+function schemaAdvancedHtml(rows) {
+  const withRecs = rows.filter(r => r.rec);
+  if (!withRecs.length) {
+    return '<div class="ah-empty">Scan the site, then click “Generate Advanced Schema” to write a nested @graph block for every page.</div>';
+  }
+  const cur = schemaCurrent();
+  return withRecs.map(({ p, ev, rec }, i) => {
+    const block = schemaScriptBlock(rec);
+    // Generated before the most recent crawl — the page may have moved on since
+    const stale = cur?.generatedAt && cur?.scannedAt && cur.generatedAt < cur.scannedAt;
+    return `
+      <div class="wk-item-row wk-item-offpage">
+        <div class="wk-item-main">
+          <button class="wk-opg-toggle sch-toggle" data-idx="${i}" title="Show JSON-LD">▸</button>
+          <span class="wk-item-label" title="${escHtml(p.url)}">${escHtml(p.title || p.url)}</span>
+          <span class="log-pill ${SCHEMA_STATUS_META[ev.status].cls}">${escHtml(SCHEMA_STATUS_META[ev.status].label)}</span>
+          ${stale ? '<span class="log-pill" title="Written before the latest crawl — regenerate to match current page content">stale</span>' : ''}
+        </div>
+        <div class="wk-opg-accordion" id="sch-acc-${i}">
+          <div class="wk-opg-inner">
+            <div class="wk-opg-suggest">
+              <span class="wk-opg-suggest-label">Recommended:</span>
+              ${(rec.recommendedTypes || []).map(t => `<span class="wk-opg-badge wk-opg-badge-active">${escHtml(t)}</span>`).join('')}
+            </div>
+            <div class="wk-opg-desc" style="font-style:normal">${escHtml(rec.rationale || rec.error || '')}</div>
+            ${block ? `
+              <div class="wk-opg-row">
+                <button class="btn-sm sch-copy-btn" data-url="${escHtml(p.url)}">Copy block</button>
+                <span class="wk-opg-meta">Paste into &lt;head&gt;</span>
+              </div>
+              <pre class="sch-code">${escHtml(block)}</pre>` : ''}
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function schemaRender() {
+  const root = document.getElementById('schema-root');
+  if (!root) return;
+
+  if (!schemaState.domain) schemaSyncClient();
+  const cur   = schemaCurrent();
+  const rows  = (cur?.pages || [])
+    .map(p => ({ p, ev: schemaEvaluate(p), rec: cur?.recs?.[p.url] || null }))
+    .sort((a, b) => b.ev.priority - a.ev.priority);
+
+  const counts = { done: 0, progress: 0, not: 0, blocked: 0 };
+  rows.forEach(r => counts[r.ev.status]++);
+
+  const scannedNote = cur?.scannedAt
+    ? `Scanned ${new Date(cur.scannedAt).toLocaleString()} · ${rows.length} page(s) via ${escHtml(cur.source || 'crawl')}`
+    : 'Not scanned yet';
+
+  root.innerHTML = `
+    <div class="db-header" style="margin-bottom:0">
+      <h2 class="db-title">Schema Status</h2>
+      <p class="db-sub">Crawl the client's site to see the structured data each page really has, then generate the advanced nested JSON-LD it should have.</p>
+    </div>
+
+    <div class="ah-toolbar">
+      <input id="sch-domain" type="text" class="ah-domain-input" placeholder="example.com" value="${escHtml(schemaState.domain)}">
+      <select id="sch-maxpages" class="indexy-select-sm">
+        ${[10, 25, 50, 100].map(n => `<option value="${n}"${n === schemaState.maxPages ? ' selected' : ''}>${n} pages</option>`).join('')}
+      </select>
+      <button id="sch-scan-btn" class="btn-sm">Scan Site</button>
+      <button id="sch-gen-btn" class="btn-sm">Generate Advanced Schema</button>
+      <button id="sch-export-btn" class="btn-sm">Export XLSX</button>
+      <span id="sch-status" class="ah-status"${schemaState.message?.tone ? ` style="color:var(--${schemaState.message.tone === 'amber' ? 'text-primary' : schemaState.message.tone})"` : ''}>${escHtml(schemaState.message?.text || '')}</span>
+    </div>
+
+    ${rows.length ? `
+      <div class="ah-toolbar" style="gap:18px">
+        <span class="wk-opg-meta">${scannedNote}</span>
+        <span class="log-pill wk-status-done">${counts.done} complete</span>
+        <span class="log-pill wk-status-progress">${counts.progress} partial</span>
+        <span class="log-pill wk-status-not">${counts.not} none</span>
+        <span class="log-pill wk-status-blocked">${counts.blocked} invalid</span>
+      </div>` : ''}
+
+    <div class="gsc-stab-nav" id="sch-tab-nav">
+      <button class="gsc-stab${schemaState.subtab === 'status' ? ' active' : ''}" data-schtab="status">📋 Status</button>
+      <button class="gsc-stab${schemaState.subtab === 'advanced' ? ' active' : ''}" data-schtab="advanced">⚡ Advanced</button>
+    </div>
+
+    <div id="sch-panel-status" class="gsc-stab-panel${schemaState.subtab === 'status' ? ' active' : ''}">${schemaStatusTableHtml(rows)}</div>
+    <div id="sch-panel-advanced" class="gsc-stab-panel${schemaState.subtab === 'advanced' ? ' active' : ''}">${schemaAdvancedHtml(rows)}</div>
+  `;
+
+  root.querySelector('#sch-domain')?.addEventListener('input', e => { schemaState.domain = e.target.value; });
+  root.querySelector('#sch-maxpages')?.addEventListener('change', e => { schemaState.maxPages = parseInt(e.target.value) || 25; });
+  root.querySelector('#sch-scan-btn')?.addEventListener('click', schemaScan);
+  root.querySelector('#sch-gen-btn')?.addEventListener('click', schemaGenerate);
+  root.querySelector('#sch-export-btn')?.addEventListener('click', schemaExportXlsx);
+
+  root.querySelectorAll('#sch-tab-nav .gsc-stab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      schemaState.subtab = btn.dataset.schtab;
+      root.querySelectorAll('#sch-tab-nav .gsc-stab').forEach(b => b.classList.toggle('active', b === btn));
+      root.querySelectorAll('.gsc-stab-panel').forEach(p => {
+        p.classList.toggle('active', p.id === `sch-panel-${schemaState.subtab}`);
+      });
+    });
+  });
+
+  root.querySelectorAll('.sch-toggle').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const acc = root.querySelector(`#sch-acc-${btn.dataset.idx}`);
+      const open = acc?.classList.toggle('wk-opg-open');
+      btn.textContent = open ? '▾' : '▸';
+    });
+  });
+
+  root.querySelectorAll('.sch-copy-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      // Keyed by URL, not by index — the Advanced list is filtered to pages that
+      // actually have a recommendation, so its indexes do not line up with rows.
+      const rec = schemaCurrent()?.recs?.[btn.dataset.url];
+      if (!rec) return;
+      copyText(btn, schemaScriptBlock(rec));   // (btn, text) — it handles its own ✓ feedback
+    });
+  });
+
+  schemaRenderButtons();
 }
 
 /* ═══════════════════════════════════════════════

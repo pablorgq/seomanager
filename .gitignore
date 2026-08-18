@@ -5,3 +5,4 @@ node_modules/
 .sessions.json
 .rankdata.json
 .weeklydata.json
+.schemadata.json

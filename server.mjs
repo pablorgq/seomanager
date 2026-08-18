@@ -689,6 +689,34 @@ app.post('/api/auditdata', apiGuard, (req, res) => {
 });
 
 /* ─────────────────────────────────────────────
+   SCHEMA DATA  (per-client crawl result + generated JSON-LD)
+   Same full-replace-by-key shape as /api/auditdata. A crawl plus an AI pass
+   takes minutes, so the result has to outlive a tab switch.
+───────────────────────────────────────────── */
+const SCHEMADATA_FILE = join(DATA_DIR, '.schemadata.json');
+function loadSchemaData() {
+  if (!existsSync(SCHEMADATA_FILE)) return {};
+  try { return JSON.parse(readFileSync(SCHEMADATA_FILE, 'utf8')); }
+  catch { return {}; }
+}
+function saveSchemaData(data) {
+  try { writeFileSync(SCHEMADATA_FILE, JSON.stringify(data)); }
+  catch (e) { console.warn('[schemadata] Failed to persist:', e.message); }
+}
+
+app.get('/api/schemadata', apiGuard, (req, res) => res.json(loadSchemaData()));
+
+/* A 100-page crawl plus 60 generated @graph blocks runs well past the 512kb
+   global JSON limit, and a 413 here silently discards a multi-minute crawl and
+   a paid AI run — so this one route gets a larger body. */
+app.post('/api/schemadata', express.json({ limit: '8mb' }), apiGuard, (req, res) => {
+  const body = req.body;
+  if (!body || typeof body !== 'object') return res.status(400).json({ error: { message: 'Invalid body.' } });
+  saveSchemaData({ ...loadSchemaData(), ...body });
+  res.json({ ok: true });
+});
+
+/* ─────────────────────────────────────────────
    GSC AI REPORTS  (per site + period: audit markdown + ticked to-dos)
    Same full-replace-by-key shape as /api/auditdata.
 ───────────────────────────────────────────── */
@@ -1260,6 +1288,406 @@ app.post('/api/alttext/push-wp', apiGuard, async (req, res) => {
   }
 
   res.json({ results });
+});
+
+/* ─────────────────────────────────────────────
+   SCHEMA AUDIT  — crawl site for JSON-LD + Claude recommendations
+───────────────────────────────────────────── */
+const SCHEMA_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+/* www-insensitive hostname, matching what ahrefsBareHost does on the client. */
+function bareHost(urlOrHost) {
+  const s = String(urlOrHost || '').trim();
+  try { return new URL(/^https?:\/\//i.test(s) ? s : `https://${s}`).hostname.toLowerCase().replace(/^www\./, ''); }
+  catch { return s.toLowerCase().replace(/^www\./, ''); }
+}
+
+/* Every @type in a parsed JSON-LD block. The shape is wildly inconsistent in the
+   wild — a bare object, a top-level array, an @graph, nested nodes, and @type
+   itself may be a string or an array — so walk the whole tree rather than
+   guessing at a depth. */
+function collectSchemaTypes(node, out = new Set(), depth = 0) {
+  if (!node || typeof node !== 'object' || depth > 12) return out;
+  if (Array.isArray(node)) {
+    for (const n of node) collectSchemaTypes(n, out, depth + 1);
+    return out;
+  }
+  const t = node['@type'];
+  if (typeof t === 'string') out.add(t);
+  else if (Array.isArray(t)) t.filter(x => typeof x === 'string').forEach(x => out.add(x));
+  for (const [k, v] of Object.entries(node)) {
+    if (k === '@type' || !v || typeof v !== 'object') continue;
+    collectSchemaTypes(v, out, depth + 1);
+  }
+  return out;
+}
+
+/* Signals the recommender needs to decide which types a page actually earns.
+   Deliberately conservative — these gate whether Claude is allowed to emit
+   FAQPage, AggregateRating, Offer etc., so a false positive invents markup. */
+function extractSchemaSignals(html, text) {
+  // Questions must come from headings — scraping every "?" in the body text
+  // turns two rhetorical CTAs into an FAQPage. Loose body-text questions are
+  // only trusted on a page that also carries an explicit FAQ heading.
+  const hasFaqHeading = /<h[1-4][^>]*>[^<]*\b(faq|faqs|frequently asked|common questions)\b/i.test(html);
+  const headingQs = [...html.matchAll(/<h[2-5][^>]*>\s*([^<]{10,160}\?)\s*<\/h[2-5]>/gi)].map(m => m[1].trim());
+  // Body scraping is a last resort — it re-reads the headings it already found
+  // with the surrounding copy glued on. Only reach for it when the headings
+  // alone did not yield a real FAQ.
+  const bodyQs    = (hasFaqHeading && headingQs.length < 2)
+    ? (text.match(/[^.?!]{15,140}\?/g) || []).map(q => q.trim())
+    : [];
+  const questions = [...new Set([...headingQs, ...bodyQs])].slice(0, 8);
+
+  // Capture the actual value alongside the boolean. A bare `hasAddress:true`
+  // tells the model something is there but not what, which forces it to invent
+  // the very facts the prompt forbids — so every gate ships its evidence.
+  const phone   = html.match(/tel:([+\d\-().\s]{7,20})/i)?.[1]?.trim()
+               || text.match(/(\(\d{3}\)\s*\d{3}[-.\s]?\d{4}|\b\d{3}[-.]\d{3}[-.]\d{4}\b)/)?.[1] || '';
+  const address = html.match(/<address[^>]*>([\s\S]{5,200}?)<\/address>/i)?.[1]?.replace(/<[^>]+>/g, ' ').replace(/\s{2,}/g, ' ').trim()
+               || text.match(/\b\d{1,5}\s+[A-Z][a-z]+\s+(?:St|Street|Ave|Avenue|Rd|Road|Blvd|Dr|Drive|Way|Lane|Ln)\b[^.]{0,60}/)?.[0]?.trim() || '';
+  // Only trust a rating that sits in review wording *nearby* — the word
+  // "reviews" elsewhere on the page is not evidence that "4 out of 5 dentists
+  // agree" is an aggregateRating. Two guards: the number must not be followed by
+  // a noun ("out of 5 dentists"), and review wording must sit within ~60 chars.
+  const ratingRaw = text.match(/\b([1-5](?:\.\d)?)\s*(?:\/|out of)\s*5\b/);
+  let rating = '';
+  if (ratingRaw) {
+    const at     = ratingRaw.index ?? 0;
+    const window = text.slice(Math.max(0, at - 30), at + ratingRaw[0].length + 30);
+    if (/\b(review|reviews|rating|rated|stars?|testimonial|score|average)\b/i.test(window)) rating = ratingRaw[1];
+  }
+  // Likewise a currency amount only counts as a price next to price wording —
+  // "Save $500" on an article otherwise produced a spurious Offer.
+  const priceRaw  = text.match(/(?:\$|USD|CAD|£|€)\s?\d[\d,]*(?:\.\d{2})?/);
+  const price     = (priceRaw && /\b(price|pricing|cost|costs|from|starting at|per month|\/mo|fee)\b/i.test(text)) ? priceRaw[0] : '';
+  const date    = html.match(/<time[^>]+datetime=["']([^"']+)["']/i)?.[1]
+               || text.match(/\b(?:published|posted|updated)\s+(?:on\s+)?([A-Z][a-z]+\s+\d{1,2},?\s+\d{4})/i)?.[1] || '';
+  // A bare "by" alternation matched footer credits ("Designed by Acme Studios")
+  // and named the web agency as the article's author.
+  const author  = html.match(/rel=["']author["'][^>]*>([^<]{2,60})</i)?.[1]?.trim()
+               || html.match(/class=["'][^"']*author[^"']*["'][^>]*>([^<]{2,60})</i)?.[1]?.trim()
+               || text.match(/\b(?:written by|author:)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/i)?.[1] || '';
+  const hours   = /\b(mon|tue|wed|thu|fri|sat|sun)[a-z]*\s*[-–—:]\s*/i.test(text) && /\b\d{1,2}\s*(am|pm)\b/i.test(text)
+                  ? (text.match(/\b(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*[^.]{0,80}\b\d{1,2}\s*(?:am|pm)\b/i)?.[0] || '') : '';
+
+  return {
+    hasFaqHeading,
+    questions,
+    hasBreadcrumb:   /class=["'][^"']*breadcrumb/i.test(html) || /aria-label=["']breadcrumb/i.test(html),
+    hasAddress:      !!address,   address,
+    hasPhone:        !!phone,     phone,
+    hasHours:        !!hours,     hours,
+    hasReviews:      !!rating,    rating,
+    hasPrice:        !!price,     price,
+    // "Step 1" headings only. A bare numbered heading is usually a listicle
+    // ("3. Pick a dentist"), and HowTo on a listicle is a rich-result rejection.
+    hasSteps:        /<h[2-4][^>]*>\s*step\s*\d/i.test(html),
+    hasDate:         !!date,      date,
+    hasAuthor:       !!author,    author,
+    wordCount:       text ? text.split(/\s+/).filter(Boolean).length : 0,
+  };
+}
+
+/* Strip tags for signal matching only. Unlike htmlToText() below this is never
+   used on the JSON-LD path — that reads the raw html, because htmlToText drops
+   every <script> and would delete the markup we came for. */
+function schemaPlainText(html) {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function parsePageSchema(html, pageUrl) {
+  const blocks      = [];
+  const parseErrors = [];
+  const types       = new Set();
+
+  // Track properties, not just types. An Article's author slot cannot be judged
+  // from the presence of an Organization node — Yoast emits one as `publisher`
+  // on every post, which would report an author-less BlogPosting as complete.
+  const props = { author: false, publisher: false, breadcrumbItems: false };
+  const walkProps = (n, d = 0) => {
+    if (!n || typeof n !== 'object' || d > 12) return;
+    if (Array.isArray(n)) { n.forEach(x => walkProps(x, d + 1)); return; }
+    if (n.author)                      props.author = true;
+    if (n.publisher)                   props.publisher = true;
+    if (Array.isArray(n.itemListElement) && n.itemListElement.length) props.breadcrumbItems = true;
+    for (const v of Object.values(n)) if (v && typeof v === 'object') walkProps(v, d + 1);
+  };
+
+  const re = /<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    // Strip the CDATA and HTML-comment wrappers CMSs put around JSON-LD. Yoast
+    // and friends emit the JS-comment-prefixed form (`//<![CDATA[` … `//]]>`)
+    // and the block-comment form (`/* <![CDATA[ */`), so the marker cannot be
+    // assumed to sit at the very start of the line.
+    const raw = m[1]
+      .replace(/^\s*(?:\/\/|\/\*)?\s*<!\[CDATA\[\s*(?:\*\/)?/, '')
+      .replace(/(?:\/\/|\/\*)?\s*\]\]>\s*(?:\*\/)?\s*$/, '')
+      .replace(/^\s*<!--/, '')
+      .replace(/-->\s*$/, '')
+      .trim();
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw);
+      collectSchemaTypes(parsed, types);
+      walkProps(parsed);
+      blocks.push(parsed);
+    } catch (e) {
+      // A malformed block is a finding, not something to swallow — Google drops
+      // the whole script tag when it will not parse.
+      parseErrors.push({ snippet: raw.slice(0, 200), message: e.message });
+    }
+  }
+
+  const text = schemaPlainText(html);
+  const attr = (rx) => html.match(rx)?.[1]?.trim() || '';
+
+  return {
+    url:       pageUrl,
+    title:     attr(/<title[^>]*>([^<]+)<\/title>/i),
+    h1:        html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1]?.replace(/<[^>]+>/g, '').trim() || '',
+    metaDesc:  attr(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']*)["']/i),
+    canonical: attr(/<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["']/i),
+    ogType:    attr(/<meta[^>]+property=["']og:type["'][^>]+content=["']([^"']*)["']/i),
+    types:     [...types],
+    props,
+    blocks,
+    parseErrors,
+    signals:   extractSchemaSignals(html, text),
+  };
+}
+
+/* Seed the crawl from sitemap.xml — a schema audit wants the whole site, and
+   link-following from the homepage misses anything not linked from the nav.
+   Follows one level of sitemap-index nesting; falls back to BFS when absent. */
+async function schemaSitemapUrls(origin, limit) {
+  const urls = [];
+  const seen = new Set();
+  const queue = [`${origin}/sitemap.xml`, `${origin}/sitemap_index.xml`, `${origin}/wp-sitemap.xml`];
+  let indexFollowed = 0;
+
+  while (queue.length && urls.length < limit) {
+    const sm = queue.shift();
+    if (seen.has(sm)) continue;
+    seen.add(sm);
+    let xml;
+    try {
+      const r = await fetch(sm, { headers: { 'User-Agent': SCHEMA_UA }, signal: AbortSignal.timeout(8000), redirect: 'follow' });
+      if (!r.ok) continue;
+      xml = await r.text();
+    } catch { continue; }
+
+    const isIndex = /<sitemapindex/i.test(xml);
+    const locs = [...xml.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)].map(x => x[1]);
+    if (isIndex) {
+      if (indexFollowed++ > 0) continue;          // one level only
+      for (const l of locs.slice(0, 25)) if (!seen.has(l)) queue.push(l);
+    } else {
+      // Compare bare hosts. The UI hands us a www-stripped domain (ahrefsBareHost)
+      // while the sitemap lists canonical www URLs, so an exact match would throw
+      // away every entry and silently drop the crawl back to homepage BFS.
+      const host = bareHost(origin);
+      for (const l of locs) {
+        if (urls.length >= limit) break;
+        if (/\.(jpg|jpeg|png|gif|webp|svg|pdf|xml)$/i.test(l)) continue;
+        // A sitemap can list anything; without this the crawl follows whatever
+        // host it names, which the BFS path already refuses to do.
+        try { if (bareHost(l) !== host) continue; } catch { continue; }
+        if (!urls.includes(l)) urls.push(l);
+      }
+    }
+  }
+  return urls;
+}
+
+async function crawlForSchema(startUrl, maxPages) {
+  let base;
+  try { base = new URL(startUrl); } catch { throw new Error('Invalid URL'); }
+
+  const pages      = [];
+  const debugPages = [];
+  const visited    = new Set();
+  const TIMEOUT    = 10000;
+  let truncated = false;
+
+  // Sitemap first, homepage-BFS as the fallback / top-up
+  let queue = [];
+  try { queue = await schemaSitemapUrls(base.origin, maxPages); } catch { /* fall through to BFS */ }
+  const fromSitemap = queue.length > 0;
+  if (!queue.includes(base.href)) queue.unshift(base.href);
+
+  // 100 pages at 10s apiece would run ~17 minutes and the platform proxy drops
+  // the request long before that. Stop at the budget and return what we have.
+  // The clock starts here, after sitemap discovery — starting it earlier let a
+  // slow sitemap consume the budget and return zero pages.
+  const deadline = Date.now() + 240000;
+
+  while (queue.length && visited.size < maxPages) {
+    if (Date.now() > deadline) { truncated = true; break; }
+    const pageUrl = queue.shift();
+    if (visited.has(pageUrl)) continue;
+    visited.add(pageUrl);
+
+    let html = '';
+    try {
+      const r = await fetch(pageUrl, {
+        headers: { 'User-Agent': SCHEMA_UA, 'Accept': 'text/html,application/xhtml+xml,*/*', 'Accept-Language': 'en-US,en;q=0.9' },
+        signal: AbortSignal.timeout(TIMEOUT),
+        redirect: 'follow',
+      });
+      if (!r.ok) { debugPages.push({ url: pageUrl, status: `http_${r.status}` }); continue; }
+      const ct = r.headers.get('content-type') || '';
+      if (!ct.includes('html')) { debugPages.push({ url: pageUrl, status: `non_html_${ct}` }); continue; }
+      html = await r.text();
+      if (visited.size === 1) { try { base = new URL(r.url); } catch {} }
+    } catch (e) { debugPages.push({ url: pageUrl, status: `fetch_error: ${e.message}` }); continue; }
+
+    const page = parsePageSchema(html, pageUrl);
+    pages.push(page);
+    debugPages.push({ url: pageUrl, status: 'ok', types: page.types.length, invalid: page.parseErrors.length });
+
+    // Only crawl links when there was no sitemap to work from
+    if (!fromSitemap && visited.size < maxPages) {
+      const linkRe = /href=["']([^"'#?][^"']*?)["']/gi;
+      let lm;
+      while ((lm = linkRe.exec(html)) !== null) {
+        try {
+          const abs = new URL(lm[1], pageUrl);
+          if (/\.(jpg|jpeg|png|gif|webp|svg|pdf|zip|mp4)$/i.test(abs.pathname)) continue;
+          if (abs.hostname === base.hostname && !visited.has(abs.href) && !queue.includes(abs.href)) queue.push(abs.href);
+        } catch { /* skip */ }
+      }
+    }
+  }
+  return { pages, debug: debugPages, source: fromSitemap ? 'sitemap' : 'crawl', truncated, remaining: queue.length };
+}
+
+app.post('/api/schema/scan', apiGuard, async (req, res) => {
+  const { url, maxPages = 25 } = req.body || {};
+  if (!url || !/^https?:\/\//i.test(String(url))) {
+    return res.status(400).json({ error: { message: 'Valid http/https URL required.' } });
+  }
+  try {
+    const out = await crawlForSchema(String(url), Math.min(parseInt(maxPages) || 25, 100));
+    res.json(out);
+  } catch (e) {
+    res.status(502).json({ error: { message: e.message } });
+  }
+});
+
+const SCHEMA_SYSTEM_PROMPT = `You are a technical SEO specialist writing advanced schema.org JSON-LD for a client's website.
+
+For each page you are given, output ONE complete JSON-LD block using a single @graph that a developer can paste into the page's <head> with no edits.
+
+STRUCTURE — this is what makes it "advanced":
+- One "@context":"https://schema.org" and one "@graph" array. Never emit multiple disconnected blocks.
+- Give every node a stable "@id" anchored to the page or site: "{origin}/#organization", "{origin}/#website", "{url}#webpage", "{url}#breadcrumb", "{url}#service", "{url}#article", "{url}#faq".
+- Cross-reference nodes by {"@id":"..."} instead of repeating a nested copy of the same entity. A WebPage links to its site via "isPartOf", to the org via "publisher"/"provider", to breadcrumbs via "breadcrumb", and to the primary entity via "mainEntityOfPage"/"about".
+- Add "sameAs" on the Organization only for profile URLs actually present in the page signals.
+- Include BreadcrumbList built from the URL path segments, with readable names.
+
+TYPE SELECTION by page type:
+- homepage → Organization (or LocalBusiness when the business serves a physical area) + WebSite + WebPage + BreadcrumbList
+- service  → Service + WebPage + BreadcrumbList, provider referencing the Organization/LocalBusiness node; add FAQPage only when the page really has Q&A
+- article  → Article or BlogPosting + WebPage + BreadcrumbList + author node
+- contact  → LocalBusiness + ContactPoint + WebPage + BreadcrumbList
+
+NEVER INVENT FACTS. This is the most important rule:
+- Each signal ships the evidence next to it — signals.phone, signals.address, signals.hours, signals.rating, signals.price, signals.date, signals.author, signals.questions. Use those exact values verbatim. Never substitute a placeholder, an example, or a value you consider more plausible.
+- Only emit aggregateRating / ratingValue when signals.rating is a non-empty string, and use that number. Never invent reviewCount — omit it.
+- Only emit price / priceRange / Offer when signals.price is non-empty, and use that value.
+- Only emit address / PostalAddress when signals.address is non-empty; put the raw string in streetAddress rather than splitting it into city/region/postcode you cannot verify. Only emit openingHours when signals.hours is non-empty.
+- Only emit FAQPage when signals.questions is non-empty, and use those exact questions. Write each answer only from the page's title, h1 and meta description; if you cannot answer a question from those, drop that question.
+- Only emit HowTo when signals.hasSteps is true.
+- Only emit datePublished / dateModified when signals.date is non-empty, and author when signals.author is non-empty (use that name).
+- Leave out telephone, email, geo coordinates, images, logos, social profiles and sameAs entirely unless the value appears in the signals. Do not guess a URL.
+- If a fact is not supported by the page title, h1, meta description or a signal value, leave the property out entirely. An omitted property is correct; a fabricated one is a Google penalty.
+
+Also state what is already on the page versus what you added, so the user can see the gap.
+
+Return ONLY a valid JSON array — no prose, no markdown fences, before or after. One object per input page:
+{"url":"<exact url from input>","recommendedTypes":["Service","WebPage","BreadcrumbList"],"missing":["<types the page lacks today>"],"rationale":"<2-3 sentences: why these types, what was missing, what you deliberately left out for lack of evidence>","jsonld":"<the complete JSON-LD object as a JSON-encoded string>"}`;
+
+async function recommendSchema(pages, clientName, wpUrl) {
+  const out = [];
+  // A schema payload is far heavier per page than an alt-text line, so chunk it
+  // rather than one-shotting the way recommendAltText does.
+  const CHUNK = 6;
+  // Ten sequential 16k-token calls can outlast the platform's request timeout,
+  // which would throw away every chunk already generated and billed. Stop early
+  // and let the caller report what was skipped.
+  const deadline = Date.now() + 240000;
+  let stopped = 0;
+
+  for (let i = 0; i < pages.length; i += CHUNK) {
+    const batch = pages.slice(i, i + CHUNK);
+    if (Date.now() > deadline) { stopped += batch.length; continue; }
+    const desc = batch.map((p, n) => [
+      `PAGE ${n + 1}`,
+      `url: ${p.url}`,
+      `pageType: ${p.pageType || 'unknown'}`,
+      `title: ${p.title || ''}`,
+      `h1: ${p.h1 || ''}`,
+      `metaDescription: ${p.metaDesc || ''}`,
+      `existingTypes: ${(p.types || []).join(', ') || '(none)'}`,
+      `signals: ${JSON.stringify(p.signals || {})}`,
+    ].join('\n')).join('\n\n');
+
+    // One bad chunk must not discard the chunks already generated (and billed),
+    // so every failure mode degrades to per-page error rows.
+    try {
+      const up = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+        body: JSON.stringify({
+          // Sonnet, not the Haiku used for alt text — a cross-referenced @graph
+          // with correct @id resolution is a materially harder generation task.
+          model: 'claude-sonnet-5',
+          max_tokens: 16000,
+          system: SCHEMA_SYSTEM_PROMPT,
+          messages: [{ role: 'user', content: `Client: ${clientName || '(unknown)'}\nSite: ${wpUrl || ''}\n\nGenerate advanced JSON-LD for these ${batch.length} pages:\n\n${desc}` }],
+        }),
+      });
+      const data = await up.json();
+      if (!up.ok || data?.error) throw new Error(data?.error?.message || `Anthropic returned ${up.status}`);
+
+      let text = data.content?.find(b => b.type === 'text')?.text || '[]';
+      text = text.replace(/^\s*```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+      const parsed = JSON.parse(text);
+      if (!Array.isArray(parsed)) throw new Error('Model did not return an array');
+      out.push(...parsed);
+    } catch (e) {
+      for (const p of batch) out.push({ url: p.url, error: e.message || 'Generation failed' });
+    }
+  }
+  return { recommendations: out, stopped };
+}
+
+app.post('/api/schema/recommend', apiGuard, async (req, res) => {
+  if (!ANTHROPIC_KEY) return res.status(503).json({ error: { message: 'ANTHROPIC_API_KEY not configured.' } });
+  const { pages, clientName = '', wpUrl = '' } = req.body || {};
+  if (!Array.isArray(pages) || !pages.length) {
+    return res.status(400).json({ error: { message: 'pages array required.' } });
+  }
+  const MAX = 60;
+  const batch = pages.slice(0, MAX);
+  try {
+    const { recommendations, stopped } = await recommendSchema(batch, clientName, wpUrl);
+    res.json({
+      recommendations,
+      // Say so rather than letting the dropped pages disappear without a word
+      skipped: Math.max(0, pages.length - MAX) + stopped,
+    });
+  } catch (e) {
+    res.status(502).json({ error: { message: e.message } });
+  }
 });
 
 /* ─────────────────────────────────────────────
