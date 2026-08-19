@@ -1877,6 +1877,76 @@ async function crawlForSchema(startUrl, maxPages, explicitSitemap, pastedUrls) {
   };
 }
 
+/* Import a report collected by public/schema-report.js in the user's browser.
+
+   The browser is the one client the site's bot protection lets through, so this
+   is the way in for hosts that challenge servers. The report carries reduced
+   HTML rather than pre-extracted fields so it runs through the same
+   parsePageSchema as a live scan — one implementation, identical results,
+   no second definition of what counts as a page's schema drifting out of sync. */
+/* Multer rejects an oversized upload by throwing, and with no handler Express
+   answers with an HTML error page that the client's r.json() cannot parse —
+   surfacing "Unexpected token '<'" instead of saying the file is too big. */
+function schemaUploadReport(req, res, next) {
+  upload.single('report')(req, res, err => {
+    if (!err) return next();
+    const message = err.code === 'LIMIT_FILE_SIZE'
+      ? 'That report is larger than the 20MB limit. Re-run the collector with fewer pages.'
+      : `Upload failed — ${err.message}`;
+    res.status(400).json({ error: { message } });
+  });
+}
+
+app.post('/api/schema/import', apiGuard, schemaUploadReport, async (req, res) => {
+  let report;
+  try {
+    const raw = req.file ? req.file.buffer.toString('utf8') : req.body?.report;
+    report = typeof raw === 'string' ? JSON.parse(raw) : raw;
+  } catch (e) {
+    return res.status(400).json({ error: { message: `Could not read that file as JSON — ${e.message}` } });
+  }
+  if (!report || !Array.isArray(report.pages)) {
+    return res.status(400).json({ error: { message: 'That does not look like a schema report — expected a JSON file with a "pages" array. Re-run the collector script and upload the file it saves.' } });
+  }
+
+  const pages = [];
+  const debugPages = [];
+  let skipped = 0;              // malformed entries — counted, never silently dropped
+  for (const p of report.pages.slice(0, 500)) {
+    if (!p?.url || typeof p.html !== 'string') { skipped++; continue; }
+    const page = parsePageSchema(p.html, p.url);
+    pages.push(page);
+    debugPages.push({
+      url: p.url, status: 'ok',
+      types: page.types.length, invalid: page.parseErrors.length, bytes: p.html.length,
+    });
+  }
+
+  if (!pages.length) {
+    return res.status(400).json({ error: { message: 'The report contained no readable pages.' } });
+  }
+
+  res.json({
+    pages, debug: debugPages,
+    source: 'imported report',
+    // The domain the collector actually ran on, so the client can catch a report
+    // being imported against the wrong record
+    reportDomain: report.domain || '',
+    truncated: report.pages.length > 500,
+    remaining: Math.max(0, report.pages.length - 500),
+    blocked: null, discoveryBlocked: null,
+    diagnostics: {
+      sitemapUrlsFound: pages.length, sitemapError: '', sitemapAttempts: [],
+      fetched: debugPages.length, failed: skipped, recovered: 0, blockedCount: 0, failures: [],
+      skipped,
+      // Pages the collector could not read even from a browser
+      importBlocked: Number(report.blocked) || 0,
+      importFailed:  Number(report.failed)  || 0,
+      generatedAt: report.generatedAt || null,
+    },
+  });
+});
+
 /* Say what was blocked, by what, and what to do about it — where "what to do"
    differs by vendor, because sending someone to the wrong dashboard to change a
    setting that is not there is worse than saying nothing. */

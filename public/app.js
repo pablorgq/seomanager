@@ -9187,6 +9187,82 @@ async function schemaGenerate() {
   }
 }
 
+/* Import a report collected by the browser script. Stored exactly like a scan —
+   same shape, same evaluation, same export — with the source recorded so the
+   Status table says where the data came from. Newest wins either way. */
+async function schemaImportReport(file) {
+  const id = rtData?.activeClientId;
+  if (!id || !file) return;
+  const c = rtActiveClient();
+
+  schemaState.busy = true;
+  schemaSetMessage(`Reading ${file.name}…`);
+  schemaRender();
+
+  try {
+    const fd = new FormData();
+    fd.append('report', file);
+    const r = await fetch('/api/schema/import', { method: 'POST', body: fd });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data?.error?.message || `Import failed (${r.status})`);
+
+    // Importing site A's report while client B is selected would overwrite B's
+    // pages and bin its recommendations, all labelled with B's domain. Ask first.
+    const expected = ahrefsBareHost(c?.wpUrl) || schemaState.domain || '';
+    const got      = ahrefsBareHost(data.reportDomain || '');
+    if (expected && got && expected !== got) {
+      const ok = confirm(`This report was collected on ${got}, but the selected client is ${c?.name || 'this client'} (${expected}).\n\nImport it anyway? It will replace the pages saved for ${c?.name || 'this client'}.`);
+      if (!ok) { schemaSetMessage(`Import cancelled — the report is for ${got}, not ${expected}.`, 'amber'); return; }
+    }
+
+    const pages = (data.pages || []).map(p => schemaSlimPage({ ...p, pageType: schemaPageType(p) }));
+    const prevRecs = schemaStore[id]?.recs || {};
+    const stillHere = new Set(pages.map(p => p.url));
+    const recs = {};
+    for (const [url, rec] of Object.entries(prevRecs)) if (stillHere.has(url)) recs[url] = rec;
+
+    schemaStore[id] = {
+      domain:    schemaState.domain || ahrefsBareHost(c?.wpUrl) || '',
+      scannedAt: Date.now(),
+      source:    data.source || 'imported report',
+      pages,
+      recs,
+    };
+    const saved = await schemaSaveStore(id);
+    const dg    = data.diagnostics || {};
+    const parts = [`✓ Imported ${pages.length} page(s).`];
+    if (dg.generatedAt)   parts.push(`Collected ${new Date(dg.generatedAt).toLocaleString()}.`);
+    if (dg.importBlocked) parts.push(`${dg.importBlocked} page(s) were blocked even in the browser — reload the site and re-run the collector to pick them up.`);
+    if (dg.importFailed)  parts.push(`${dg.importFailed} page(s) were unreachable (404 or similar) and are probably stale sitemap entries.`);
+    if (dg.skipped)       parts.push(`${dg.skipped} entr(ies) in the file were malformed and skipped.`);
+    if (data.truncated)   parts.push(`Only the first 500 pages were read; ${data.remaining} more were in the file.`);
+    if (!saved)           parts.push('Could not save to the server — the result is in this tab only.');
+    const clean = saved && !dg.importBlocked && !dg.skipped && !data.truncated;
+    schemaSetMessage(parts.join(' '), clean ? 'green' : 'amber');
+  } catch (e) {
+    schemaSetMessage(e.message, 'red');
+  } finally {
+    schemaState.busy = false;
+    schemaRender();
+  }
+}
+
+/* The collector runs on the client's site, not here, so hand it over as text to
+   paste into that site's console. */
+async function schemaCopyCollector(btn) {
+  try {
+    const r = await fetch('/schema-report.js');
+    if (!r.ok) throw new Error(`Could not load the script (${r.status})`);
+    copyText(btn, await r.text());
+    schemaSetMessage('Collector copied. Open the client\'s site in a new tab, press F12 → Console, paste, and press Enter. It saves a .json file — upload it with Import Report.', 'green');
+  } catch (e) {
+    schemaSetMessage(e.message, 'red');
+  }
+  // Must be a full render: schemaRenderButtons does not write #sch-status, so
+  // the instructions would never appear.
+  schemaRender();
+}
+
 /* ── export ── */
 
 /* Excel caps a cell at 32,767 characters and a large @graph will blow past it.
@@ -9266,6 +9342,11 @@ function schemaRenderButtons() {
   if (full) full.disabled = schemaState.busy || !rtActiveClient()?.wpUrl;
   if (gen)  gen.disabled  = schemaState.busy || !cur?.pages?.length;
   if (exp)  exp.disabled  = schemaState.busy || !cur?.pages?.length;
+  // Import needs no client site URL and no reachable site — that is the point
+  const imp = document.getElementById('sch-import-btn');
+  const scr = document.getElementById('sch-script-btn');
+  if (imp) imp.disabled = schemaState.busy || !rtData?.activeClientId;
+  if (scr) scr.disabled = schemaState.busy;
 }
 
 function schemaStatusTableHtml(rows) {
@@ -9364,6 +9445,9 @@ function schemaRender() {
       </select>
       <button id="sch-scan-btn" class="btn-sm">Scan Site</button>
       <button id="sch-full-btn" class="btn-sm" title="Crawl every page of the selected client's site, ignoring the page limit">Scan Full Site</button>
+      <button id="sch-import-btn" class="btn-sm" title="Upload a report collected in your browser — works when the site's bot protection blocks this server">Import Report</button>
+      <button id="sch-script-btn" class="btn-sm" title="Copy the collector script to run in your browser on the client's site">Get Collector</button>
+      <input type="file" id="sch-import-file" accept="application/json,.json" style="display:none">
       <button id="sch-gen-btn" class="btn-sm">Generate Advanced Schema</button>
       <button id="sch-export-btn" class="btn-sm">Export XLSX</button>
       <span id="sch-status" class="ah-status"${schemaState.message?.tone ? ` style="color:var(--${schemaState.message.tone === 'amber' ? 'text-primary' : schemaState.message.tone})"` : ''}>${escHtml(schemaState.message?.text || '')}</span>
@@ -9391,6 +9475,13 @@ function schemaRender() {
   root.querySelector('#sch-maxpages')?.addEventListener('change', e => { schemaState.maxPages = parseInt(e.target.value) || 25; });
   root.querySelector('#sch-scan-btn')?.addEventListener('click', () => schemaScan());
   root.querySelector('#sch-full-btn')?.addEventListener('click', () => schemaScan({ full: true }));
+  root.querySelector('#sch-import-btn')?.addEventListener('click', () => root.querySelector('#sch-import-file')?.click());
+  root.querySelector('#sch-script-btn')?.addEventListener('click', e => schemaCopyCollector(e.currentTarget));
+  root.querySelector('#sch-import-file')?.addEventListener('change', e => {
+    const f = e.target.files?.[0];
+    e.target.value = '';                 // let the same file be picked again after a fix
+    if (f) schemaImportReport(f);
+  });
   root.querySelector('#sch-gen-btn')?.addEventListener('click', schemaGenerate);
   root.querySelector('#sch-export-btn')?.addEventListener('click', schemaExportXlsx);
 
