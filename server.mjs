@@ -1394,6 +1394,25 @@ function detectBlockedResponse(html, finalUrl, { expectHtml = true } = {}) {
   return null;
 }
 
+/* The challenge usually names the IP it blocked, but not every variant does —
+   and "whitelist the IP" is useless advice without one. Fall back to asking what
+   this server's outbound address actually is. Cached: it does not change between
+   requests, and this must never become a per-page lookup. */
+let egressIpCache = null;
+async function schemaEgressIp() {
+  if (egressIpCache !== null) return egressIpCache;
+  for (const svc of ['https://api.ipify.org', 'https://icanhazip.com']) {
+    try {
+      const r = await fetch(svc, { signal: AbortSignal.timeout(4000) });
+      if (!r.ok) continue;
+      const ip = (await r.text()).trim();
+      if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) { egressIpCache = ip; return ip; }
+    } catch { /* try the next service */ }
+  }
+  egressIpCache = '';        // asked and failed — do not ask again this process
+  return '';
+}
+
 /* Fetch HTML, retrying through the configured proxy when the direct response
    turns out to be a firewall challenge. Returns the body plus how it was got, so
    the caller can still report a block when no proxy is configured. */
@@ -1858,6 +1877,28 @@ async function crawlForSchema(startUrl, maxPages, explicitSitemap, pastedUrls) {
   };
 }
 
+/* Say what was blocked, by what, and what to do about it — where "what to do"
+   differs by vendor, because sending someone to the wrong dashboard to change a
+   setting that is not there is worse than saying nothing. */
+async function schemaBlockMessage(block) {
+  const ip = block.ip || await schemaEgressIp();
+  const saw = ip
+    ? `It saw this server as ${ip} and served a robot challenge instead of the page. `
+    : 'It served a robot challenge instead of the page. ';
+  const target = ip ? ip : "this server's outbound IP";
+  const elsewhere = 'or run the scan from a computer that browses the site normally.';
+
+  const advice = block.vendor === 'siteground'
+    // Stated plainly because the obvious guess is wrong: this is not the
+    // Security Optimizer plugin, and uninstalling it changes nothing.
+    ? `This runs on SiteGround's servers, not on the site. The Security Optimizer plugin does not control it, so uninstalling that plugin makes no difference, and there is no switch for it in Site Tools. Open a SiteGround support ticket asking them to whitelist ${target} — or to turn off Anti-Bot AI for this domain — ${elsewhere}`
+    : block.vendor === 'sucuri'
+    ? `Whitelist ${target} in the site's Sucuri firewall (Firewall → Access Control → Whitelist IP), ${elsewhere}`
+    : `Whitelist ${target} wherever the site's bot protection is configured, ${elsewhere}`;
+
+  return `Blocked by the site's bot protection — ${block.reason}. ${saw}${advice}`;
+}
+
 app.post('/api/schema/scan', apiGuard, async (req, res) => {
   const { url, maxPages = 25, sitemapUrl = '', pageUrls = [] } = req.body || {};
   if (!url || !/^https?:\/\//i.test(String(url))) {
@@ -1872,16 +1913,8 @@ app.post('/api/schema/scan', apiGuard, async (req, res) => {
     if (!out.pages.length && anyBlock) {
       return res.status(502).json({
         error: {
-          message: `Blocked by the site's bot protection — ${anyBlock.reason}. `
-            + (anyBlock.ip ? `It saw this server as ${anyBlock.ip} and served a robot challenge instead of the page. ` : 'It served a robot challenge instead of the page. ')
-            // Where to go differs by vendor, and sending someone to the wrong
-            // dashboard is worse than saying nothing.
-            + (anyBlock.vendor === 'siteground'
-              ? 'This is SiteGround hosting-level protection, not anything on the site itself — no plugin or security setting will turn it off. Ask SiteGround support to whitelist the IP above, or run the scan from a computer that browses the site normally.'
-              : anyBlock.vendor === 'sucuri'
-              ? "Whitelist the IP above in the site's Sucuri firewall (Firewall → Access Control → Whitelist IP), or run the scan from a computer that browses the site normally."
-              : "Whitelist the IP above wherever the site's bot protection is configured, or run the scan from a computer that browses the site normally."),
-          blocked: anyBlock,
+          message: await schemaBlockMessage(anyBlock),
+          blocked: { ...anyBlock, ip: anyBlock.ip || await schemaEgressIp() },
           diagnostics: out.diagnostics,
         },
       });
