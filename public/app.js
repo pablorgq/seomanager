@@ -5820,6 +5820,7 @@ function rtShowAddClient() {
   document.getElementById('rt-clientName').value           = '';
   document.getElementById('rt-campaignId').value           = '';
   document.getElementById('rt-wpUrl').value                = '';
+  document.getElementById('rt-sitemapUrl').value           = '';
   document.getElementById('rt-wpUser').value               = '';
   document.getElementById('rt-wpPass').value               = '';
   document.getElementById('rt-popLocation').value          = '';
@@ -5842,6 +5843,7 @@ function rtShowEditClient() {
   document.getElementById('rt-clientName').value           = c.name;
   document.getElementById('rt-campaignId').value           = c.aaCampaignId || '';
   document.getElementById('rt-wpUrl').value                = c.wpUrl  || '';
+  document.getElementById('rt-sitemapUrl').value           = c.sitemapUrl || '';
   document.getElementById('rt-wpUser').value               = c.wpUser || '';
   document.getElementById('rt-wpPass').value               = c.wpPass || '';
   document.getElementById('rt-popLocation').value          = c.popLocation || '';
@@ -5861,6 +5863,7 @@ function rtSaveClient() {
   const name        = document.getElementById('rt-clientName').value.trim();
   const cid         = document.getElementById('rt-campaignId').value.trim();
   const wpUrl       = document.getElementById('rt-wpUrl').value.trim();
+  const sitemapUrl  = document.getElementById('rt-sitemapUrl').value.trim();
   const wpUser      = document.getElementById('rt-wpUser').value.trim();
   const wpPass      = document.getElementById('rt-wpPass').value.trim();
   const popLocation = document.getElementById('rt-popLocation').value;
@@ -5869,12 +5872,12 @@ function rtSaveClient() {
   const mode        = document.getElementById('rt-saveClientBtn').dataset.mode;
   if (!name) return;
   if (mode === 'add') {
-    const client = { id: rtUid(), name, aaCampaignId: cid, wpUrl, wpUser, wpPass, popLocation, popLanguage, popGnl, keywords: [] };
+    const client = { id: rtUid(), name, aaCampaignId: cid, wpUrl, sitemapUrl, wpUser, wpPass, popLocation, popLanguage, popGnl, keywords: [] };
     rtData.clients.push(client);
     rtData.activeClientId = client.id;
   } else {
     const c = rtActiveClient();
-    if (c) { c.name = name; c.aaCampaignId = cid; c.wpUrl = wpUrl; c.wpUser = wpUser; c.wpPass = wpPass; c.popLocation = popLocation; c.popLanguage = popLanguage; c.popGnl = popGnl; }
+    if (c) { c.name = name; c.aaCampaignId = cid; c.wpUrl = wpUrl; c.sitemapUrl = sitemapUrl; c.wpUser = wpUser; c.wpPass = wpPass; c.popLocation = popLocation; c.popLanguage = popLanguage; c.popGnl = popGnl; }
   }
   rtSave();
   rtRender();
@@ -8766,6 +8769,13 @@ function schemaPageType(page) {
   let path = '';
   try { path = new URL(page.url).pathname.replace(/\/+$/, '').toLowerCase(); } catch { path = ''; }
   if (path === '' || path === '/index.html') return 'home';
+
+  // The page's own markup is the best evidence there is — plenty of sites publish
+  // articles at the site root rather than under /blog/, and calling those service
+  // pages made the audit demand a Service node they should never have.
+  const t = page.types || [];
+  if (t.some(x => /^(BlogPosting|NewsArticle|Article|TechArticle|ScholarlyArticle)$/.test(x))) return 'article';
+
   if (/contact|get-in-touch|book|appointment/.test(path)) return 'contact';
   if (/\/(blog|news|article|articles|post|posts|guide|guides|resources)\//.test(path + '/')) return 'article';
   const s = page.signals || {};
@@ -8866,22 +8876,31 @@ function schemaSetMessage(text, tone) {
   schemaState.message = text ? { text, tone: tone || '' } : null;
 }
 
-async function schemaScan() {
+/* `full` ignores the page dropdown and takes the whole site, up to the server's
+   hard ceiling — the common case is "audit this client", not "audit 25 pages". */
+async function schemaScan({ full = false } = {}) {
   const id = rtData?.activeClientId;           // captured — the run outlives the selection
   if (!id) return;
-  const domain = document.getElementById('sch-domain')?.value.trim();
-  if (!domain) return;
-  const maxPages = parseInt(document.getElementById('sch-maxpages')?.value) || 25;
+  const c = rtActiveClient();
+  const domain = full
+    ? (c?.wpUrl || document.getElementById('sch-domain')?.value.trim())
+    : document.getElementById('sch-domain')?.value.trim();
+  if (!domain) { schemaSetMessage('This client has no site URL — set one in the client editor.', 'red'); schemaRender(); return; }
+  const maxPages = full ? 500 : (parseInt(document.getElementById('sch-maxpages')?.value) || 25);
 
   schemaState.busy = true;
-  schemaSetMessage(`Crawling ${domain}…`);
+  schemaSetMessage(full ? `Crawling the whole site at ${ahrefsBareHost(domain)}… this can take a few minutes.` : `Crawling ${domain}…`);
   schemaRender();
 
   try {
     const r = await fetch('/api/schema/scan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: /^https?:\/\//i.test(domain) ? domain : `https://${domain}`, maxPages }),
+      body: JSON.stringify({
+        url: /^https?:\/\//i.test(domain) ? domain : `https://${domain}`,
+        maxPages,
+        sitemapUrl: c?.sitemapUrl || '',
+      }),
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data?.error?.message || `Scan failed (${r.status})`);
@@ -8910,10 +8929,19 @@ async function schemaScan() {
       recs,
     };
     const saved = await schemaSaveStore(id);
+    const dg    = data.diagnostics || {};
     const parts = [`✓ ${pages.length} page(s) scanned via ${data.source || 'crawl'}.`];
+    // A one-page result is the confusing case — say why rather than leaving the
+    // user staring at a single row.
+    if (pages.length <= 1) {
+      parts.push(data.source === 'sitemap'
+        ? 'The sitemap listed only this page.'
+        : 'No sitemap was found and the page had no internal links to follow — set a Sitemap URL in the client editor if it lives somewhere unusual.');
+    }
+    if (dg.failed)      parts.push(`${dg.failed} URL(s) could not be fetched (${(dg.failures || []).map(f => f.status).join(', ')}).`);
     if (data.truncated) parts.push(`Stopped at the time limit with ${data.remaining || 0} still queued — scan again to go deeper.`);
     if (!saved)         parts.push('Could not save to the server — the result is in this tab only.');
-    schemaSetMessage(parts.join(' '), saved && !data.truncated ? 'green' : 'amber');
+    schemaSetMessage(parts.join(' '), (saved && !data.truncated && pages.length > 1) ? 'green' : 'amber');
   } catch (e) {
     schemaSetMessage(e.message, 'red');
   } finally {
@@ -9060,9 +9088,11 @@ function schemaScriptBlock(rec) {
 function schemaRenderButtons() {
   const cur = schemaCurrent();
   const scan = document.getElementById('sch-scan-btn');
+  const full = document.getElementById('sch-full-btn');
   const gen  = document.getElementById('sch-gen-btn');
   const exp  = document.getElementById('sch-export-btn');
   if (scan) { scan.disabled = schemaState.busy; scan.textContent = schemaState.busy ? 'Working…' : 'Scan Site'; }
+  if (full) full.disabled = schemaState.busy || !rtActiveClient()?.wpUrl;
   if (gen)  gen.disabled  = schemaState.busy || !cur?.pages?.length;
   if (exp)  exp.disabled  = schemaState.busy || !cur?.pages?.length;
 }
@@ -9162,6 +9192,7 @@ function schemaRender() {
         ${[10, 25, 50, 100].map(n => `<option value="${n}"${n === schemaState.maxPages ? ' selected' : ''}>${n} pages</option>`).join('')}
       </select>
       <button id="sch-scan-btn" class="btn-sm">Scan Site</button>
+      <button id="sch-full-btn" class="btn-sm" title="Crawl every page of the selected client's site, ignoring the page limit">Scan Full Site</button>
       <button id="sch-gen-btn" class="btn-sm">Generate Advanced Schema</button>
       <button id="sch-export-btn" class="btn-sm">Export XLSX</button>
       <span id="sch-status" class="ah-status"${schemaState.message?.tone ? ` style="color:var(--${schemaState.message.tone === 'amber' ? 'text-primary' : schemaState.message.tone})"` : ''}>${escHtml(schemaState.message?.text || '')}</span>
@@ -9187,7 +9218,8 @@ function schemaRender() {
 
   root.querySelector('#sch-domain')?.addEventListener('input', e => { schemaState.domain = e.target.value; });
   root.querySelector('#sch-maxpages')?.addEventListener('change', e => { schemaState.maxPages = parseInt(e.target.value) || 25; });
-  root.querySelector('#sch-scan-btn')?.addEventListener('click', schemaScan);
+  root.querySelector('#sch-scan-btn')?.addEventListener('click', () => schemaScan());
+  root.querySelector('#sch-full-btn')?.addEventListener('click', () => schemaScan({ full: true }));
   root.querySelector('#sch-gen-btn')?.addEventListener('click', schemaGenerate);
   root.querySelector('#sch-export-btn')?.addEventListener('click', schemaExportXlsx);
 

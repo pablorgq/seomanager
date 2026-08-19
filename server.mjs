@@ -1467,10 +1467,21 @@ function parsePageSchema(html, pageUrl) {
 /* Seed the crawl from sitemap.xml — a schema audit wants the whole site, and
    link-following from the homepage misses anything not linked from the nav.
    Follows one level of sitemap-index nesting; falls back to BFS when absent. */
-async function schemaSitemapUrls(origin, limit) {
+async function schemaSitemapUrls(origin, limit, explicitSitemap) {
   const urls = [];
   const seen = new Set();
-  const queue = [`${origin}/sitemap.xml`, `${origin}/sitemap_index.xml`, `${origin}/wp-sitemap.xml`];
+  const queue = [];
+  // An explicit sitemap from the client record wins — some sites keep it
+  // somewhere the conventional guesses will never find.
+  if (explicitSitemap) queue.push(explicitSitemap);
+  // robots.txt is the site telling us where its sitemap is, which beats guessing
+  try {
+    const rb = await fetch(`${origin}/robots.txt`, { headers: { 'User-Agent': SCHEMA_UA }, signal: AbortSignal.timeout(6000), redirect: 'follow' });
+    if (rb.ok) {
+      for (const m of (await rb.text()).matchAll(/^\s*sitemap:\s*(\S+)/gim)) queue.push(m[1].trim());
+    }
+  } catch { /* fall back to the conventional locations */ }
+  queue.push(`${origin}/sitemap.xml`, `${origin}/sitemap_index.xml`, `${origin}/wp-sitemap.xml`, `${origin}/sitemap-index.xml`);
   let indexFollowed = 0;
 
   while (queue.length && urls.length < limit) {
@@ -1487,7 +1498,10 @@ async function schemaSitemapUrls(origin, limit) {
     const isIndex = /<sitemapindex/i.test(xml);
     const locs = [...xml.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)].map(x => x[1]);
     if (isIndex) {
-      if (indexFollowed++ > 0) continue;          // one level only
+      // robots.txt may name several indexes, and a Yoast index fans out to
+      // post-/page-/local- children, so a single-index cap was too tight. Bound
+      // the total documents fetched instead of the nesting depth.
+      if (++indexFollowed > 4) continue;
       for (const l of locs.slice(0, 25)) if (!seen.has(l)) queue.push(l);
     } else {
       // Compare bare hosts. The UI hands us a www-stripped domain (ahrefsBareHost)
@@ -1496,7 +1510,7 @@ async function schemaSitemapUrls(origin, limit) {
       const host = bareHost(origin);
       for (const l of locs) {
         if (urls.length >= limit) break;
-        if (/\.(jpg|jpeg|png|gif|webp|svg|pdf|xml)$/i.test(l)) continue;
+        if (/\.(jpg|jpeg|png|gif|webp|svg|pdf|xml|kml|txt|json|css|js)$/i.test(l)) continue;
         // A sitemap can list anything; without this the crawl follows whatever
         // host it names, which the BFS path already refuses to do.
         try { if (bareHost(l) !== host) continue; } catch { continue; }
@@ -1507,7 +1521,7 @@ async function schemaSitemapUrls(origin, limit) {
   return urls;
 }
 
-async function crawlForSchema(startUrl, maxPages) {
+async function crawlForSchema(startUrl, maxPages, explicitSitemap) {
   let base;
   try { base = new URL(startUrl); } catch { throw new Error('Invalid URL'); }
 
@@ -1519,8 +1533,11 @@ async function crawlForSchema(startUrl, maxPages) {
 
   // Sitemap first, homepage-BFS as the fallback / top-up
   let queue = [];
-  try { queue = await schemaSitemapUrls(base.origin, maxPages); } catch { /* fall through to BFS */ }
+  let sitemapError = '';
+  try { queue = await schemaSitemapUrls(base.origin, maxPages, explicitSitemap); }
+  catch (e) { sitemapError = e.message; }
   const fromSitemap = queue.length > 0;
+  const sitemapCount = queue.length;
   if (!queue.includes(base.href)) queue.unshift(base.href);
 
   // 100 pages at 10s apiece would run ~17 minutes and the platform proxy drops
@@ -1561,21 +1578,38 @@ async function crawlForSchema(startUrl, maxPages) {
         try {
           const abs = new URL(lm[1], pageUrl);
           if (/\.(jpg|jpeg|png|gif|webp|svg|pdf|zip|mp4)$/i.test(abs.pathname)) continue;
-          if (abs.hostname === base.hostname && !visited.has(abs.href) && !queue.includes(abs.href)) queue.push(abs.href);
+          // WordPress emits these and they are not pages
+          if (/\/(feed|comments\/feed|wp-json|wp-content|wp-admin)\//.test(abs.pathname + '/')) continue;
+          // Bare-host compare for the same reason the sitemap path does it: a
+          // www redirect otherwise makes every link look off-site.
+          if (bareHost(abs.href) === bareHost(base.href) && !visited.has(abs.href) && !queue.includes(abs.href)) queue.push(abs.href);
         } catch { /* skip */ }
       }
     }
   }
-  return { pages, debug: debugPages, source: fromSitemap ? 'sitemap' : 'crawl', truncated, remaining: queue.length };
+  return {
+    pages, debug: debugPages,
+    source: fromSitemap ? 'sitemap' : 'crawl',
+    truncated, remaining: queue.length,
+    // Enough to explain a disappointing crawl without reading the server log
+    diagnostics: {
+      sitemapUrlsFound: sitemapCount,
+      sitemapError,
+      fetched:  debugPages.length,
+      failed:   debugPages.filter(d => d.status !== 'ok').length,
+      failures: debugPages.filter(d => d.status !== 'ok').slice(0, 5),
+    },
+  };
 }
 
 app.post('/api/schema/scan', apiGuard, async (req, res) => {
-  const { url, maxPages = 25 } = req.body || {};
+  const { url, maxPages = 25, sitemapUrl = '' } = req.body || {};
   if (!url || !/^https?:\/\//i.test(String(url))) {
     return res.status(400).json({ error: { message: 'Valid http/https URL required.' } });
   }
+  const sm = /^https?:\/\//i.test(String(sitemapUrl)) ? String(sitemapUrl) : '';
   try {
-    const out = await crawlForSchema(String(url), Math.min(parseInt(maxPages) || 25, 100));
+    const out = await crawlForSchema(String(url), Math.min(parseInt(maxPages) || 25, 500), sm);
     res.json(out);
   } catch (e) {
     res.status(502).json({ error: { message: e.message } });
