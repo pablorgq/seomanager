@@ -9100,6 +9100,9 @@ async function schemaScan({ full = false } = {}) {
         parts.push(`${why} The page also had no internal links to follow — set a Sitemap URL in the client editor if it lives somewhere unusual.`);
       }
     }
+    // Worth saying: it means the site challenges this server and the retry got
+    // through anyway, so a whitelist would make the scan faster and surer.
+    if (dg.recovered) parts.push(`${dg.recovered} page(s) were challenged by the site's bot protection and recovered on retry.`);
     if (dg.failed) {
       // Server-side count — `failures` is only a 5-item sample, so counting it
       // would report "5 blocked" for a site where 200 pages were blocked.

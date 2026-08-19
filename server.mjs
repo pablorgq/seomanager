@@ -1726,43 +1726,91 @@ async function crawlForSchema(startUrl, maxPages, explicitSitemap, pastedUrls) {
   // slow sitemap consume the budget and return zero pages.
   const deadline = Date.now() + 240000;
 
+  /* Adaptive bot protection (SiteGround's, Cloudflare's) scores requests as they
+     arrive, so a burst of sequential hits from a datacenter IP is itself the
+     thing that trips it — the same URL routinely succeeds moments later at a
+     gentler pace. Stay fast on sites that do not care, back off hard on ones
+     that do. */
+  const sleep  = ms => new Promise(r => setTimeout(r, ms));
+  const jitter = () => Math.floor(Math.random() * 150);
+  const MIN_DELAY = 120, MAX_DELAY = 3000;
+  let delayMs = 150;
+  let recovered = 0;          // challenged first, succeeded on a retry
+  const ATTEMPTS = 3;
+
+  /* Fetch one page, retrying a challenge before believing it. Retrying here
+     rather than in a later sweep keeps link discovery, the deadline and the
+     bookkeeping in one place — a deferred sweep could be cut short by the
+     deadline and silently drop pages it had not recorded yet, which is the very
+     false negative this detection exists to prevent. Every exit path records. */
+  async function fetchAndRecord(pageUrl) {
+    let firstBlock  = null;     // a positive firewall diagnosis, once seen, is kept
+    let lastFailure = null;
+
+    for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+      if (attempt > 1) {
+        // The scorer reacts to burst rate, so give it room before trying again
+        await sleep(Math.min(MAX_DELAY, 900 * (attempt - 1)) + jitter());
+        if (Date.now() > deadline) break;
+      }
+
+      let r;
+      try {
+        r = await schemaFetchHtml(pageUrl, TIMEOUT);
+      } catch (e) { lastFailure = `fetch_error: ${e.message}`; continue; }
+
+      // A challenge parses as a perfectly empty page. Recording it as one is how
+      // the scan came to report "no structured data" for a fully marked-up site.
+      // Checked before the status code, because a challenge is far more useful
+      // to report than the 403 it usually arrives with.
+      if (r.blocked) {
+        firstBlock = firstBlock || r.blocked;
+        delayMs = Math.min(MAX_DELAY, Math.round(delayMs * 2));
+        continue;
+      }
+      if (!r.ok) { lastFailure = `http_${r.status}`; continue; }
+      // A wrong content type will not change on a retry
+      if (!r.contentType.includes('html')) { lastFailure = `non_html_${r.contentType}`; break; }
+
+      delayMs = Math.max(MIN_DELAY, Math.round(delayMs * 0.85));
+      const page = parsePageSchema(r.html, pageUrl);
+      pages.push(page);
+      if (firstBlock) recovered++;
+      debugPages.push({
+        url: pageUrl, status: 'ok',
+        types: page.types.length, invalid: page.parseErrors.length,
+        // An empty-shell 200 is invisible without these
+        bytes: r.html.length,
+        links: (r.html.match(/href=["'][^"'#?]/g) || []).length,
+        recoveredOnAttempt: firstBlock ? attempt : undefined,
+      });
+      return { status: 'ok', html: r.html, finalUrl: r.finalUrl };
+    }
+
+    // Every attempt failed. A firewall diagnosis outranks whatever status the
+    // later attempts happened to return — a 429 after a positive challenge is
+    // still the challenge.
+    if (firstBlock) {
+      pageBlocked = pageBlocked || firstBlock;
+      debugPages.push({ url: pageUrl, status: 'blocked_by_firewall', detail: firstBlock.reason });
+      return { status: 'blocked' };
+    }
+    debugPages.push({ url: pageUrl, status: lastFailure || 'failed' });
+    return { status: 'failed' };
+  }
+
   while (queue.length && visited.size < maxPages) {
     if (Date.now() > deadline) { truncated = true; break; }
     const pageUrl = queue.shift();
     if (visited.has(pageUrl)) continue;
     visited.add(pageUrl);
 
-    let html = '';
-    try {
-      const r = await schemaFetchHtml(pageUrl, TIMEOUT);
+    const got = await fetchAndRecord(pageUrl);
+    if (got.status === 'ok' && visited.size === 1) { try { base = new URL(got.finalUrl); } catch {} }
 
-      // A challenge parses as a perfectly empty page. Recording it as one is how
-      // the scan came to report "no structured data" for a fully marked-up site.
-      // Checked before the status code, because a challenge is far more useful to
-      // report than the 403 it usually arrives with.
-      if (r.blocked) {
-        pageBlocked = pageBlocked || r.blocked;
-        debugPages.push({ url: pageUrl, status: 'blocked_by_firewall', detail: r.blocked.reason, bytes: r.html.length });
-        continue;
-      }
-      if (!r.ok) { debugPages.push({ url: pageUrl, status: `http_${r.status}` }); continue; }
-      if (!r.contentType.includes('html')) { debugPages.push({ url: pageUrl, status: `non_html_${r.contentType}` }); continue; }
-      html = r.html;
-      if (visited.size === 1) { try { base = new URL(r.finalUrl); } catch {} }
-    } catch (e) { debugPages.push({ url: pageUrl, status: `fetch_error: ${e.message}` }); continue; }
-
-    const page = parsePageSchema(html, pageUrl);
-    pages.push(page);
-    debugPages.push({
-      url: pageUrl, status: 'ok',
-      types: page.types.length, invalid: page.parseErrors.length,
-      // An empty-shell 200 is invisible without these
-      bytes: html.length,
-      links: (html.match(/href=["'][^"'#?]/g) || []).length,
-    });
-
+    const html = got.status === 'ok' ? got.html : '';
     // Only crawl links when there was no sitemap to work from
-    if (!fromSitemap && !fromPasted && visited.size < maxPages) {
+    if (html && !fromSitemap && !fromPasted && visited.size < maxPages) {
       const linkRe = /href=["']([^"'#?][^"']*?)["']/gi;
       let lm;
       while ((lm = linkRe.exec(html)) !== null) {
@@ -1777,7 +1825,14 @@ async function crawlForSchema(startUrl, maxPages, explicitSitemap, pastedUrls) {
         } catch { /* skip */ }
       }
     }
+
+    // Throttle after link mining, not before: in crawl mode the queue is empty
+    // until this page's links are added, so gating on it beforehand skipped the
+    // pause between the first two requests — exactly the burst the backoff is
+    // meant to avoid.
+    if (queue.length && visited.size < maxPages) await sleep(delayMs + jitter());
   }
+
   return {
     pages, debug: debugPages,
     source: fromPasted ? 'pasted list' : fromSitemap ? 'sitemap' : 'crawl',
@@ -1793,6 +1848,9 @@ async function crawlForSchema(startUrl, maxPages, explicitSitemap, pastedUrls) {
       sitemapAttempts: sitemapAttempts.slice(0, 12),
       fetched:  debugPages.length,
       failed:   debugPages.filter(d => d.status !== 'ok').length,
+      // Pages that were challenged first and came through on a retry — the
+      // measure of whether throttling is earning its keep on this site
+      recovered,
       // Counted over everything, not over the truncated sample below
       blockedCount: debugPages.filter(d => d.status === 'blocked_by_firewall').length,
       failures: debugPages.filter(d => d.status !== 'ok').slice(0, 5),
