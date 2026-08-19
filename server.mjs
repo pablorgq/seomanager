@@ -1111,17 +1111,30 @@ async function recommendAltText(images, clientName = '') {
   try { return JSON.parse(text); } catch { return []; }
 }
 
-async function crawlForImages(startUrl, maxPages) {
+async function crawlForImages(startUrl, maxPages, pastedUrls) {
   let base;
   try { base = new URL(startUrl); } catch { throw new Error('Invalid URL'); }
   const visited    = new Set();
-  const queue      = [base.href];
+  // Same rule as the schema scan: an explicit page list from the client record
+  // replaces discovery outright, so a site whose links cannot be followed is
+  // still auditable.
+  const pasted     = Array.isArray(pastedUrls)
+    ? pastedUrls.filter(u => typeof u === 'string' && /^https?:\/\//i.test(u)).slice(0, maxPages)
+    : [];
+  const fromPasted = pasted.length > 0;
+  const queue      = fromPasted ? [...pasted] : [base.href];
   const images     = [];
   const debugPages = [];
   const TIMEOUT    = 8000;
   const UA         = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
+  // A pasted list raises the cap well past the old 10, and 8s per page serially
+  // will outrun the platform's request timeout without a budget — the same
+  // reason crawlForSchema has one.
+  const deadline = Date.now() + 240000;
+
   while (queue.length && visited.size < maxPages) {
+    if (Date.now() > deadline) break;
     const pageUrl = queue.shift();
     if (visited.has(pageUrl)) continue;
     visited.add(pageUrl);
@@ -1176,7 +1189,7 @@ async function crawlForImages(startUrl, maxPages) {
     debugPages.push({ url: pageUrl, status: 'ok', imgs: pageImgCount });
 
     // Enqueue internal links
-    if (visited.size < maxPages) {
+    if (!fromPasted && visited.size < maxPages) {
       const linkRe = /href=["']([^"'#?][^"']*?)["']/gi;
       while ((m = linkRe.exec(html)) !== null) {
         try {
@@ -1193,18 +1206,26 @@ async function crawlForImages(startUrl, maxPages) {
 
 app.post('/api/alttext/scrape', apiGuard, async (req, res) => {
   if (!ANTHROPIC_KEY) return res.status(503).json({ error: { message: 'ANTHROPIC_API_KEY not configured.' } });
-  const { url, maxPages = 5, clientName = '' } = req.body || {};
+  const { url, maxPages = 5, clientName = '', pageUrls = [] } = req.body || {};
   if (!url || !/^https?:\/\//i.test(url)) return res.status(400).json({ error: { message: 'Valid http/https URL required.' } });
 
   try {
-    const { images, debugPages } = await crawlForImages(url, Math.min(parseInt(maxPages) || 5, 10));
+    // A pasted list lifts the 10-page discovery cap — the user has told us
+    // exactly which pages exist, so there is nothing to bound. Count the list
+    // the same way the crawler filters it, or an all-invalid list would set a
+    // 100-page cap and silently turn into a homepage crawl.
+    const usable = Array.isArray(pageUrls)
+      ? pageUrls.filter(u => typeof u === 'string' && /^https?:\/\//i.test(u))
+      : [];
+    const cap = usable.length ? Math.min(usable.length, 100) : Math.min(parseInt(maxPages) || 5, 10);
+    const { images, debugPages } = await crawlForImages(url, cap, usable);
 
     if (!images.length) {
       return res.json({ images: [], debug: debugPages });
     }
 
     const parsed = await recommendAltText(images, clientName);
-    res.json({ images: parsed, debug: debugPages, totalFound: images.length });
+    res.json({ images: parsed, debug: debugPages, totalFound: images.length, usedPastedList: usable.length > 0, pagesScanned: cap });
   } catch (e) {
     res.status(502).json({ error: { message: e.message } });
   }
@@ -1647,7 +1668,7 @@ async function schemaSitemapUrls(origin, limit, explicitSitemap) {
   return { urls, attempts, blocked };
 }
 
-async function crawlForSchema(startUrl, maxPages, explicitSitemap) {
+async function crawlForSchema(startUrl, maxPages, explicitSitemap, pastedUrls) {
   let base;
   try { base = new URL(startUrl); } catch { throw new Error('Invalid URL'); }
 
@@ -1666,15 +1687,34 @@ async function crawlForSchema(startUrl, maxPages, explicitSitemap) {
   // scan would cry wolf.
   let discoveryBlocked = null;
   let pageBlocked = null;
-  try {
-    const sm = await schemaSitemapUrls(base.origin, maxPages, explicitSitemap);
-    queue = sm.urls;
-    sitemapAttempts = sm.attempts;
-    discoveryBlocked = sm.blocked;
-  } catch (e) { sitemapError = e.message; }
-  const fromSitemap = queue.length > 0;
+  // A pasted list is an explicit statement of what the site is, so it wins
+  // outright — no sitemap lookup, no link-following, and no homepage seeded in
+  // that the user did not ask for.
+  const HARD_CAP = 500;
+  const pastedAll = Array.isArray(pastedUrls)
+    ? pastedUrls.filter(u => typeof u === 'string' && /^https?:\/\//i.test(u))
+    : [];
+  const pasted = pastedAll.slice(0, HARD_CAP);
+  const fromPasted = pasted.length > 0;
+
+  if (fromPasted) {
+    queue = [...pasted];
+    // The page dropdown bounds *discovery*; an explicit list is not a discovery
+    // guess, so scanning 25 of 200 pasted URLs while reporting success would be
+    // a silent loss. The list itself is the limit.
+    maxPages = pasted.length;
+    if (pastedAll.length > HARD_CAP) truncated = true;
+  } else {
+    try {
+      const sm = await schemaSitemapUrls(base.origin, maxPages, explicitSitemap);
+      queue = sm.urls;
+      sitemapAttempts = sm.attempts;
+      discoveryBlocked = sm.blocked;
+    } catch (e) { sitemapError = e.message; }
+  }
+  const fromSitemap = !fromPasted && queue.length > 0;
   const sitemapCount = queue.length;
-  if (!queue.includes(base.href)) queue.unshift(base.href);
+  if (!fromPasted && !queue.includes(base.href)) queue.unshift(base.href);
 
   // 100 pages at 10s apiece would run ~17 minutes and the platform proxy drops
   // the request long before that. Stop at the budget and return what we have.
@@ -1718,7 +1758,7 @@ async function crawlForSchema(startUrl, maxPages, explicitSitemap) {
     });
 
     // Only crawl links when there was no sitemap to work from
-    if (!fromSitemap && visited.size < maxPages) {
+    if (!fromSitemap && !fromPasted && visited.size < maxPages) {
       const linkRe = /href=["']([^"'#?][^"']*?)["']/gi;
       let lm;
       while ((lm = linkRe.exec(html)) !== null) {
@@ -1736,7 +1776,7 @@ async function crawlForSchema(startUrl, maxPages, explicitSitemap) {
   }
   return {
     pages, debug: debugPages,
-    source: fromSitemap ? 'sitemap' : 'crawl',
+    source: fromPasted ? 'pasted list' : fromSitemap ? 'sitemap' : 'crawl',
     truncated, remaining: queue.length,
     // Only a page-level block means the audit is missing pages. A discovery-level
     // one is reported separately so a healthy scan is never called blocked.
@@ -1757,13 +1797,13 @@ async function crawlForSchema(startUrl, maxPages, explicitSitemap) {
 }
 
 app.post('/api/schema/scan', apiGuard, async (req, res) => {
-  const { url, maxPages = 25, sitemapUrl = '' } = req.body || {};
+  const { url, maxPages = 25, sitemapUrl = '', pageUrls = [] } = req.body || {};
   if (!url || !/^https?:\/\//i.test(String(url))) {
     return res.status(400).json({ error: { message: 'Valid http/https URL required.' } });
   }
   const sm = /^https?:\/\//i.test(String(sitemapUrl)) ? String(sitemapUrl) : '';
   try {
-    const out = await crawlForSchema(String(url), Math.min(parseInt(maxPages) || 25, 500), sm);
+    const out = await crawlForSchema(String(url), Math.min(parseInt(maxPages) || 25, 500), sm, pageUrls);
     // Nothing readable plus a challenge means we never saw the site. Fail loudly
     // rather than returning an empty audit that reads as "this site has no schema".
     const anyBlock = out.blocked || out.discoveryBlocked;

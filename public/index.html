@@ -129,6 +129,10 @@
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
       Schema
     </button>
+    <button class="tab-btn" data-tab="setup">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      Client Setup
+    </button>
   </nav>
 
   <!-- ── MAIN ── -->
@@ -567,69 +571,7 @@
         <button class="btn btn-ghost rt-add-row-btn" id="rt-addRowBtn">+ Add Row</button>
       </div>
 
-      <!-- Add/Edit Client modal -->
-      <div class="rt-modal-overlay hidden" id="rt-clientModal">
-        <div class="rt-modal">
-          <div class="rt-modal-title" id="rt-modalTitle">Add Client</div>
-          <div class="form-group" style="margin-bottom:14px">
-            <label class="form-label">Client Name</label>
-            <input type="text" id="rt-clientName" class="form-input" placeholder="e.g. Seven Oaks Dental">
-          </div>
-          <div id="rt-campaignPickWrap" class="form-group hidden" style="margin-bottom:14px">
-            <label class="form-label">Search AA Campaign</label>
-            <select id="rt-campaignPick" class="form-input" style="cursor:pointer">
-              <option value="">— loading… —</option>
-            </select>
-          </div>
-          <div class="form-group" style="margin-bottom:14px">
-            <label class="form-label">Agency Analytics Campaign ID</label>
-            <input type="text" id="rt-campaignId" class="form-input" placeholder="e.g. 12345">
-          </div>
-          <div class="form-group" style="margin-bottom:4px">
-            <label class="form-label">WordPress Site URL</label>
-            <input type="url" id="rt-wpUrl" class="form-input" placeholder="https://example.com">
-          </div>
-          <div class="form-group" style="margin-bottom:4px">
-            <label class="form-label">Sitemap URL <span style="font-weight:400;color:var(--text-muted)">(optional — only needed if it is not at /sitemap.xml)</span></label>
-            <input type="url" id="rt-sitemapUrl" class="form-input" placeholder="https://example.com/sitemap_index.xml">
-          </div>
-          <div class="form-group" style="margin-bottom:4px">
-            <label class="form-label">WordPress Username</label>
-            <input type="text" id="rt-wpUser" class="form-input" placeholder="admin">
-          </div>
-          <div class="form-group" style="margin-bottom:14px">
-            <label class="form-label">WordPress Application Password <span style="font-weight:400;color:var(--text-muted)">(WP Admin → Users → Profile → Application Passwords)</span></label>
-            <input type="password" id="rt-wpPass" class="form-input" placeholder="xxxx xxxx xxxx xxxx xxxx xxxx">
-          </div>
-          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin:12px 0 6px">POP Settings</div>
-          <div style="display:flex;gap:8px;margin-bottom:14px">
-            <div class="form-group rt-ac-wrap" style="flex:2;margin-bottom:0">
-              <label class="form-label">Target Location</label>
-              <input type="text" id="rt-popLocation" class="form-input" placeholder="Type a city, e.g. winnipeg" autocomplete="off" role="combobox" aria-expanded="false" aria-autocomplete="list" />
-              <div class="rt-ac-list" id="rt-popLocAc" role="listbox" hidden></div>
-              <div class="rt-ac-note" id="rt-popLocNote"></div>
-            </div>
-            <div class="form-group" style="flex:1;margin-bottom:0">
-              <label class="form-label">Language</label>
-              <select id="rt-popLanguage" class="form-input">
-                <option value="english" selected>English</option>
-                <option value="french">French</option>
-                <option value="spanish">Spanish</option>
-                <option value="german">German</option>
-              </select>
-            </div>
-            <div class="form-group" style="flex:0 0 auto;margin-bottom:0;display:flex;flex-direction:column;justify-content:flex-end">
-              <label class="form-label" style="white-space:nowrap">Google NLP</label>
-              <label style="display:flex;align-items:center;gap:6px;padding:6px 0"><input type="checkbox" id="rt-popGnl"> <span style="font-size:12px">Enable</span></label>
-            </div>
-          </div>
-          <div class="rt-modal-actions">
-            <button class="btn btn-primary" id="rt-saveClientBtn">Save</button>
-            <button class="btn btn-ghost" onclick="rtCloseModal('rt-clientModal')">Cancel</button>
-            <button class="btn btn-ghost rt-delete-client-btn hidden" id="rt-deleteClientBtn" style="margin-left:auto;color:var(--red)">Delete Client</button>
-          </div>
-        </div>
-      </div>
+      <!-- Client settings live in the Client Setup tab, not here -->
 
       <!-- Import modal -->
       <div class="rt-modal-overlay hidden" id="rt-importModal">
@@ -916,6 +858,87 @@
       <div id="ahrefs-root"></div>
     </div>
 
+
+    <!-- ── CLIENT SETUP TAB ── -->
+    <div class="tab-panel" id="tab-setup">
+      <div class="db-header">
+        <h2 class="db-title" id="setup-title">Client Setup</h2>
+        <p class="db-sub">Everything about the selected client — connections, POP defaults, and the site's page list.</p>
+      </div>
+
+      <div class="setup-grid">
+        <div class="form-card">
+          <div class="setup-section-title">Client</div>
+          <div class="form-group" style="margin-bottom:14px">
+            <label class="form-label">Client Name</label>
+            <input type="text" id="rt-clientName" class="form-input" placeholder="e.g. Seven Oaks Dental">
+          </div>
+        <div id="rt-campaignPickWrap" class="form-group hidden" style="margin-bottom:14px">
+          <label class="form-label">Search AA Campaign</label>
+          <select id="rt-campaignPick" class="form-input" style="cursor:pointer">
+            <option value="">— loading… —</option>
+          </select>
+        </div>
+        <div class="form-group" style="margin-bottom:14px">
+          <label class="form-label">Agency Analytics Campaign ID</label>
+          <input type="text" id="rt-campaignId" class="form-input" placeholder="e.g. 12345">
+        </div>
+        <div class="form-group" style="margin-bottom:4px">
+          <label class="form-label">WordPress Site URL</label>
+          <input type="url" id="rt-wpUrl" class="form-input" placeholder="https://example.com">
+        </div>
+        <div class="form-group" style="margin-bottom:4px">
+          <label class="form-label">Sitemap URL <span style="font-weight:400;color:var(--text-muted)">(optional — only needed if it is not at /sitemap.xml)</span></label>
+          <input type="url" id="rt-sitemapUrl" class="form-input" placeholder="https://example.com/sitemap_index.xml">
+        </div>
+        <div class="form-group" style="margin-bottom:4px">
+          <label class="form-label">WordPress Username</label>
+          <input type="text" id="rt-wpUser" class="form-input" placeholder="admin">
+        </div>
+        <div class="form-group" style="margin-bottom:14px">
+          <label class="form-label">WordPress Application Password <span style="font-weight:400;color:var(--text-muted)">(WP Admin → Users → Profile → Application Passwords)</span></label>
+          <input type="password" id="rt-wpPass" class="form-input" placeholder="xxxx xxxx xxxx xxxx xxxx xxxx">
+        </div>
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin:12px 0 6px">POP Settings</div>
+        <div style="display:flex;gap:8px;margin-bottom:14px">
+          <div class="form-group rt-ac-wrap" style="flex:2;margin-bottom:0">
+            <label class="form-label">Target Location</label>
+            <input type="text" id="rt-popLocation" class="form-input" placeholder="Type a city, e.g. winnipeg" autocomplete="off" role="combobox" aria-expanded="false" aria-autocomplete="list" />
+            <div class="rt-ac-list" id="rt-popLocAc" role="listbox" hidden></div>
+            <div class="rt-ac-note" id="rt-popLocNote"></div>
+          </div>
+          <div class="form-group" style="flex:1;margin-bottom:0">
+            <label class="form-label">Language</label>
+            <select id="rt-popLanguage" class="form-input">
+              <option value="english" selected>English</option>
+              <option value="french">French</option>
+              <option value="spanish">Spanish</option>
+              <option value="german">German</option>
+            </select>
+          </div>
+          <div class="form-group" style="flex:0 0 auto;margin-bottom:0;display:flex;flex-direction:column;justify-content:flex-end">
+            <label class="form-label" style="white-space:nowrap">Google NLP</label>
+            <label style="display:flex;align-items:center;gap:6px;padding:6px 0"><input type="checkbox" id="rt-popGnl"> <span style="font-size:12px">Enable</span></label>
+          </div>
+        </div>
+        </div>
+
+        <div class="form-card">
+          <div class="setup-section-title">Site URLs</div>
+          <p class="setup-hint">One URL per line. When this list has entries the Schema scan uses exactly these pages and skips sitemap discovery and link-following — useful when a site has no usable sitemap. It does not bypass a firewall that blocks this server: each page still has to be fetched to read its markup.</p>
+          <textarea id="setup-urls" class="form-textarea setup-urls" spellcheck="false"
+                    placeholder="https://example.com/&#10;https://example.com/services/&#10;https://example.com/contact/"></textarea>
+          <div class="setup-url-meta"><span id="setup-url-count">No URLs</span></div>
+        </div>
+      </div>
+
+      <div class="setup-actions">
+        <button class="btn btn-primary" id="rt-saveClientBtn">Save Client</button>
+        <button class="btn btn-ghost hidden" id="setup-cancelBtn">Cancel</button>
+        <span id="setup-saved" class="setup-saved"></span>
+        <button class="btn btn-ghost rt-delete-client-btn hidden" id="rt-deleteClientBtn" style="margin-left:auto;color:var(--red)">Delete Client</button>
+      </div>
+    </div>
     <!-- ── SCHEMA TAB ── -->
     <div class="tab-panel" id="tab-schema">
       <div id="schema-root"></div>

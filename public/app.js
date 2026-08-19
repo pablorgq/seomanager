@@ -99,6 +99,7 @@ const TAB_ROUTES = {
   indexy:    '/indexy',
   ahrefs:    '/ahrefs',
   schema:    '/schema',
+  setup:     '/client-setup',
   artimage:  '/article-image',
   artcontent:'/article-content',
 };
@@ -118,6 +119,7 @@ function switchTab(tab, { pushState = true } = {}) {
   if (tab === 'indexy') { indexyRender(); indexySyncClient(); }
   if (tab === 'ahrefs') ahrefsRender();
   if (tab === 'schema') { schemaSyncClient(); schemaRender(); }
+  if (tab === 'setup') setupRender();
   if (tab === 'artimage') aigRender();
   if (tab === 'artcontent') acgRender();
   if (pushState) {
@@ -153,6 +155,7 @@ async function init() {
   }
   await rtInit();
   coraInit();
+  setupInit();
   await weeklyLoadFromServer();
   // Same deal as auditData below — a deep link to /schema renders before this
   // resolves, so re-render once the saved crawl is actually in hand.
@@ -4285,12 +4288,30 @@ async function weeklyLoadFromServer() {
 }
 
 // Unique target pages derived from a client's Main Keywords
-function weeklyClientPages(client) {
+function weeklyClientPages(client, categoryKey) {
   const pages = new Set();
   (client?.keywords || []).filter(k => k.mainKeyword).forEach(k => {
     const page = (k.targetUrl || k.url || '').trim();
     if (page) pages.add(page);
   });
+  // Schema is judged against the whole site, not only the pages that happen to
+  // carry a tracked keyword — the Schema tab audits every page, so the checklist
+  // should list every page. Other page-scoped categories keep the keyword set,
+  // which is the work they are actually about.
+  if (categoryKey === 'schemaOpt') {
+    // Dedupe on a normalised key so /services and /services/ do not become two
+    // checklist rows and double the task count, while the row keeps whichever
+    // form was already there (task status is stored against that exact string).
+    const key = u => { try { const x = new URL(u); return (x.origin + x.pathname.replace(/\/+$/, '')).toLowerCase(); } catch { return String(u).replace(/\/+$/, '').toLowerCase(); } };
+    const seen = new Set([...pages].map(key));
+    for (const u of client?.pageUrls || []) {
+      if (!u) continue;
+      const k = key(u);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      pages.add(u);
+    }
+  }
   return [...pages];
 }
 
@@ -4304,7 +4325,7 @@ function weeklyClientTaskCounts(client) {
   for (const cat of WEEKLY_CATEGORIES) {
     const itemKeys = cat.scope === 'mk'
       ? (client.keywords || []).filter(k => k.mainKeyword).map(k => k.id)
-      : weeklyClientPages(client);
+      : weeklyClientPages(client, cat.key);
     let done = 0, blocked = 0;
     for (const itemKey of itemKeys) {
       const status = weeklyGetStatus(client.id, cat.key, itemKey);
@@ -4381,7 +4402,7 @@ function weeklyCategorySectionHtml(client, category) {
   const mkKws = (client.keywords || []).filter(k => k.mainKeyword);
   const items = category.scope === 'mk'
     ? mkKws.map(k => ({ key: k.id, label: k.keyword || '(blank)', kw: k }))
-    : weeklyClientPages(client).map(page => ({ key: page, label: page, kw: null }));
+    : weeklyClientPages(client, category.key).map(page => ({ key: page, label: page, kw: null }));
 
   if (!items.length) {
     const emptyMsg = category.scope === 'mk'
@@ -5471,6 +5492,7 @@ async function rtInit() {
     if (activeTab === 'ranks') rtRender();
     if (activeTab === 'ahrefs') ahrefsRender();
     if (activeTab === 'schema') { schemaSyncClient(); schemaRender(); }
+    if (activeTab === 'setup') setupCancelAdd();
     if (activeTab === 'indexy') { indexyLoadSaved(e.target.value); indexyAltTextPrefill(); }
   });
   document.getElementById('rt-addClientBtn').addEventListener('click', () => rtShowAddClient());
@@ -5808,7 +5830,7 @@ async function rtLoadPopLanguages() {
 }
 
 function rtShowAddClient() {
-  document.getElementById('rt-modalTitle').textContent     = 'Add Client';
+  document.getElementById('setup-title').textContent       = 'New Client';
   document.getElementById('rt-clientName').value           = '';
   document.getElementById('rt-campaignId').value           = '';
   document.getElementById('rt-wpUrl').value                = '';
@@ -5825,13 +5847,15 @@ function rtShowAddClient() {
   rtPopLocAcClose();
   rtLoadPopLocations().then(rtPopLocValidate);
   rtLoadPopLanguages();
-  rtOpenModal('rt-clientModal');
+  setupSetUrls([]);
+  setupSetSaved('');
+  switchTab('setup');
 }
 
-function rtShowEditClient() {
-  const c = rtActiveClient();
+/* Field population only, shared by the header gear and by arriving at the tab
+   any other way (deep link, tab click, switching client while already there). */
+function rtShowEditClientFields(c) {
   if (!c) return;
-  document.getElementById('rt-modalTitle').textContent     = 'Edit Client';
   document.getElementById('rt-clientName').value           = c.name;
   document.getElementById('rt-campaignId').value           = c.aaCampaignId || '';
   document.getElementById('rt-wpUrl').value                = c.wpUrl  || '';
@@ -5848,7 +5872,15 @@ function rtShowEditClient() {
   rtPopLocAcClose();
   rtLoadPopLocations().then(rtPopLocValidate);
   rtLoadPopLanguages();
-  rtOpenModal('rt-clientModal');
+}
+
+function rtShowEditClient() {
+  const c = rtActiveClient();
+  if (!c) return;
+  rtShowEditClientFields(c);
+  setupSetUrls(c.pageUrls || []);
+  setupSetSaved('');
+  switchTab('setup');
 }
 
 function rtSaveClient() {
@@ -5861,20 +5893,29 @@ function rtSaveClient() {
   const popLocation = document.getElementById('rt-popLocation').value;
   const popLanguage = document.getElementById('rt-popLanguage').value;
   const popGnl      = document.getElementById('rt-popGnl').checked;
+  const pageUrls    = setupReadUrls();
   const mode        = document.getElementById('rt-saveClientBtn').dataset.mode;
-  if (!name) return;
+  if (!name) { setupSetSaved('Client name is required.', true); return; }
   if (mode === 'add') {
-    const client = { id: rtUid(), name, aaCampaignId: cid, wpUrl, sitemapUrl, wpUser, wpPass, popLocation, popLanguage, popGnl, keywords: [] };
+    const client = { id: rtUid(), name, aaCampaignId: cid, wpUrl, sitemapUrl, wpUser, wpPass, popLocation, popLanguage, popGnl, pageUrls, keywords: [] };
     rtData.clients.push(client);
     rtData.activeClientId = client.id;
   } else {
     const c = rtActiveClient();
-    if (c) { c.name = name; c.aaCampaignId = cid; c.wpUrl = wpUrl; c.sitemapUrl = sitemapUrl; c.wpUser = wpUser; c.wpPass = wpPass; c.popLocation = popLocation; c.popLanguage = popLanguage; c.popGnl = popGnl; }
+    // The tab is reachable directly now, so "edit" with nothing selected is a
+    // real state — a fresh install, or right after deleting the last client.
+    // Saying "Saved" while writing nothing would be a lie.
+    if (!c) { setupSetSaved('No client selected — use + to add one.', true); return; }
+    c.name = name; c.aaCampaignId = cid; c.wpUrl = wpUrl; c.sitemapUrl = sitemapUrl; c.wpUser = wpUser; c.wpPass = wpPass; c.popLocation = popLocation; c.popLanguage = popLanguage; c.popGnl = popGnl; c.pageUrls = pageUrls;
   }
   rtSave();
   rtRender();
   populateGlobalClientSelect();
-  rtCloseModal('rt-clientModal');
+  // The page stays open — it is a settings page now, not a modal to dismiss
+  document.getElementById('rt-saveClientBtn').dataset.mode = 'edit';
+  document.getElementById('rt-deleteClientBtn')?.classList.remove('hidden');
+  setupSetSaved(`Saved · ${pageUrls.length} URL(s)`);
+  setupRenderUrlCount();
 }
 
 function rtDeleteClient() {
@@ -5885,7 +5926,8 @@ function rtDeleteClient() {
   rtSave();
   rtRender();
   populateGlobalClientSelect();
-  rtCloseModal('rt-clientModal');
+  // Deleting from the setup page leaves the form showing a client that is gone
+  setupRender();
 }
 
 /* ── row management ── */
@@ -6268,7 +6310,7 @@ function rtCloseModal(id) { document.getElementById(id).classList.add('hidden');
 
 // Close modals on overlay click
 document.addEventListener('click', e => {
-  ['rt-clientModal', 'rt-importModal', 'rt-editModal'].forEach(id => {
+  ['rt-importModal', 'rt-editModal'].forEach(id => {
     const el = document.getElementById(id);
     if (el && !el.classList.contains('hidden') && e.target === el) rtCloseModal(id);
   });
@@ -6277,7 +6319,7 @@ document.addEventListener('click', e => {
 // Close modals on Escape
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
-    ['rt-clientModal', 'rt-importModal', 'rt-editModal'].forEach(id => rtCloseModal(id));
+    ['rt-importModal', 'rt-editModal'].forEach(id => rtCloseModal(id));
   }
 });
 
@@ -7434,7 +7476,10 @@ async function indexyAltTextScrape() {
     const r = await fetch('/api/alttext/scrape', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ url, maxPages: parseInt(maxPages), clientName: client?.name || '' }),
+      body: JSON.stringify({
+        url, maxPages: parseInt(maxPages), clientName: client?.name || '',
+        pageUrls: client?.pageUrls || [],   // pasted list wins over crawling, as in the Schema tab
+      }),
     });
     let data;
     try { data = await r.json(); } catch { throw new Error(`HTTP ${r.status} — server may be restarting`); }
@@ -7442,17 +7487,22 @@ async function indexyAltTextScrape() {
 
     const images = data.images || [];
     const debug  = data.debug  || [];
+    // The pasted list overrides both the URL box and the page selector above, so
+    // say so — otherwise the results are labelled with a URL that was ignored.
+    const listNote = data.usedPastedList
+      ? `<div class="gsc-msg">Used this client's ${data.pagesScanned} pasted URL(s) from Client Setup — the URL and page count above were not used.</div>`
+      : '';
     if (!images.length) {
       const debugHtml = debug.length
         ? '<details class="alttext-debug"><summary>Debug — pages crawled</summary><ul>' +
           debug.map(p => `<li>${escHtml(p.url)} — <strong>${p.imgs} images found</strong> (${escHtml(p.status)})</li>`).join('') +
           '</ul></details>'
         : '';
-      result.innerHTML = `<div class="gsc-msg">No images with missing or vague alt text found.<br><small>If this seems wrong, check the debug info below.</small></div>${debugHtml}`;
+      result.innerHTML = listNote + `<div class="gsc-msg">No images with missing or vague alt text found.<br><small>If this seems wrong, check the debug info below.</small></div>${debugHtml}`;
       return;
     }
 
-    result.innerHTML = indexyAltTextTable(images, url);
+    result.innerHTML = listNote + indexyAltTextTable(images, url);
     result.querySelectorAll('.alttext-copy-btn').forEach(b => {
       b.addEventListener('click', () => {
         navigator.clipboard.writeText(b.dataset.text).then(() => {
@@ -8709,6 +8759,107 @@ function ahrefsRenderImageGaps(images, summary) {
   result.querySelector('#alttext-push-btn')?.addEventListener('click', () => indexyAltTextPushWP(images, result));
 }
 
+
+/* ═══════════════════════════════════════════════
+   CLIENT SETUP
+   The client's settings and its page list in one place. The form fields are the
+   same elements the add/edit modal used, so the AA campaign search, the POP
+   location autocomplete and rtSaveClient all keep working untouched — only the
+   container changed from a modal to a tab.
+════════════════════════════════════════════════ */
+
+/* One URL per line. Deduplicated case-insensitively on a trailing-slash-
+   insensitive key, but the URL is stored exactly as pasted — the site is the
+   authority on its own canonical form. */
+function setupReadUrls() {
+  const raw = document.getElementById('setup-urls')?.value || '';
+  const seen = new Set();
+  const out  = [];
+  for (let line of raw.split(/[\r\n,]+/)) {
+    line = line.trim();
+    if (!line) continue;
+    if (!/^https?:\/\//i.test(line)) line = `https://${line}`;
+    let key;
+    try { const u = new URL(line); key = (u.origin + u.pathname.replace(/\/+$/, '')).toLowerCase(); }
+    catch { continue; }                       // not a URL at all — drop it
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(line);
+  }
+  return out;
+}
+
+function setupSetUrls(urls) {
+  const el = document.getElementById('setup-urls');
+  if (el) el.value = (urls || []).join('\n');
+  setupRenderUrlCount();
+}
+
+function setupRenderUrlCount() {
+  const el = document.getElementById('setup-url-count');
+  if (!el) return;
+  const raw   = (document.getElementById('setup-urls')?.value || '').split(/[\r\n,]+/).filter(l => l.trim()).length;
+  const clean = setupReadUrls().length;
+  if (!clean) { el.textContent = 'No URLs — the Schema scan will discover pages itself.'; return; }
+  const dropped = raw - clean;
+  el.textContent = `${clean} URL(s)` + (dropped > 0 ? ` · ${dropped} duplicate or invalid line(s) will be dropped on save` : '');
+}
+
+function setupSetSaved(text, isError) {
+  const el = document.getElementById('setup-saved');
+  if (!el) return;
+  el.textContent = text || '';
+  el.style.color = isError ? 'var(--red)' : 'var(--green)';
+}
+
+/* Populate the form from the active client. Mirrors rtShowEditClient, which is
+   still the entry point when the header gear is used; this covers arriving at
+   the tab any other way (deep link, tab click, switching client while here). */
+function setupRender() {
+  const root = document.getElementById('tab-setup');
+  if (!root || !rtData) return;
+
+  const cancelBtn = document.getElementById('setup-cancelBtn');
+  // Mid-add: keep the blank form rather than overwriting what is being typed
+  if (document.getElementById('rt-saveClientBtn')?.dataset.mode === 'add') {
+    document.getElementById('setup-title').textContent = 'New Client';
+    // Only offer Cancel when there is a client to fall back to
+    cancelBtn?.classList.toggle('hidden', !(rtData.clients || []).length);
+    setupRenderUrlCount();
+    return;
+  }
+  cancelBtn?.classList.add('hidden');
+
+  const c = rtActiveClient();
+  const title = document.getElementById('setup-title');
+  if (!c) {
+    if (title) title.textContent = 'Client Setup';
+    document.getElementById('rt-deleteClientBtn')?.classList.add('hidden');
+    return;
+  }
+  if (title) title.textContent = c.name || 'Client Setup';
+  rtShowEditClientFields(c);
+  setupSetUrls(c.pageUrls || []);
+}
+
+/* Leave "add" mode and go back to showing the selected client. Without this an
+   abandoned Add left the tab blank for good, and the next Save pushed a
+   duplicate client instead of updating the selected one — the modal's Cancel
+   button used to clear that state. */
+function setupCancelAdd() {
+  const btn = document.getElementById('rt-saveClientBtn');
+  if (btn) btn.dataset.mode = 'edit';
+  setupSetSaved('');
+  setupRender();
+}
+
+function setupInit() {
+  document.getElementById('setup-urls')?.addEventListener('input', () => {
+    setupRenderUrlCount();
+    setupSetSaved('');
+  });
+  document.getElementById('setup-cancelBtn')?.addEventListener('click', setupCancelAdd);
+}
 /* ═══════════════════════════════════════════════
    SCHEMA AUDIT
    Crawl the active client's site, report what structured data each page really
@@ -8892,6 +9043,7 @@ async function schemaScan({ full = false } = {}) {
         url: /^https?:\/\//i.test(domain) ? domain : `https://${domain}`,
         maxPages,
         sitemapUrl: c?.sitemapUrl || '',
+        pageUrls:   c?.pageUrls || [],
       }),
     });
     const data = await r.json();
@@ -8934,7 +9086,11 @@ async function schemaScan({ full = false } = {}) {
     // A one-page result is the confusing case — say what actually happened rather
     // than guessing at a cause the diagnostics can now distinguish.
     if (pages.length <= 1 && !data.blocked) {
-      if (data.source === 'sitemap') {
+      if (data.source === 'pasted list') {
+        // Advising a sitemap fix here would be nonsense — the pasted path never
+        // looks one up.
+        parts.push('The client\'s pasted URL list has only this page — edit it in Client Setup.');
+      } else if (data.source === 'sitemap') {
         parts.push('The sitemap listed only this page.');
       } else {
         const tried = (dg.sitemapAttempts || []);

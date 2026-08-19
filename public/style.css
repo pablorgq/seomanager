@@ -2036,3 +2036,23 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
   .acg-meta-row { grid-template-columns: 1fr auto; }
   .acg-meta-k   { grid-column: 1 / -1; }
 }
+
+/* ── CLIENT SETUP ── */
+.setup-grid {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px; align-items: start; margin-bottom: 16px;
+}
+@media (max-width: 900px) { .setup-grid { grid-template-columns: minmax(0, 1fr); } }
+.setup-section-title {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--text-muted); margin-bottom: 12px;
+}
+.setup-hint { font-size: 11px; color: var(--text-muted); line-height: 1.5; margin: 0 0 10px; }
+.setup-urls {
+  width: 100%; min-height: 320px; resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px; line-height: 1.6; white-space: pre; overflow-wrap: normal; overflow-x: auto;
+}
+.setup-url-meta { margin-top: 8px; font-size: 11px; color: var(--text-muted); }
+.setup-actions { display: flex; align-items: center; gap: 10px; }
+.setup-saved { font-size: 12px; font-weight: 600; }
