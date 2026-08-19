@@ -8923,14 +8923,34 @@ async function schemaScan({ full = false } = {}) {
     const saved = await schemaSaveStore(id);
     const dg    = data.diagnostics || {};
     const parts = [`✓ ${pages.length} page(s) scanned via ${data.source || 'crawl'}.`];
-    // A one-page result is the confusing case — say why rather than leaving the
-    // user staring at a single row.
-    if (pages.length <= 1) {
-      parts.push(data.source === 'sitemap'
-        ? 'The sitemap listed only this page.'
-        : 'No sitemap was found and the page had no internal links to follow — set a Sitemap URL in the client editor if it lives somewhere unusual.');
+
+    // A partial block is the quietly wrong case: some pages read, others replaced
+    // by a challenge. Say so, or the missing pages look like pages that don't exist.
+    if (data.blocked) {
+      parts.push(`Some pages were blocked by the site's firewall (${data.blocked.reason})`
+        + (data.blocked.ip ? ` — it saw this server as ${data.blocked.ip}. Whitelist that IP to audit the whole site.` : '.'));
     }
-    if (dg.failed)      parts.push(`${dg.failed} URL(s) could not be fetched (${(dg.failures || []).map(f => f.status).join(', ')}).`);
+
+    // A one-page result is the confusing case — say what actually happened rather
+    // than guessing at a cause the diagnostics can now distinguish.
+    if (pages.length <= 1 && !data.blocked) {
+      if (data.source === 'sitemap') {
+        parts.push('The sitemap listed only this page.');
+      } else {
+        const tried = (dg.sitemapAttempts || []);
+        const why = tried.length
+          ? `Sitemap lookups returned: ${tried.map(a => `${a.url.replace(/^https?:\/\/[^/]+/, '')} → ${a.outcome}`).join('; ')}.`
+          : 'No sitemap was found.';
+        parts.push(`${why} The page also had no internal links to follow — set a Sitemap URL in the client editor if it lives somewhere unusual.`);
+      }
+    }
+    if (dg.failed) {
+      // Server-side count — `failures` is only a 5-item sample, so counting it
+      // would report "5 blocked" for a site where 200 pages were blocked.
+      parts.push(dg.blockedCount
+        ? `${dg.failed} URL(s) could not be read (${dg.blockedCount} blocked by the firewall).`
+        : `${dg.failed} URL(s) could not be fetched (${(dg.failures || []).map(f => f.status).join(', ')}).`);
+    }
     if (data.truncated) parts.push(`Stopped at the time limit with ${data.remaining || 0} still queued — scan again to go deeper.`);
     if (!saved)         parts.push('Could not save to the server — the result is in this tab only.');
     schemaSetMessage(parts.join(' '), (saved && !data.truncated && pages.length > 1) ? 'green' : 'amber');

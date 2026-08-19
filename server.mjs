@@ -29,6 +29,12 @@ const PORT = process.env.PORT || 3000;
 const OPENAI_KEY        = process.env.OPENAI_API_KEY      || null;
 const ANTHROPIC_KEY     = process.env.ANTHROPIC_API_KEY   || null;
 const AHREFS_KEY        = process.env.AHREFS_API_KEY      || null;
+/* Optional fetch proxy for client sites whose firewall challenges datacenter IPs
+   (Sucuri, Cloudflare). A URL template containing {url}; the crawler substitutes
+   the encoded target. Only used after a direct fetch comes back as a challenge,
+   because these services bill per request. Example:
+   https://app.scrapingbee.com/api/v1/?api_key=KEY&url={url} */
+const SCHEMA_FETCH_PROXY = process.env.SCHEMA_FETCH_PROXY || null;
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
@@ -1302,6 +1308,107 @@ function bareHost(urlOrHost) {
   catch { return s.toLowerCase().replace(/^www\./, ''); }
 }
 
+/* A firewall challenge is the dangerous failure, because it does not look like
+   one: Sucuri and Cloudflare answer 200 with content-type text/html, so the
+   response passes every check the crawler makes while carrying no markup and no
+   links. Parsed as a page it reports "this site has no structured data", which
+   is worse than an error — it would have you add schema that already exists.
+
+   Returns null for a normal page, or { reason, ip } when the response is an
+   interposed challenge rather than the site. */
+function detectBlockedResponse(html, finalUrl, { expectHtml = true } = {}) {
+  const full = String(html || '');
+  const head = full.slice(0, 4000);
+  const lower = head.toLowerCase();
+
+  // A document that parses as a sitemap is the sitemap, whatever words appear in
+  // its URLs — otherwise a site listing /blog/sucuri-vs-wordfence/ discards its
+  // own sitemap as a challenge.
+  if (!expectHtml && /<urlset|<sitemapindex|<loc>/i.test(head)) return null;
+
+  // Sucuri puts the blocked IP in its redirect target, which is the single most
+  // useful thing we can report — it names exactly what to whitelist. It may land
+  // in the body or, after a redirect, only in the final URL.
+  const ip = (head.match(/ipr:(\d{1,3}(?:\.\d{1,3}){3})/)
+           || String(finalUrl || '').match(/ipr:(\d{1,3}(?:\.\d{1,3}){3})/))?.[1] || '';
+
+  /* Two tiers, because the two kinds of evidence are not equally trustworthy.
+
+     Structural tokens are machine identifiers that do not occur in English, so
+     they can fire on any page regardless of size. Note there is deliberately no
+     size cap here: real Cloudflare interstitials ship a lot of JS and routinely
+     exceed any threshold worth setting. */
+  if (/sgcaptcha|cloudproxy|sucuri\.net|sucuri_cloudproxy/i.test(head))
+                                                            return { reason: 'Sucuri firewall challenge', ip };
+  if (/cf-chl|challenge-platform|__cf_chl|cdn-cgi\/challenge/i.test(head))
+                                                            return { reason: 'Cloudflare challenge', ip };
+  if (/_incap_|distil_r_|incapsula/i.test(head))             return { reason: 'Imperva/Incapsula challenge', ip };
+
+  /* Prose phrases are the untrustworthy tier — "Access Denied" is also a normal
+     article title. They only count on a page with essentially no content, which
+     is what every challenge is and what no real article is. */
+  const textLen = full.replace(/<script[\s\S]*?<\/script>/gi, ' ')
+                      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+                      .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().length;
+  if (textLen < 500 &&
+      /checking your browser|robot challenge|attention required|access denied|are you a human|enable javascript to continue|verifying you are human/i.test(lower)) {
+    return { reason: 'Bot challenge page', ip };
+  }
+
+  // The generic interstitial shape: a body that only bounces the browser
+  // somewhere else. A real page does not consist solely of a meta refresh.
+  const body = full.match(/<body[^>]*>([\s\S]*?)<\/body>/i)?.[1] || '';
+  if (/<meta[^>]+http-equiv=["']?refresh/i.test(head) && body.replace(/<[^>]+>/g, '').trim().length < 40) {
+    return { reason: 'Redirect interstitial, not the page', ip };
+  }
+
+  /* Deliberately no "empty shell" rule. A client-rendered SPA ships exactly that
+     — a small index.html with no h1/p/a — and failing the whole scan on it would
+     turn an unprotected client site into a phantom firewall report. An empty
+     response is instead visible through the `bytes` field in diagnostics. */
+  return null;
+}
+
+/* Fetch HTML, retrying through the configured proxy when the direct response
+   turns out to be a firewall challenge. Returns the body plus how it was got, so
+   the caller can still report a block when no proxy is configured. */
+async function schemaFetchHtml(url, timeout) {
+  const opts = {
+    headers: { 'User-Agent': SCHEMA_UA, 'Accept': 'text/html,application/xhtml+xml,*/*', 'Accept-Language': 'en-US,en;q=0.9' },
+    signal: AbortSignal.timeout(timeout),
+    redirect: 'follow',
+  };
+  const r = await fetch(url, opts);
+  const contentType = r.headers.get('content-type') || '';
+  const finalUrl = r.url;
+
+  // Content type first: a non-HTML body is never worth downloading, detecting on,
+  // or paying a proxy to retry — the caller only rejects it afterwards anyway.
+  if (!contentType.includes('html')) return { ok: r.ok, status: r.status, contentType, html: '', finalUrl, blocked: null, via: 'direct' };
+
+  const html = await r.text();
+  // Read the body even on 4xx/5xx. Cloudflare's managed challenge answers 403
+  // and most Sucuri block pages are 403 or 503, so returning early on !ok would
+  // miss precisely the challenges this exists to catch.
+  const hit = detectBlockedResponse(html, finalUrl);
+  if (!hit) return { ok: r.ok, status: r.status, html, contentType, finalUrl, blocked: null, via: 'direct' };
+  if (!SCHEMA_FETCH_PROXY) return { ok: r.ok, status: r.status, html, contentType, finalUrl, blocked: hit, via: 'direct' };
+
+  // Direct fetch was challenged and a proxy is configured — retry through it
+  try {
+    const proxied = SCHEMA_FETCH_PROXY.includes('{url}')
+      ? SCHEMA_FETCH_PROXY.replace('{url}', encodeURIComponent(url))
+      : SCHEMA_FETCH_PROXY + encodeURIComponent(url);
+    const pr = await fetch(proxied, { signal: AbortSignal.timeout(timeout * 3) });
+    if (pr.ok) {
+      const phtml = await pr.text();
+      const phit = detectBlockedResponse(phtml, url);
+      if (!phit) return { ok: true, status: 200, html: phtml, contentType: 'text/html', finalUrl: url, blocked: null, via: 'proxy' };
+    }
+  } catch { /* fall through to reporting the original block */ }
+  return { ok: r.ok, status: r.status, html, contentType, finalUrl, blocked: hit, via: 'direct' };
+}
+
 /* Every @type in a parsed JSON-LD block. The shape is wildly inconsistent in the
    wild — a bare object, a top-level array, an @graph, nested nodes, and @type
    itself may be a string or an array — so walk the whole tree rather than
@@ -1471,16 +1578,29 @@ async function schemaSitemapUrls(origin, limit, explicitSitemap) {
   const urls = [];
   const seen = new Set();
   const queue = [];
+  // Every candidate records what it actually returned. Swallowing these made
+  // "no sitemap exists" indistinguishable from "every sitemap was blocked",
+  // which is exactly the ambiguity that made this bug hard to see.
+  const attempts = [];
+  let blocked = null;
+
   // An explicit sitemap from the client record wins — some sites keep it
   // somewhere the conventional guesses will never find.
   if (explicitSitemap) queue.push(explicitSitemap);
   // robots.txt is the site telling us where its sitemap is, which beats guessing
   try {
     const rb = await fetch(`${origin}/robots.txt`, { headers: { 'User-Agent': SCHEMA_UA }, signal: AbortSignal.timeout(6000), redirect: 'follow' });
-    if (rb.ok) {
-      for (const m of (await rb.text()).matchAll(/^\s*sitemap:\s*(\S+)/gim)) queue.push(m[1].trim());
+    const rbText = rb.ok ? await rb.text() : '';
+    const hit = rb.ok ? detectBlockedResponse(rbText, `${origin}/robots.txt`, { expectHtml: false }) : null;
+    if (hit) { blocked = blocked || hit; attempts.push({ url: `${origin}/robots.txt`, outcome: 'blocked' }); }
+    else if (!rb.ok) attempts.push({ url: `${origin}/robots.txt`, outcome: `http_${rb.status}` });
+    else {
+      const found = [...rbText.matchAll(/^\s*sitemap:\s*(\S+)/gim)].map(m => m[1].trim());
+      found.forEach(u => queue.push(u));
+      attempts.push({ url: `${origin}/robots.txt`, outcome: found.length ? `declared_${found.length}` : 'no_sitemap_directive' });
     }
-  } catch { /* fall back to the conventional locations */ }
+  } catch (e) { attempts.push({ url: `${origin}/robots.txt`, outcome: `fetch_error: ${e.message}` }); }
+
   queue.push(`${origin}/sitemap.xml`, `${origin}/sitemap_index.xml`, `${origin}/wp-sitemap.xml`, `${origin}/sitemap-index.xml`);
   let indexFollowed = 0;
 
@@ -1491,12 +1611,18 @@ async function schemaSitemapUrls(origin, limit, explicitSitemap) {
     let xml;
     try {
       const r = await fetch(sm, { headers: { 'User-Agent': SCHEMA_UA }, signal: AbortSignal.timeout(8000), redirect: 'follow' });
-      if (!r.ok) continue;
+      if (!r.ok) { attempts.push({ url: sm, outcome: `http_${r.status}` }); continue; }
       xml = await r.text();
-    } catch { continue; }
+    } catch (e) { attempts.push({ url: sm, outcome: `fetch_error: ${e.message}` }); continue; }
+
+    // A challenge served in place of the sitemap is not "no sitemap"
+    const hit = detectBlockedResponse(xml, sm, { expectHtml: false });
+    if (hit) { blocked = blocked || hit; attempts.push({ url: sm, outcome: 'blocked' }); continue; }
 
     const isIndex = /<sitemapindex/i.test(xml);
     const locs = [...xml.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)].map(x => x[1]);
+    if (!locs.length) { attempts.push({ url: sm, outcome: /<\?xml|<urlset|<sitemapindex/i.test(xml) ? 'no_locs' : 'not_xml' }); continue; }
+    attempts.push({ url: sm, outcome: isIndex ? `index_${locs.length}` : `urls_${locs.length}` });
     if (isIndex) {
       // robots.txt may name several indexes, and a Yoast index fans out to
       // post-/page-/local- children, so a single-index cap was too tight. Bound
@@ -1518,7 +1644,7 @@ async function schemaSitemapUrls(origin, limit, explicitSitemap) {
       }
     }
   }
-  return urls;
+  return { urls, attempts, blocked };
 }
 
 async function crawlForSchema(startUrl, maxPages, explicitSitemap) {
@@ -1534,8 +1660,18 @@ async function crawlForSchema(startUrl, maxPages, explicitSitemap) {
   // Sitemap first, homepage-BFS as the fallback / top-up
   let queue = [];
   let sitemapError = '';
-  try { queue = await schemaSitemapUrls(base.origin, maxPages, explicitSitemap); }
-  catch (e) { sitemapError = e.message; }
+  let sitemapAttempts = [];
+  // Kept apart on purpose: a blocked sitemap while every page reads fine is not
+  // "some pages were blocked", and reporting it as such on a fully successful
+  // scan would cry wolf.
+  let discoveryBlocked = null;
+  let pageBlocked = null;
+  try {
+    const sm = await schemaSitemapUrls(base.origin, maxPages, explicitSitemap);
+    queue = sm.urls;
+    sitemapAttempts = sm.attempts;
+    discoveryBlocked = sm.blocked;
+  } catch (e) { sitemapError = e.message; }
   const fromSitemap = queue.length > 0;
   const sitemapCount = queue.length;
   if (!queue.includes(base.href)) queue.unshift(base.href);
@@ -1554,21 +1690,32 @@ async function crawlForSchema(startUrl, maxPages, explicitSitemap) {
 
     let html = '';
     try {
-      const r = await fetch(pageUrl, {
-        headers: { 'User-Agent': SCHEMA_UA, 'Accept': 'text/html,application/xhtml+xml,*/*', 'Accept-Language': 'en-US,en;q=0.9' },
-        signal: AbortSignal.timeout(TIMEOUT),
-        redirect: 'follow',
-      });
+      const r = await schemaFetchHtml(pageUrl, TIMEOUT);
+
+      // A challenge parses as a perfectly empty page. Recording it as one is how
+      // the scan came to report "no structured data" for a fully marked-up site.
+      // Checked before the status code, because a challenge is far more useful to
+      // report than the 403 it usually arrives with.
+      if (r.blocked) {
+        pageBlocked = pageBlocked || r.blocked;
+        debugPages.push({ url: pageUrl, status: 'blocked_by_firewall', detail: r.blocked.reason, bytes: r.html.length });
+        continue;
+      }
       if (!r.ok) { debugPages.push({ url: pageUrl, status: `http_${r.status}` }); continue; }
-      const ct = r.headers.get('content-type') || '';
-      if (!ct.includes('html')) { debugPages.push({ url: pageUrl, status: `non_html_${ct}` }); continue; }
-      html = await r.text();
-      if (visited.size === 1) { try { base = new URL(r.url); } catch {} }
+      if (!r.contentType.includes('html')) { debugPages.push({ url: pageUrl, status: `non_html_${r.contentType}` }); continue; }
+      html = r.html;
+      if (visited.size === 1) { try { base = new URL(r.finalUrl); } catch {} }
     } catch (e) { debugPages.push({ url: pageUrl, status: `fetch_error: ${e.message}` }); continue; }
 
     const page = parsePageSchema(html, pageUrl);
     pages.push(page);
-    debugPages.push({ url: pageUrl, status: 'ok', types: page.types.length, invalid: page.parseErrors.length });
+    debugPages.push({
+      url: pageUrl, status: 'ok',
+      types: page.types.length, invalid: page.parseErrors.length,
+      // An empty-shell 200 is invisible without these
+      bytes: html.length,
+      links: (html.match(/href=["'][^"'#?]/g) || []).length,
+    });
 
     // Only crawl links when there was no sitemap to work from
     if (!fromSitemap && visited.size < maxPages) {
@@ -1591,12 +1738,19 @@ async function crawlForSchema(startUrl, maxPages, explicitSitemap) {
     pages, debug: debugPages,
     source: fromSitemap ? 'sitemap' : 'crawl',
     truncated, remaining: queue.length,
+    // Only a page-level block means the audit is missing pages. A discovery-level
+    // one is reported separately so a healthy scan is never called blocked.
+    blocked: pageBlocked,
+    discoveryBlocked,
     // Enough to explain a disappointing crawl without reading the server log
     diagnostics: {
       sitemapUrlsFound: sitemapCount,
       sitemapError,
+      sitemapAttempts: sitemapAttempts.slice(0, 12),
       fetched:  debugPages.length,
       failed:   debugPages.filter(d => d.status !== 'ok').length,
+      // Counted over everything, not over the truncated sample below
+      blockedCount: debugPages.filter(d => d.status === 'blocked_by_firewall').length,
       failures: debugPages.filter(d => d.status !== 'ok').slice(0, 5),
     },
   };
@@ -1610,6 +1764,21 @@ app.post('/api/schema/scan', apiGuard, async (req, res) => {
   const sm = /^https?:\/\//i.test(String(sitemapUrl)) ? String(sitemapUrl) : '';
   try {
     const out = await crawlForSchema(String(url), Math.min(parseInt(maxPages) || 25, 500), sm);
+    // Nothing readable plus a challenge means we never saw the site. Fail loudly
+    // rather than returning an empty audit that reads as "this site has no schema".
+    const anyBlock = out.blocked || out.discoveryBlocked;
+    if (!out.pages.length && anyBlock) {
+      return res.status(502).json({
+        error: {
+          message: `Blocked by the site's firewall — ${anyBlock.reason}. `
+            + (anyBlock.ip
+              ? `It saw this server as ${anyBlock.ip} and served a robot challenge instead of the page. Whitelist that IP in the site's firewall (Sucuri → Firewall → Access Control), or run the scan from a machine that is not challenged.`
+              : `It served a robot challenge instead of the page. Whitelist this server's IP in the site's firewall, or run the scan from a machine that is not challenged.`),
+          blocked: anyBlock,
+          diagnostics: out.diagnostics,
+        },
+      });
+    }
     res.json(out);
   } catch (e) {
     res.status(502).json({ error: { message: e.message } });
