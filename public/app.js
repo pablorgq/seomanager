@@ -2776,6 +2776,9 @@ function populateGlobalClientSelect() {
   sel.innerHTML = (rtData.clients || [])
     .map(c => `<option value="${escHtml(c.id)}"${c.id === active ? ' selected' : ''}>${escHtml(c.name)}</option>`)
     .join('') || '<option value="">No clients yet</option>';
+  // Nothing to configure until a client exists
+  const editBtn = document.getElementById('rt-editClientBtn');
+  if (editBtn) editBtn.disabled = !(rtData.clients || []).length;
 }
 
 function rtRankBadge(rank, prev) {
@@ -2802,11 +2805,7 @@ function rtRender() {
 
   const client = rtActiveClient();
 
-  // Update client selector
-  const sel = document.getElementById('rt-clientSelect');
-  sel.innerHTML = rtData.clients.map(c =>
-    `<option value="${escHtml(c.id)}"${c.id === rtData.activeClientId ? ' selected' : ''}>${escHtml(c.name)}</option>`
-  ).join('');
+  // The header select is the only client control in the app
   populateGlobalClientSelect();
 
   const noClient  = document.getElementById('rt-noClient');
@@ -5460,21 +5459,14 @@ async function rtInit() {
   await rtLoadFromServer();
 
   // Events
-  document.getElementById('rt-clientSelect').addEventListener('change', e => {
-    rtData.activeClientId = e.target.value;
-    rtSave();
-    rtRender();
-    const gs = document.getElementById('global-client-select');
-    if (gs) gs.value = e.target.value;
-  });
 
-  // Global client selector (header bar) — wire change event here since rtData is loaded
+  // Global client selector (header bar) — wire change event here since rtData is
+  // loaded. This is the app's only client picker; the Rank Tracker no longer has
+  // its own copy to keep in sync.
   document.getElementById('global-client-select')?.addEventListener('change', e => {
     if (!rtData) return;
     rtData.activeClientId = e.target.value;
     rtSave();
-    const rtSel = document.getElementById('rt-clientSelect');
-    if (rtSel) rtSel.value = e.target.value;
     const activeTab = document.querySelector('.tab-btn.active')?.dataset.tab;
     if (activeTab === 'ranks') rtRender();
     if (activeTab === 'ahrefs') ahrefsRender();

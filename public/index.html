@@ -20,11 +20,17 @@
            style="display:none;font-size:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text-secondary);background:var(--bg,rgba(0,0,0,.05));border:1px solid var(--border);border-radius:10px;padding:2px 8px;text-decoration:none;line-height:1.4">#—</a>
       </div>
       <div style="display:flex;align-items:center;gap:8px">
-        <!-- Global client selector -->
+        <!-- Global client selector — the single client control for the whole app -->
         <div class="global-client-wrap">
           <select id="global-client-select" class="global-client-select">
             <option value="">No clients</option>
           </select>
+          <button class="btn-icon global-client-btn" id="rt-addClientBtn" title="Add client">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </button>
+          <button class="btn-icon global-client-btn" id="rt-editClientBtn" title="Client settings">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </button>
         </div>
         <!-- Tools dropdown -->
         <div class="tools-menu" id="toolsMenu">
@@ -501,11 +507,6 @@
 
       <!-- Top bar -->
       <div class="rt-topbar">
-        <div class="rt-client-row">
-          <select id="rt-clientSelect" class="form-select rt-client-select"></select>
-          <button class="btn btn-secondary btn-sm" id="rt-addClientBtn">+ Client</button>
-          <button class="btn btn-ghost btn-sm" id="rt-editClientBtn" title="Edit client">✎</button>
-        </div>
         <div class="rt-actions-row">
           <button class="btn btn-primary" id="rt-refreshBtn">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>

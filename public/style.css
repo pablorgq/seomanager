@@ -1317,7 +1317,12 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
 .ah-error-box code { background: var(--surface); padding: 1px 5px; border-radius: 3px; font-size: 12px; }
 
 /* ── Global client selector (header) ── */
-.global-client-wrap { display: flex; align-items: center; }
+.global-client-wrap { display: flex; align-items: center; gap: 4px; }
+/* Add / settings sit against the select — this is the app's only client control */
+.global-client-btn { width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; color: var(--text-muted); }
+.global-client-btn:hover { color: var(--accent); }
+.global-client-btn:disabled { opacity: .4; cursor: default; }
+.global-client-btn:disabled:hover { color: var(--text-muted); }
 .global-client-select { padding: 5px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text-primary); font-size: 13px; font-weight: 500; cursor: pointer; min-width: 140px; max-width: 220px; height: 32px; }
 .global-client-select:focus { outline: none; border-color: var(--accent); }
 
@@ -1375,9 +1380,7 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
   display: flex; align-items: center; justify-content: space-between;
   flex-wrap: wrap; gap: 12px; margin-bottom: 20px;
 }
-.rt-client-row  { display: flex; align-items: center; gap: 8px; }
 .rt-actions-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.rt-client-select { min-width: 200px; max-width: 300px; }
 .rt-last-refresh { font-size: 11px; color: var(--text-muted); }
 
 .rt-empty-state {
