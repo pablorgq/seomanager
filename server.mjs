@@ -30,7 +30,7 @@ const OPENAI_KEY        = process.env.OPENAI_API_KEY      || null;
 const ANTHROPIC_KEY     = process.env.ANTHROPIC_API_KEY   || null;
 const AHREFS_KEY        = process.env.AHREFS_API_KEY      || null;
 /* Optional fetch proxy for client sites whose firewall challenges datacenter IPs
-   (Sucuri, Cloudflare). A URL template containing {url}; the crawler substitutes
+   (SiteGround Anti-Bot, Sucuri, Cloudflare). A URL template containing {url};
    the encoded target. Only used after a direct fetch comes back as a challenge,
    because these services bill per request. Example:
    https://app.scrapingbee.com/api/v1/?api_key=KEY&url={url} */
@@ -1330,7 +1330,7 @@ function bareHost(urlOrHost) {
 }
 
 /* A firewall challenge is the dangerous failure, because it does not look like
-   one: Sucuri and Cloudflare answer 200 with content-type text/html, so the
+   one: SiteGround, Sucuri and Cloudflare answer 200 with content-type text/html, so
    response passes every check the crawler makes while carrying no markup and no
    links. Parsed as a page it reports "this site has no structured data", which
    is worse than an error — it would have you add schema that already exists.
@@ -1347,7 +1347,7 @@ function detectBlockedResponse(html, finalUrl, { expectHtml = true } = {}) {
   // own sitemap as a challenge.
   if (!expectHtml && /<urlset|<sitemapindex|<loc>/i.test(head)) return null;
 
-  // Sucuri puts the blocked IP in its redirect target, which is the single most
+  // SiteGround puts the blocked IP in its redirect target, which is the single most
   // useful thing we can report — it names exactly what to whitelist. It may land
   // in the body or, after a redirect, only in the final URL.
   const ip = (head.match(/ipr:(\d{1,3}(?:\.\d{1,3}){3})/)
@@ -1359,8 +1359,12 @@ function detectBlockedResponse(html, finalUrl, { expectHtml = true } = {}) {
      they can fire on any page regardless of size. Note there is deliberately no
      size cap here: real Cloudflare interstitials ship a lot of JS and routinely
      exceed any threshold worth setting. */
-  if (/sgcaptcha|cloudproxy|sucuri\.net|sucuri_cloudproxy/i.test(head))
-                                                            return { reason: 'Sucuri firewall challenge', ip };
+  // sgcaptcha is SiteGround's Anti-Bot AI (sg = SiteGround), not Sucuri — it is
+  // hosting-level, so it appears on sites with no security plugin at all and the
+  // fix is with the host rather than anything on the site.
+  if (/sgcaptcha/i.test(head))                              return { reason: 'SiteGround Anti-Bot challenge', ip, vendor: 'siteground' };
+  if (/cloudproxy|sucuri\.net|sucuri_cloudproxy/i.test(head))
+                                                            return { reason: 'Sucuri firewall challenge', ip, vendor: 'sucuri' };
   if (/cf-chl|challenge-platform|__cf_chl|cdn-cgi\/challenge/i.test(head))
                                                             return { reason: 'Cloudflare challenge', ip };
   if (/_incap_|distil_r_|incapsula/i.test(head))             return { reason: 'Imperva/Incapsula challenge', ip };
@@ -1409,7 +1413,7 @@ async function schemaFetchHtml(url, timeout) {
 
   const html = await r.text();
   // Read the body even on 4xx/5xx. Cloudflare's managed challenge answers 403
-  // and most Sucuri block pages are 403 or 503, so returning early on !ok would
+  // and most host-level block pages are 403 or 503, so returning early on !ok would
   // miss precisely the challenges this exists to catch.
   const hit = detectBlockedResponse(html, finalUrl);
   if (!hit) return { ok: r.ok, status: r.status, html, contentType, finalUrl, blocked: null, via: 'direct' };
@@ -1810,10 +1814,15 @@ app.post('/api/schema/scan', apiGuard, async (req, res) => {
     if (!out.pages.length && anyBlock) {
       return res.status(502).json({
         error: {
-          message: `Blocked by the site's firewall — ${anyBlock.reason}. `
-            + (anyBlock.ip
-              ? `It saw this server as ${anyBlock.ip} and served a robot challenge instead of the page. Whitelist that IP in the site's firewall (Sucuri → Firewall → Access Control), or run the scan from a machine that is not challenged.`
-              : `It served a robot challenge instead of the page. Whitelist this server's IP in the site's firewall, or run the scan from a machine that is not challenged.`),
+          message: `Blocked by the site's bot protection — ${anyBlock.reason}. `
+            + (anyBlock.ip ? `It saw this server as ${anyBlock.ip} and served a robot challenge instead of the page. ` : 'It served a robot challenge instead of the page. ')
+            // Where to go differs by vendor, and sending someone to the wrong
+            // dashboard is worse than saying nothing.
+            + (anyBlock.vendor === 'siteground'
+              ? 'This is SiteGround hosting-level protection, not anything on the site itself — no plugin or security setting will turn it off. Ask SiteGround support to whitelist the IP above, or run the scan from a computer that browses the site normally.'
+              : anyBlock.vendor === 'sucuri'
+              ? "Whitelist the IP above in the site's Sucuri firewall (Firewall → Access Control → Whitelist IP), or run the scan from a computer that browses the site normally."
+              : "Whitelist the IP above wherever the site's bot protection is configured, or run the scan from a computer that browses the site normally."),
           blocked: anyBlock,
           diagnostics: out.diagnostics,
         },

@@ -9079,7 +9079,7 @@ async function schemaScan({ full = false } = {}) {
     // A partial block is the quietly wrong case: some pages read, others replaced
     // by a challenge. Say so, or the missing pages look like pages that don't exist.
     if (data.blocked) {
-      parts.push(`Some pages were blocked by the site's firewall (${data.blocked.reason})`
+      parts.push(`Some pages were blocked by the site's bot protection (${data.blocked.reason})`
         + (data.blocked.ip ? ` — it saw this server as ${data.blocked.ip}. Whitelist that IP to audit the whole site.` : '.'));
     }
 
@@ -9104,7 +9104,7 @@ async function schemaScan({ full = false } = {}) {
       // Server-side count — `failures` is only a 5-item sample, so counting it
       // would report "5 blocked" for a site where 200 pages were blocked.
       parts.push(dg.blockedCount
-        ? `${dg.failed} URL(s) could not be read (${dg.blockedCount} blocked by the firewall).`
+        ? `${dg.failed} URL(s) could not be read (${dg.blockedCount} blocked by bot protection).`
         : `${dg.failed} URL(s) could not be fetched (${(dg.failures || []).map(f => f.status).join(', ')}).`);
     }
     if (data.truncated) parts.push(`Stopped at the time limit with ${data.remaining || 0} still queued — scan again to go deeper.`);
