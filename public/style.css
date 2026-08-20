@@ -190,6 +190,7 @@ body {
   padding: 9px 18px;
   transition: all .18s;
   white-space: nowrap;
+  text-decoration: none;   /* the class is used on <a> as well as <button> */
 }
 .btn-primary {
   background: var(--accent);

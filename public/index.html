@@ -87,9 +87,11 @@
 
         <label class="settings-label" id="extTokenLabel" style="margin-top:18px">Chrome Extension</label>
         <div class="settings-row">
+          <button class="btn btn-secondary" id="extDownloadBtn">Download extension</button>
           <button class="btn btn-secondary" id="extTokenBtn">Generate token</button>
           <span id="extTokenList" class="settings-note" style="margin:0"></span>
         </div>
+        <p class="settings-note">Unzip it, then in Chrome go to <code>chrome://extensions</code> → turn on Developer mode → <strong>Load unpacked</strong> → pick the unzipped folder.</p>
         <div id="extTokenNew" class="hidden" style="margin-top:8px">
           <div class="settings-row">
             <input type="text" id="extTokenValue" class="settings-input" readonly onclick="this.select()">

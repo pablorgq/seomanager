@@ -241,6 +241,38 @@ function bindEvents() {
     copyText(e.currentTarget, document.getElementById('extTokenValue').value);
   });
 
+  /* Fetched rather than a plain <a download>: an anchor writes whatever comes
+     back, so an expired session or a rate-limit would be saved to disk as a
+     90-byte file named extension.zip and look like a corrupt archive. */
+  document.getElementById('extDownloadBtn')?.addEventListener('click', async e => {
+    const btn = e.currentTarget;
+    const note = document.getElementById('extTokenList');
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = 'Building…';
+    try {
+      const r = await fetch('/api/extension.zip');
+      if (!r.ok) {
+        const d = await r.json().catch(() => null);
+        throw new Error(d?.error?.message
+          || (r.status === 401 ? 'Session expired — reload the page and sign in again.' : `Download failed (${r.status}).`));
+      }
+      const name = /filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '')?.[1] || 'llamaseo-extension.zip';
+      const blob = await r.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 5000);
+    } catch (err) {
+      if (note) note.textContent = err.message;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  });
+
   document.getElementById('saveKeyBtn').addEventListener('click', async () => {
     const val = document.getElementById('apiKeyInput').value.trim();
     if (!val) return;

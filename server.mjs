@@ -2,7 +2,8 @@ import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { randomBytes } from 'crypto';
-import { readFileSync, writeFileSync, existsSync, rmSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, rmSync, readdirSync, statSync } from 'fs';
+import { deflateRawSync } from 'zlib';
 import { Storage } from '@google-cloud/storage';
 import multer from 'multer';
 import * as XLSX from 'xlsx';
@@ -607,6 +608,126 @@ app.use((req, res, next) => {
     return res.status(401).json({ error: { message: 'Session expired — please reload the page and sign in again.' } });
   }
   res.redirect('/login');
+});
+
+/* ─────────────────────────────────────────────
+   EXTENSION DOWNLOAD
+
+   Chrome refuses to install a .crx from outside the Web Store, so the artifact
+   that is actually useful is a zip the user unpacks and loads. There is no zip
+   library among the dependencies and Node ships no zip writer, so here is a
+   minimal one — the format is short and the alternative is a dependency carried
+   for eight small text files.
+───────────────────────────────────────────── */
+const CRC_TABLE = (() => {
+  const t = new Int32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[i] = c;
+  }
+  return t;
+})();
+
+function crc32(buf) {
+  let c = -1;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ -1) >>> 0;
+}
+
+/* Store-or-deflate zip of { name → Buffer }. Everything is a small text file,
+   so no zip64 and no directory entries are needed. */
+function makeZip(files) {
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+  // A fixed timestamp keeps the download byte-identical between requests
+  const dosTime = 0, dosDate = 0x2821;   // 2000-01-01
+
+  for (const [name, raw] of files) {
+    const nameBuf = Buffer.from(name, 'utf8');
+    const deflated = deflateRawSync(raw, { level: 9 });
+    // Only claim compression when it actually helped
+    const useDeflate = deflated.length < raw.length;
+    const body = useDeflate ? deflated : raw;
+    const method = useDeflate ? 8 : 0;
+    const crc = crc32(raw);
+
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4); local.writeUInt16LE(0, 6);
+    local.writeUInt16LE(method, 8);
+    local.writeUInt16LE(dosTime, 10); local.writeUInt16LE(dosDate, 12);
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(body.length, 18);
+    local.writeUInt32LE(raw.length, 22);
+    local.writeUInt16LE(nameBuf.length, 26); local.writeUInt16LE(0, 28);
+    chunks.push(local, nameBuf, body);
+
+    const cd = Buffer.alloc(46);
+    cd.writeUInt32LE(0x02014b50, 0);
+    cd.writeUInt16LE(20, 4); cd.writeUInt16LE(20, 6); cd.writeUInt16LE(0, 8);
+    cd.writeUInt16LE(method, 10);
+    cd.writeUInt16LE(dosTime, 12); cd.writeUInt16LE(dosDate, 14);
+    cd.writeUInt32LE(crc, 16);
+    cd.writeUInt32LE(body.length, 20);
+    cd.writeUInt32LE(raw.length, 24);
+    cd.writeUInt16LE(nameBuf.length, 28);
+    cd.writeUInt16LE(0, 30); cd.writeUInt16LE(0, 32); cd.writeUInt16LE(0, 34);
+    cd.writeUInt16LE(0, 36); cd.writeUInt32LE(0, 38);
+    cd.writeUInt32LE(offset, 42);
+    central.push(cd, nameBuf);
+
+    offset += local.length + nameBuf.length + body.length;
+  }
+
+  const cdBuf = Buffer.concat(central);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(0, 4); end.writeUInt16LE(0, 6);
+  end.writeUInt16LE(files.length, 8); end.writeUInt16LE(files.length, 10);
+  end.writeUInt32LE(cdBuf.length, 12);
+  end.writeUInt32LE(offset, 16);
+  end.writeUInt16LE(0, 20);
+
+  return Buffer.concat([...chunks, cdBuf, end]);
+}
+
+/* Everything under the extension directory, recursively, as [zipPath, Buffer].
+
+   Recursive on purpose: the extension is flat today, but the moment someone
+   adds icons/ Chrome would reject the unpacked folder for a missing icon while
+   the download itself looked perfectly fine. Zip paths always use forward
+   slashes regardless of platform. */
+function listExtensionFiles(dir, prefix = '') {
+  const out = [];
+  for (const name of readdirSync(dir).sort()) {
+    if (name.startsWith('.')) continue;              // .DS_Store and friends
+    const full = join(dir, name);
+    const rel  = prefix ? `${prefix}/${name}` : name;
+    const st   = statSync(full);
+    if (st.isDirectory())   out.push(...listExtensionFiles(full, rel));
+    else if (st.isFile())   out.push([rel, readFileSync(full)]);
+  }
+  return out;
+}
+
+app.get('/api/extension.zip', apiGuard, (req, res) => {
+  const dir = join(__dirname, 'extension');
+  try {
+    // Listed from disk rather than hardcoded, so a file added to the extension
+    // ships without anyone remembering to update this.
+    const files = listExtensionFiles(dir);
+    if (!files.length) throw new Error('no files found');
+
+    const zip = makeZip(files);
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="llamaseo-extension-${GIT_COMMIT}.zip"`);
+    res.setHeader('Content-Length', zip.length);
+    res.send(zip);
+  } catch (e) {
+    res.status(500).json({ error: { message: `Could not build the extension download: ${e.message}` } });
+  }
 });
 
 /* The console collector is the extension's collector plus an auto-run call.
