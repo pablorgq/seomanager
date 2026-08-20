@@ -159,7 +159,11 @@ async function init() {
     }
   }
   if (hasServerKey) {
-    document.getElementById('settingsToggle').style.display = 'none';
+    // Hide the key field, not the panel. The panel also holds the extension
+    // pairing token, and hiding the whole gear made that unreachable on any
+    // deployment with a server-side OpenAI key — which is most of them.
+    document.getElementById('apiKeySection')?.classList.add('hidden');
+    document.getElementById('extTokenLabel')?.setAttribute('style', 'margin-top:0');
   } else {
     apiKey = await Store.get('seomanager_api_key');
     if (apiKey) document.getElementById('apiKeyInput').value = apiKey;
