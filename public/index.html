@@ -79,6 +79,20 @@
           <button class="btn btn-ghost" id="clearKeyBtn">Clear</button>
         </div>
         <p class="settings-note">Stored locally in your browser's localStorage — never sent to any server, only directly to OpenAI.</p>
+
+        <label class="settings-label" style="margin-top:18px">Chrome Extension</label>
+        <div class="settings-row">
+          <button class="btn btn-secondary" id="extTokenBtn">Generate token</button>
+          <span id="extTokenList" class="settings-note" style="margin:0"></span>
+        </div>
+        <div id="extTokenNew" class="hidden" style="margin-top:8px">
+          <div class="settings-row">
+            <input type="text" id="extTokenValue" class="settings-input" readonly onclick="this.select()">
+            <button class="btn btn-secondary" id="extTokenCopy">Copy</button>
+          </div>
+          <p class="settings-note" style="color:var(--red)">Copy it now — it is not shown again. Paste it into the extension's options along with this site's URL.</p>
+        </div>
+        <p class="settings-note">Lets the browser extension read a client site and push the result here. Grants access to the extension API only, never the rest of the app.</p>
       </div>
     </div>
   </div>

@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "LLAMASEO Schema Collector",
+  "version": "1.0.0",
+  "description": "Read a client site's structured data in the browser and push it to LLAMASEO. Works on sites whose bot protection blocks the server.",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_title": "Collect schema for LLAMASEO",
+    "default_popup": "popup.html"
+  },
+  "options_page": "options.html"
+}

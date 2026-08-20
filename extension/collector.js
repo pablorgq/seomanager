@@ -12,8 +12,15 @@
    It reads nothing but public page markup, changes nothing, and sends nothing
    anywhere — the report is a file saved to your computer.
    ═══════════════════════════════════════════════════════════════════════════ */
-(async () => {
+/* Defines window.__llamaseoCollectSchema(opts) rather than running on load, so
+   one file serves both consumers: the extension injects it and calls the
+   function, and /schema-report.js serves it with an auto-run call appended for
+   console use. Two entry points, one implementation. */
+window.__llamaseoCollectSchema = async function ({ download = false } = {}) {
   const ORIGIN = location.origin;
+  // Progress goes to the page's console. It cannot be piped to the extension:
+  // a script injected by the `func:` form cannot close over a callback, and the
+  // popup is usually shut by the time a crawl finishes anyway.
   const log = (...a) => console.log('%c[llamaseo]', 'color:#4361EE;font-weight:bold', ...a);
 
   const CONCURRENCY = 2;      // polite: the point is to look like browsing, not scraping
@@ -178,16 +185,22 @@
     failed,
   };
 
-  const name = `schema-report-${location.hostname.replace(/^www\./, '')}.json`;
-  const blob = new Blob([JSON.stringify(report)], { type: 'application/json' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 5000);
+  log(`Done — ${pages.length} page(s) collected${blocked ? `, ${blocked} blocked` : ''}${failed ? `, ${failed} unreachable` : ''}.`);
 
-  log(`Done — ${pages.length} page(s) collected${blocked ? `, ${blocked} blocked` : ''}.`);
-  log(`Saved ${name} (${Math.round(blob.size / 1024)} KB). Upload it in the Schema tab.`);
-  if (blocked) log('%cSome pages were blocked even in the browser — reload the site once and run this again.', 'color:#b45309');
-})();
+  // Console use saves a file to upload; the extension takes the object back and
+  // posts it itself, so there is nothing to download.
+  if (download) {
+    const name = `schema-report-${location.hostname.replace(/^www\./, '')}.json`;
+    const blob = new Blob([JSON.stringify(report)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 5000);
+    log(`Saved ${name} (${Math.round(blob.size / 1024)} KB). Upload it in the Schema tab.`);
+  }
+  if (blocked) log('Some pages were blocked even in the browser — reload the site once and run this again.');
+
+  return report;
+};

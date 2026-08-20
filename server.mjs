@@ -342,6 +342,53 @@ function isValidSession(token) {
 }
 
 /* ─────────────────────────────────────────────
+   EXTENSION PAIRING TOKENS
+
+   The browser extension cannot use the session cookie: sm_auth is
+   SameSite=Lax, so it is not sent on a cross-site request from an extension
+   origin. It authenticates with a bearer token instead.
+
+   These grant access to /api/ext/* and nothing else. That scope is the whole
+   point — a token lives in extension storage on a laptop, so it must never be
+   able to reach the rest of the app.
+───────────────────────────────────────────── */
+const EXTTOKENS_FILE = join(DATA_DIR, '.exttokens.json');
+function loadExtTokens() {
+  if (!existsSync(EXTTOKENS_FILE)) return {};
+  try { return JSON.parse(readFileSync(EXTTOKENS_FILE, 'utf8')); }
+  catch { return {}; }
+}
+function saveExtTokens(data) {
+  try { writeFileSync(EXTTOKENS_FILE, JSON.stringify(data)); }
+  catch (e) { console.warn('[exttokens] Failed to persist:', e.message); }
+}
+
+function createExtToken(label) {
+  const token = randomBytes(32).toString('hex');
+  const all = loadExtTokens();
+  all[token] = { label: String(label || 'Chrome extension').slice(0, 60), createdAt: Date.now(), lastUsedAt: null };
+  saveExtTokens(all);
+  return token;
+}
+
+function extTokenFromRequest(req) {
+  const h = req.headers.authorization || '';
+  const m = h.match(/^Bearer\s+([a-f0-9]{64})$/i);
+  return m ? m[1].toLowerCase() : '';
+}
+
+function isValidExtToken(req) {
+  const token = extTokenFromRequest(req);
+  if (!token) return false;
+  const all = loadExtTokens();
+  if (!all[token]) return false;
+  // Last-used is what makes an unrecognised token in the list identifiable
+  all[token].lastUsedAt = Date.now();
+  saveExtTokens(all);
+  return true;
+}
+
+/* ─────────────────────────────────────────────
    CSRF  (single-use tokens, 15-min TTL)
 ───────────────────────────────────────────── */
 const csrfTokens = new Map();        // token → expiresAt
@@ -512,6 +559,12 @@ button:disabled{opacity:.45;cursor:not-allowed}
 /* ─────────────────────────────────────────────
    MIDDLEWARE STACK
 ───────────────────────────────────────────── */
+/* These two carry whole-site schema payloads and must be mounted BEFORE the
+   general parser: body-parser skips a request that is already parsed, so a
+   larger limit declared on the route itself never runs and the request dies on
+   the 512kb default — after the user has waited out a full crawl. */
+app.use('/api/schemadata',         express.json({ limit: '8mb' }));
+app.use('/api/ext/schema/report',  express.json({ limit: '8mb' }));
 app.use(express.json({ limit: '512kb' }));
 app.use(express.urlencoded({ extended: false, limit: '16kb' }));
 
@@ -547,10 +600,25 @@ app.use((req, res, next) => {
   if (req.path === '/login' || req.path === '/logo.jpg' || req.path === '/xlsx.min.js') return next();
   if (req.path.startsWith('/preview/')) return next();
   if (isValidSession(parseCookies(req).sm_auth)) return next();
+  // The extension's bearer token opens /api/ext/* only. This gate runs before
+  // every route, so without the exemption the handlers would never be reached.
+  if (req.path.startsWith('/api/ext/') && isValidExtToken(req)) return next();
   if (req.path.startsWith('/api/')) {
     return res.status(401).json({ error: { message: 'Session expired — please reload the page and sign in again.' } });
   }
   res.redirect('/login');
+});
+
+/* The console collector is the extension's collector plus an auto-run call.
+   Serving it from the one file means the console path and the extension can
+   never drift apart. */
+app.get('/schema-report.js', (req, res) => {
+  try {
+    const src = readFileSync(join(__dirname, 'extension', 'collector.js'), 'utf8');
+    res.type('application/javascript').send(`${src}\n__llamaseoCollectSchema({ download: true });\n`);
+  } catch (e) {
+    res.status(500).type('text/plain').send(`Could not read the collector: ${e.message}`);
+  }
 });
 
 /* Static files served only to authenticated users */
@@ -715,7 +783,7 @@ app.get('/api/schemadata', apiGuard, (req, res) => res.json(loadSchemaData()));
 /* A 100-page crawl plus 60 generated @graph blocks runs well past the 512kb
    global JSON limit, and a 413 here silently discards a multi-minute crawl and
    a paid AI run — so this one route gets a larger body. */
-app.post('/api/schemadata', express.json({ limit: '8mb' }), apiGuard, (req, res) => {
+app.post('/api/schemadata', apiGuard, (req, res) => {
   const body = req.body;
   if (!body || typeof body !== 'object') return res.status(400).json({ error: { message: 'Invalid body.' } });
   saveSchemaData({ ...loadSchemaData(), ...body });
@@ -1897,18 +1965,11 @@ function schemaUploadReport(req, res, next) {
   });
 }
 
-app.post('/api/schema/import', apiGuard, schemaUploadReport, async (req, res) => {
-  let report;
-  try {
-    const raw = req.file ? req.file.buffer.toString('utf8') : req.body?.report;
-    report = typeof raw === 'string' ? JSON.parse(raw) : raw;
-  } catch (e) {
-    return res.status(400).json({ error: { message: `Could not read that file as JSON — ${e.message}` } });
-  }
-  if (!report || !Array.isArray(report.pages)) {
-    return res.status(400).json({ error: { message: 'That does not look like a schema report — expected a JSON file with a "pages" array. Re-run the collector script and upload the file it saves.' } });
-  }
-
+/* Turn a collected report into the same shape a live scan returns. Shared by the
+   file-upload route and the extension push, so both produce identical results —
+   and both go through parsePageSchema, which is what keeps a collected report
+   equivalent to a scan rather than a second opinion about it. */
+function schemaReportToScan(report) {
   const pages = [];
   const debugPages = [];
   let skipped = 0;              // malformed entries — counted, never silently dropped
@@ -1922,15 +1983,11 @@ app.post('/api/schema/import', apiGuard, schemaUploadReport, async (req, res) =>
     });
   }
 
-  if (!pages.length) {
-    return res.status(400).json({ error: { message: 'The report contained no readable pages.' } });
-  }
-
-  res.json({
+  return {
     pages, debug: debugPages,
     source: 'imported report',
-    // The domain the collector actually ran on, so the client can catch a report
-    // being imported against the wrong record
+    // The domain the collector actually ran on, so the caller can catch a report
+    // being filed against the wrong record
     reportDomain: report.domain || '',
     truncated: report.pages.length > 500,
     remaining: Math.max(0, report.pages.length - 500),
@@ -1944,7 +2001,124 @@ app.post('/api/schema/import', apiGuard, schemaUploadReport, async (req, res) =>
       importFailed:  Number(report.failed)  || 0,
       generatedAt: report.generatedAt || null,
     },
+  };
+}
+
+/* Token management, for the signed-in app only (session cookie, not a token —
+   a token must never be able to mint another). Full values are returned only at
+   creation; the list shows a prefix, which is enough to tell them apart. */
+app.get('/api/exttokens', apiGuard, (req, res) => {
+  const all = loadExtTokens();
+  res.json({
+    tokens: Object.entries(all).map(([t, meta]) => ({
+      prefix: t.slice(0, 8), label: meta.label, createdAt: meta.createdAt, lastUsedAt: meta.lastUsedAt,
+    })),
   });
+});
+
+app.post('/api/exttokens', apiGuard, (req, res) => {
+  res.json({ token: createExtToken(req.body?.label) });
+});
+
+app.delete('/api/exttokens/:prefix', apiGuard, (req, res) => {
+  const prefix = String(req.params.prefix || '');
+  if (!/^[a-f0-9]{8}$/i.test(prefix)) return res.status(400).json({ error: { message: 'Invalid token id.' } });
+  const all = loadExtTokens();
+  let removed = 0;
+  for (const t of Object.keys(all)) if (t.startsWith(prefix.toLowerCase())) { delete all[t]; removed++; }
+  saveExtTokens(all);
+  res.json({ ok: true, removed });
+});
+
+/* ─────────────────────────────────────────────
+   EXTENSION API  (bearer token, see isValidExtToken)
+───────────────────────────────────────────── */
+
+/* Name, id and site URL only.
+
+   .rankdata.json holds each client's WordPress application password next to its
+   username, and /api/rankdata hands back the whole object. The fields are
+   listed explicitly rather than deleted from a copy, so a field added to the
+   client record later cannot leak here by default. */
+app.get('/api/ext/clients', (req, res) => {
+  if (isApiRateLimited(extTokenFromRequest(req))) {
+    return res.status(429).json({ error: { message: 'Rate limit exceeded — wait a moment and try again.' } });
+  }
+  const { rtData } = loadRankData();
+  const clients = (rtData?.clients || []).map(c => ({
+    id:    String(c.id || ''),
+    name:  String(c.name || ''),
+    wpUrl: String(c.wpUrl || ''),
+  }));
+  res.json({ clients });
+});
+
+/* Receive a report collected by the extension and file it against a client.
+   Writes straight to the schema store, so the app shows it without the user
+   handling a file at all. */
+app.post('/api/ext/schema/report', (req, res) => {
+  if (isApiRateLimited(extTokenFromRequest(req))) {
+    return res.status(429).json({ error: { message: 'Rate limit exceeded — wait a moment and try again.' } });
+  }
+  const { clientId, report } = req.body || {};
+  if (!clientId || !report || !Array.isArray(report.pages)) {
+    return res.status(400).json({ error: { message: 'clientId and a report with a pages array are required.' } });
+  }
+
+  // Never invent a client — a typo would otherwise create a record nothing owns
+  const { rtData } = loadRankData();
+  const client = (rtData?.clients || []).find(c => String(c.id) === String(clientId));
+  if (!client) return res.status(404).json({ error: { message: 'That client no longer exists in LLAMASEO.' } });
+
+  const out = schemaReportToScan(report);
+  if (!out.pages.length) {
+    return res.status(400).json({ error: { message: 'The report contained no readable pages.' } });
+  }
+
+  // Carry recommendations forward for URLs that still exist, exactly as the
+  // upload path does — a re-collect should not bin paid AI output.
+  const store = loadSchemaData();
+  const prev  = store[clientId] || {};
+  const still = new Set(out.pages.map(p => p.url));
+  const recs  = {};
+  for (const [url, rec] of Object.entries(prev.recs || {})) if (still.has(url)) recs[url] = rec;
+
+  store[clientId] = {
+    domain:    report.domain || prev.domain || '',
+    scannedAt: Date.now(),
+    source:    'extension',
+    // The store keeps no raw blocks; they are only needed to derive types
+    pages:     out.pages.map(({ blocks, ...rest }) => rest),
+    recs,
+  };
+  saveSchemaData(store);
+
+  res.json({
+    ok: true,
+    client: client.name,
+    pages: out.pages.length,
+    skipped: out.diagnostics.skipped,
+    blocked: out.diagnostics.importBlocked,
+  });
+});
+
+app.post('/api/schema/import', apiGuard, schemaUploadReport, async (req, res) => {
+  let report;
+  try {
+    const raw = req.file ? req.file.buffer.toString('utf8') : req.body?.report;
+    report = typeof raw === 'string' ? JSON.parse(raw) : raw;
+  } catch (e) {
+    return res.status(400).json({ error: { message: `Could not read that file as JSON — ${e.message}` } });
+  }
+  if (!report || !Array.isArray(report.pages)) {
+    return res.status(400).json({ error: { message: 'That does not look like a schema report — expected a JSON file with a "pages" array. Re-run the collector script and upload the file it saves.' } });
+  }
+
+  const out = schemaReportToScan(report);
+  if (!out.pages.length) {
+    return res.status(400).json({ error: { message: 'The report contained no readable pages.' } });
+  }
+  res.json(out);
 });
 
 /* Say what was blocked, by what, and what to do about it — where "what to do"

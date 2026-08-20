@@ -6,3 +6,4 @@ node_modules/
 .rankdata.json
 .weeklydata.json
 .schemadata.json
+.exttokens.json

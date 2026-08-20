@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>LLAMASEO Schema Collector — Options</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    max-width: 520px; margin: 40px auto; padding: 0 20px;
+    font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: Canvas; color: CanvasText;
+  }
+  h1 { font-size: 17px; margin: 0 0 4px; }
+  p.sub { margin: 0 0 24px; opacity: .7; font-size: 13px; }
+  label { display: block; font-weight: 600; font-size: 12px; margin: 16px 0 5px; }
+  input {
+    width: 100%; box-sizing: border-box; font: inherit; padding: 8px 10px;
+    border-radius: 6px; border: 1px solid rgba(128,128,128,.45);
+    background: Canvas; color: CanvasText;
+  }
+  .hint { font-size: 11.5px; opacity: .65; margin-top: 4px; }
+  .row { display: flex; gap: 8px; margin-top: 20px; }
+  button { font: inherit; font-weight: 600; padding: 8px 16px; border-radius: 6px; cursor: pointer;
+           border: 1px solid rgba(128,128,128,.45); background: Canvas; color: CanvasText; }
+  button.primary { background: #4361EE; border-color: #4361EE; color: #fff; }
+  #status { margin-top: 14px; font-size: 12.5px; white-space: pre-wrap; }
+  .err { color: #d33; } .ok { color: #197a4b; }
+</style>
+</head>
+<body>
+  <h1>Connect to LLAMASEO</h1>
+  <p class="sub">The extension reads a client site in your browser and sends the result to your LLAMASEO install.</p>
+
+  <label for="appUrl">LLAMASEO URL</label>
+  <input id="appUrl" type="url" placeholder="https://seomanager.example.com" autocomplete="off">
+  <div class="hint">The address you use to open LLAMASEO, with no trailing path.</div>
+
+  <label for="token">Pairing token</label>
+  <input id="token" type="password" placeholder="64-character token" autocomplete="off" spellcheck="false">
+  <div class="hint">LLAMASEO → the gear icon in the header → Chrome extension → Generate token.</div>
+
+  <div class="row">
+    <button class="primary" id="save">Save &amp; test</button>
+    <button id="clear">Clear</button>
+  </div>
+  <div id="status"></div>
+
+  <script src="options.js"></script>
+</body>
+</html>

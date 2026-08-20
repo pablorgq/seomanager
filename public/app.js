@@ -118,7 +118,18 @@ function switchTab(tab, { pushState = true } = {}) {
   if (tab === 'weekly') weeklyRender();
   if (tab === 'indexy') { indexyRender(); indexySyncClient(); }
   if (tab === 'ahrefs') ahrefsRender();
-  if (tab === 'schema') { schemaSyncClient(); schemaRender(); }
+  // Re-read the store on entry: the extension writes reports server-side, so a
+  // push that happened while this page was open is otherwise invisible until a
+  // full reload.
+  // Re-read the store on entry: the extension writes reports server-side, so a
+  // push that happened while this page was open is otherwise invisible until a
+  // full reload. Never mid-run — reloading swaps the object a scan or a
+  // generation is holding, and its results would be written into an orphan.
+  if (tab === 'schema') {
+    schemaSyncClient();
+    schemaRender();
+    if (!schemaState.busy) schemaLoadStore().then(() => { if (!schemaState.busy) schemaRender(); });
+  }
   if (tab === 'setup') setupRender();
   if (tab === 'artimage') aigRender();
   if (tab === 'artcontent') acgRender();
@@ -204,6 +215,28 @@ function bindEvents() {
   });
 
   // Save API key
+  /* ── Chrome extension pairing tokens ── */
+  extTokenRefresh();   // eslint-disable-line no-use-before-define
+  document.getElementById('extTokenBtn')?.addEventListener('click', async () => {
+    try {
+      const r = await fetch('/api/exttokens', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: 'Chrome extension' }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d?.error?.message || `Failed (${r.status})`);
+      document.getElementById('extTokenValue').value = d.token;
+      document.getElementById('extTokenNew').classList.remove('hidden');
+      extTokenRefresh();
+    } catch (e) {
+      document.getElementById('extTokenList').textContent = e.message;
+    }
+  });
+  document.getElementById('extTokenCopy')?.addEventListener('click', e => {
+    copyText(e.currentTarget, document.getElementById('extTokenValue').value);
+  });
+
   document.getElementById('saveKeyBtn').addEventListener('click', async () => {
     const val = document.getElementById('apiKeyInput').value.trim();
     if (!val) return;
@@ -2770,6 +2803,32 @@ function rtUid() { return '_' + Math.random().toString(36).slice(2, 10); }
 
 function rtActiveClient() {
   return rtData?.clients?.find(c => c.id === rtData.activeClientId) || null;
+}
+
+/* Existing pairing tokens, shown by prefix with a revoke control. The full value
+   is only ever returned at creation, so the prefix is what identifies one. */
+async function extTokenRefresh() {
+  const el = document.getElementById('extTokenList');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/exttokens');
+    if (!r.ok) throw new Error(`Failed (${r.status})`);
+    const { tokens = [] } = await r.json();
+    if (!tokens.length) { el.textContent = 'No tokens yet.'; return; }
+    el.innerHTML = tokens.map(t => {
+      const used = t.lastUsedAt ? `last used ${new Date(t.lastUsedAt).toLocaleDateString()}` : 'never used';
+      return `<span style="margin-right:10px">${escHtml(t.prefix)}… (${escHtml(used)})
+        <a href="#" class="ext-token-revoke" data-prefix="${escHtml(t.prefix)}" style="color:var(--red)">revoke</a></span>`;
+    }).join('');
+    el.querySelectorAll('.ext-token-revoke').forEach(a => {
+      a.addEventListener('click', async ev => {
+        ev.preventDefault();
+        if (!confirm('Revoke this token? Any extension using it stops working immediately.')) return;
+        await fetch(`/api/exttokens/${a.dataset.prefix}`, { method: 'DELETE' });
+        extTokenRefresh();
+      });
+    });
+  } catch (e) { el.textContent = e.message; }
 }
 
 function populateGlobalClientSelect() {
@@ -8973,6 +9032,12 @@ async function schemaLoadStore() {
     const r = await fetch('/api/schemadata');
     if (r.ok) schemaStore = await r.json() || {};
   } catch { schemaStore = {}; }
+  // The extension writes pages server-side and cannot run schemaPageType, which
+  // lives here. Backfill on load so every path ends up with a page type — an
+  // "unknown" reaches the generator prompt and degrades a paid call.
+  for (const entry of Object.values(schemaStore)) {
+    for (const p of entry?.pages || []) if (!p.pageType) p.pageType = schemaPageType(p);
+  }
 }
 
 /* Takes the client id explicitly — a scan runs for minutes and the user may
@@ -9156,22 +9221,27 @@ async function schemaGenerate() {
     const data = await r.json();
     if (!r.ok) throw new Error(data?.error?.message || `Generation failed (${r.status})`);
 
+    // Re-resolve the store entry rather than trusting the reference captured
+    // before a multi-minute call: the store object can be replaced in between,
+    // and writing into the old one would report success while saving nothing.
+    const entry = schemaStore[id] || cur;
+
     // Match the model's echoed url back to the page it came from, so a
     // normalised or reformatted url still lands on the right record.
-    const byKey = new Map(cur.pages.map(p => [schemaUrlKey(p.url), p.url]));
-    cur.recs = cur.recs || {};
+    const byKey = new Map(entry.pages.map(p => [schemaUrlKey(p.url), p.url]));
+    entry.recs = entry.recs || {};
     let orphaned = 0;
     for (const rec of data.recommendations || []) {
       if (!rec?.url) continue;
       const target = byKey.get(schemaUrlKey(rec.url));
-      if (target) cur.recs[target] = { ...rec, url: target };
+      if (target) entry.recs[target] = { ...rec, url: target };
       else orphaned++;
     }
-    cur.generatedAt = Date.now();
+    entry.generatedAt = Date.now();
     const saved = await schemaSaveStore(id);
 
-    const ok     = cur.pages.filter(p => cur.recs[p.url]?.jsonld).length;
-    const failed = cur.pages.filter(p => cur.recs[p.url]?.error).length;
+    const ok     = entry.pages.filter(p => entry.recs[p.url]?.jsonld).length;
+    const failed = entry.pages.filter(p => entry.recs[p.url]?.error).length;
     const parts  = [`✓ JSON-LD ready for ${ok} page(s).`];
     if (failed)         parts.push(`${failed} failed.`);
     if (data.skipped)   parts.push(`${data.skipped} page(s) beyond the 60-page limit were skipped.`);

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    width: 320px; margin: 0; padding: 14px;
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: Canvas; color: CanvasText;
+  }
+  h1 { font-size: 13px; font-weight: 600; margin: 0 0 2px; }
+  .host { font-size: 11px; opacity: .65; margin-bottom: 12px; word-break: break-all; }
+  label { display: block; font-size: 11px; font-weight: 600; opacity: .75; margin-bottom: 4px; }
+  select, button {
+    width: 100%; box-sizing: border-box; font: inherit;
+    padding: 7px 9px; border-radius: 6px; border: 1px solid rgba(128,128,128,.45);
+    background: Canvas; color: CanvasText;
+  }
+  select { margin-bottom: 10px; cursor: pointer; }
+  button { cursor: pointer; font-weight: 600; }
+  button.primary { background: #4361EE; border-color: #4361EE; color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  #status { margin-top: 10px; font-size: 11.5px; line-height: 1.45; white-space: pre-wrap; }
+  .err { color: #d33; }
+  .ok  { color: #197a4b; }
+  .muted { opacity: .7; }
+  a { color: #4361EE; }
+</style>
+</head>
+<body>
+  <h1>Collect schema</h1>
+  <div class="host" id="host">…</div>
+
+  <label for="client">Send to client</label>
+  <select id="client"><option>Loading…</option></select>
+
+  <button class="primary" id="go" disabled>Collect this site</button>
+  <div id="status" class="muted">Reads every page in the sitemap. Large sites take a minute.</div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
