@@ -7,3 +7,4 @@ node_modules/
 .weeklydata.json
 .schemadata.json
 .exttokens.json
+llamaseo-extension-*.zip
