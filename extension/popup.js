@@ -82,21 +82,52 @@ function busy(on) {
   if (!match) opts.unshift('<option value="" selected>— choose a client —</option>');
   $('client').innerHTML = opts.join('');
 
-  const usable = /^https?:/i.test(tab?.url || '');
-  busy(false);
-  $('go').disabled = !usable || !$('client').value;
-  $('client').onchange = () => { $('go').disabled = !usable || !$('client').value; };
+  const { appUrl = '' } = await chrome.storage.local.get('appUrl');
+  const appHost = bareHost(appUrl);
 
-  if (!usable)        setStatus('Open the client\'s website in this tab first.', 'err');
-  else if (pending)   { busy(true); setStatus('A collection is already running in this tab. Leave it open.', 'muted'); }
-  else if (!match)    setStatus(`No client matches ${tabHost} — pick the right one before sending.`, 'muted');
-  else if (lastResult && Date.now() - lastResult.at < 5 * 60 * 1000) showResult(lastResult);
+  /* What the collector reads is whatever tab is open, not whatever client is
+     selected in the dropdown — so the tab is the thing that has to be checked.
+     Without this, standing on LLAMASEO and clicking Collect audits LLAMASEO and
+     files its own pages under a client. */
+  function tabCheck() {
+    if (!/^https?:/i.test(tab?.url || '')) return { ok: false, msg: 'Open the client\'s website in this tab first.' };
+    if (appHost && tabHost === appHost) {
+      return { ok: false, msg: 'This tab is LLAMASEO itself. Open the client\'s website in a tab and click Collect from there.' };
+    }
+    const id = $('client').value;
+    if (!id) return { ok: false, msg: 'Choose which client this is for.' };
+    const chosen = clients.find(c => c.id === id);
+    const want = bareHost(chosen?.wpUrl || '');
+    if (want && want !== tabHost) {
+      return { ok: false, msg: `This tab is ${tabHost}, but ${chosen.name} is ${want}. Open that client's site, or pick the client this tab belongs to.` };
+    }
+    if (!want) return { ok: true, msg: `${chosen.name} has no site URL set, so this cannot be checked — make sure ${tabHost} is theirs.`, tone: 'muted' };
+    return { ok: true, msg: '' };
+  }
+
+  function applyCheck() {
+    const c = tabCheck();
+    $('go').disabled = !c.ok;
+    if (c.msg) setStatus(c.msg, c.ok ? (c.tone || 'muted') : 'err');
+    return c;
+  }
+
+  busy(false);
+  const first = applyCheck();
+  $('client').onchange = applyCheck;
+
+  if (pending) { busy(true); setStatus('A collection is already running in this tab. Leave it open.', 'muted'); }
+  else if (first.ok && !first.msg && lastResult && Date.now() - lastResult.at < 5 * 60 * 1000) showResult(lastResult);
 
   chrome.runtime.onMessage.addListener(msg => {
     if (msg?.type === 'finished') { busy(false); showResult(msg.result); }
   });
 
   $('go').onclick = async () => {
+    // Re-check at click time: the tab can navigate while the popup sits open
+    const c = tabCheck();
+    if (!c.ok) { setStatus(c.msg, 'err'); return; }
+
     busy(true);
     setStatus('Reading the sitemap and every page. Keep this tab open — you can close this popup.', 'muted');
     const started = await send({ type: 'collect', clientId: $('client').value });

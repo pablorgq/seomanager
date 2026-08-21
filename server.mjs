@@ -2191,6 +2191,20 @@ app.post('/api/ext/schema/report', (req, res) => {
   const client = (rtData?.clients || []).find(c => String(c.id) === String(clientId));
   if (!client) return res.status(404).json({ error: { message: 'That client no longer exists in LLAMASEO.' } });
 
+  /* A report is only about the site it was collected on. The extension reads
+     whichever tab is open, so a report from the wrong tab — LLAMASEO's own
+     pages, most easily — must not be filed against a client and overwrite a
+     real audit. The popup checks this too; this is the backstop. */
+  const want = bareHost(client.wpUrl || '');
+  const got  = bareHost(report.domain || '');
+  if (want && got && want !== got) {
+    return res.status(409).json({
+      error: {
+        message: `That report was collected on ${got}, but ${client.name} is ${want}. Open the client's site in a tab and collect from there.`,
+      },
+    });
+  }
+
   const out = schemaReportToScan(report);
   if (!out.pages.length) {
     return res.status(400).json({ error: { message: 'The report contained no readable pages.' } });
