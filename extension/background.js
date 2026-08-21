@@ -33,6 +33,10 @@ async function api(path, init = {}) {
   }
 
   if (r.status === 401) throw new Error('LLAMASEO rejected the pairing token. Generate a new one in Settings and paste it into options.');
+  // The reachable-but-wrong-site case. Pointing this at the client's website
+  // rather than the LLAMASEO install is the obvious mistake to make, and a bare
+  // "returned 404" gives no hint which of the two fields is wrong.
+  if (r.status === 404) throw new Error(`${appUrl} answered, but it is not a LLAMASEO install — there is no extension API there. This field wants the address you open LLAMASEO at, not the client's website.`);
   if (r.status === 413) throw new Error('That site produced a report too large to send. Collect fewer pages.');
   if (r.status === 429) throw new Error('LLAMASEO is rate limiting — wait a moment and try again.');
 
