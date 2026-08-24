@@ -884,6 +884,33 @@ app.post('/api/auditdata', apiGuard, (req, res) => {
 });
 
 /* ─────────────────────────────────────────────
+   WEEK PLAN  (one record per ISO week)
+
+   Keyed by week — 2026-W35 — rather than being a single current-plan blob, so
+   generating this Monday cannot overwrite what last week actually said. The
+   plan is a record of what was planned, and that is only useful if it survives.
+───────────────────────────────────────────── */
+const WEEKPLAN_FILE = join(DATA_DIR, '.weekplan.json');
+function loadWeekPlans() {
+  if (!existsSync(WEEKPLAN_FILE)) return {};
+  try { return JSON.parse(readFileSync(WEEKPLAN_FILE, 'utf8')); }
+  catch { return {}; }
+}
+function saveWeekPlans(data) {
+  try { writeFileSync(WEEKPLAN_FILE, JSON.stringify(data)); }
+  catch (e) { console.warn('[weekplan] Failed to persist:', e.message); }
+}
+
+app.get('/api/weekplandata', apiGuard, (req, res) => res.json(loadWeekPlans()));
+
+app.post('/api/weekplandata', apiGuard, (req, res) => {
+  const body = req.body;
+  if (!body || typeof body !== 'object') return res.status(400).json({ error: { message: 'Invalid body.' } });
+  saveWeekPlans({ ...loadWeekPlans(), ...body });
+  res.json({ ok: true });
+});
+
+/* ─────────────────────────────────────────────
    SCHEMA DATA  (per-client crawl result + generated JSON-LD)
    Same full-replace-by-key shape as /api/auditdata. A crawl plus an AI pass
    takes minutes, so the result has to outlive a tab switch.
@@ -2391,6 +2418,120 @@ async function recommendSchema(pages, clientName, wpUrl) {
   }
   return { recommendations: out, stopped };
 }
+
+/* ─────────────────────────────────────────────
+   WEEK PLAN SEQUENCING
+
+   The candidates are computed from the app's own data before they get here.
+   This call only decides the order and the time-boxing — an invented task looks
+   entirely plausible on a plan, which is exactly why the model is never allowed
+   to add one.
+───────────────────────────────────────────── */
+const WEEKPLAN_SYSTEM_PROMPT = `You are an SEO account manager laying out one week of work.
+
+You are given, per weekday, the clients scheduled that day and a list of candidate tasks for each. Every candidate has an id, a category, a label, the evidence that justifies it, and a rough minute estimate.
+
+Your job is ORDER and TIME-BOXING ONLY.
+
+HARD RULES:
+- Use ONLY the candidate ids you were given. Never invent a task, never invent an id, never merge two candidates into one id.
+- You may drop a candidate that does not fit the day's budget. You may not add one.
+- Keep each client's blocks together and contiguous within its day. Switching between clients mid-day wastes context.
+- Respect the day's minute budget. Going a little under is fine; going over is not.
+
+ORDERING WITHIN A CLIENT:
+- Work that unblocks other work goes first (a page that does not exist yet before optimising it).
+- Then anything the evidence marks as a regression or a drop — those are losing traffic now.
+- Then main-keyword work ahead of long-tail.
+- Group same-category work together; batching schema fixes or content edits is faster than alternating.
+- Put shallow, low-focus work at the end of the day.
+
+You may adjust a candidate's minutes when the evidence justifies it — say so in the note if you do.
+
+Return ONLY a valid JSON array, no prose and no markdown fences. One object per day that has work:
+{"day":"mon","blocks":[{"candidateId":"<exact id from input>","minutes":45,"order":1,"note":"<short reason this sits here, or empty>"}]}`;
+
+async function sequenceWeekPlan(days, hoursPerClient) {
+  const desc = days.map(d => {
+    const clients = d.clients.map(c => {
+      const items = c.candidates.map(x =>
+        `    - id=${x.id} | ${x.category} | ${x.label} | why: ${x.why} | est ${x.minutes}min | priority ${x.priority}`
+      ).join('\n');
+      return `  CLIENT ${c.clientName} (budget ${Math.round(hoursPerClient * 60)}min)\n${items}`;
+    }).join('\n');
+    return `DAY ${d.day} — budget ${Math.round(d.clients.length * hoursPerClient * 60)}min total\n${clients}`;
+  }).join('\n\n');
+
+  const up = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      // Sequencing a week is judgement, the same class of task as building a
+      // cross-referenced @graph — not the mechanical work Haiku handles.
+      model: 'claude-sonnet-5',
+      max_tokens: 16000,
+      system: WEEKPLAN_SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: `Lay out this week.\n\n${desc}` }],
+    }),
+  });
+  const data = await up.json();
+  if (!up.ok || data?.error) throw new Error(data?.error?.message || `Anthropic returned ${up.status}`);
+
+  let text = data.content?.find(b => b.type === 'text')?.text || '[]';
+  text = text.replace(/^\s*```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+  const parsed = JSON.parse(text);
+  if (!Array.isArray(parsed)) throw new Error('Model did not return an array');
+  return parsed;
+}
+
+app.post('/api/weekplan/sequence', apiGuard, async (req, res) => {
+  const { days, hoursPerClient = 4.5 } = req.body || {};
+  if (!Array.isArray(days) || !days.length) {
+    return res.status(400).json({ error: { message: 'days array required.' } });
+  }
+
+  // Every id the model is allowed to mention. Built defensively: a malformed
+  // body must be a 400, not an unhandled rejection that takes the server down.
+  const known = new Map();
+  try {
+    for (const d of days) {
+      for (const c of (d?.clients || [])) {
+        for (const x of (c?.candidates || [])) {
+          if (x?.id) known.set(String(x.id), { minutes: parseInt(x.minutes) || 30 });
+        }
+      }
+    }
+  } catch {
+    return res.status(400).json({ error: { message: 'Malformed days payload.' } });
+  }
+  if (!known.size) return res.status(400).json({ error: { message: 'No candidate tasks to sequence.' } });
+
+  if (!ANTHROPIC_KEY) {
+    // A missing key costs the sequencing, not the plan — the caller falls back
+    // to its own deterministic ordering.
+    return res.json({ sequenced: false, reason: 'ANTHROPIC_API_KEY not configured — ordered by priority instead.', days: [] });
+  }
+
+  try {
+    const out = await sequenceWeekPlan(days, Number(hoursPerClient) || 4.5);
+    let dropped = 0;
+    const clean = out.map(d => ({
+      day: String(d.day || '').toLowerCase(),
+      blocks: (Array.isArray(d.blocks) ? d.blocks : [])
+        // The anti-invention rule: an id that was not supplied does not exist
+        .filter(b => { if (known.has(b?.candidateId)) return true; dropped++; return false; })
+        .map(b => ({
+          candidateId: b.candidateId,
+          minutes: Math.max(5, Math.min(480, parseInt(b.minutes) || known.get(b.candidateId).minutes)),
+          order: parseInt(b.order) || 0,
+          note: String(b.note || '').slice(0, 200),
+        })),
+    })).filter(d => d.blocks.length);
+    res.json({ sequenced: true, days: clean, dropped });
+  } catch (e) {
+    res.json({ sequenced: false, reason: e.message, days: [] });
+  }
+});
 
 app.post('/api/schema/recommend', apiGuard, async (req, res) => {
   if (!ANTHROPIC_KEY) return res.status(503).json({ error: { message: 'ANTHROPIC_API_KEY not configured.' } });

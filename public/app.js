@@ -100,6 +100,7 @@ const TAB_ROUTES = {
   ahrefs:    '/ahrefs',
   schema:    '/schema',
   setup:     '/client-setup',
+  weekplan:  '/week-plan',
   artimage:  '/article-image',
   artcontent:'/article-content',
 };
@@ -131,6 +132,7 @@ function switchTab(tab, { pushState = true } = {}) {
     if (!schemaState.busy) schemaLoadStore().then(() => { if (!schemaState.busy) schemaRender(); });
   }
   if (tab === 'setup') setupRender();
+  if (tab === 'weekplan') weekplanRender();
   if (tab === 'artimage') aigRender();
   if (tab === 'artcontent') acgRender();
   if (pushState) {
@@ -172,6 +174,11 @@ async function init() {
   coraInit();
   setupInit();
   await weeklyLoadFromServer();
+  // Same deal as the schema store: a deep link to /week-plan renders before this
+  // resolves, so re-render once the saved plans are actually in hand.
+  weekplanLoad().then(() => {
+    if (document.querySelector('.tab-btn.active')?.dataset.tab === 'weekplan') weekplanRender();
+  });
   // Same deal as auditData below — a deep link to /schema renders before this
   // resolves, so re-render once the saved crawl is actually in hand.
   schemaLoadStore().then(() => {
@@ -8955,6 +8962,432 @@ function setupInit() {
   });
   document.getElementById('setup-cancelBtn')?.addEventListener('click', setupCancelAdd);
 }
+
+/* ═══════════════════════════════════════════════
+   WEEK PLAN
+   Monday's button: read the day→client schedule the Weekly tab already owns,
+   work out what each client actually needs from the data the app already has,
+   and lay it out across the week sized to a real working day.
+════════════════════════════════════════════════ */
+
+let weekPlans = {};                 // isoWeek → plan record
+let weekplanState = { busy: false, message: null, hoursPerClient: 4.5 };
+
+/* ISO week key, e.g. 2026-W35. Weeks are the unit here, so the plan for one
+   Monday can never overwrite what the previous week actually said. */
+function isoWeekKey(d = new Date()) {
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  // ISO weeks run Mon–Sun and belong to the year containing their Thursday
+  const day = t.getUTCDay() || 7;
+  t.setUTCDate(t.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+  const week = Math.ceil(((t - yearStart) / 86400000 + 1) / 7);
+  return `${t.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+}
+
+/* The Monday of the week a date falls in — used only for display. */
+function weekMonday(d = new Date()) {
+  const x = new Date(d);
+  const day = x.getDay() || 7;
+  x.setDate(x.getDate() - day + 1);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+function weekplanLabel(key) {
+  const mon = weekMonday(new Date());
+  return isoWeekKey() === key
+    ? `Week of ${mon.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}`
+    : key;
+}
+
+const WEEKPLAN_CAT_LABEL = {
+  supportPages: 'Support Pages',
+  schemaOpt:    'Schema',
+  contentOpt:   'Content',
+  offPage:      'Off-Page',
+  review:       'Review',
+};
+
+/* ── candidates ──
+   Everything outstanding for one client, each carrying the fact that justifies
+   it. `why` is not decoration: it is what makes the plan reviewable, and what
+   the sequencing model is told to reason from. */
+function weekplanCandidates(client) {
+  const out = [];
+  const push = (c) => out.push({ id: `${client.id}:${out.length}`, clientId: client.id, ...c });
+  const kws = client.keywords || [];
+
+  // 1. Rank Tracker task flags — 0 and 1 are outstanding, 2 is done
+  const FLAG_TO_CAT = { spc: 'supportPages', schema: 'schemaOpt', co: 'contentOpt', offpage: 'offPage' };
+  // Page-scoped categories are keyed by URL in Weekly, so two keywords pointing
+  // at one page are one task there. Emitting both would put twin blocks on the
+  // plan and leave one stranded when the other is ticked.
+  const seenPageTask = new Set();
+  for (const kw of kws) {
+    if (!kw.keyword) continue;
+    for (const f of TASK_FIELDS) {
+      const val = kw[f.key] || 0;
+      if (val >= 2) continue;
+      const cat = FLAG_TO_CAT[f.key];
+      const scope = WEEKLY_CATEGORIES.find(c => c.key === cat)?.scope;
+
+      // Weekly only tracks mk-scoped categories against main keywords, so a
+      // block built from a long-tail row would tick a row Weekly never shows.
+      if (scope === 'mk' && !kw.mainKeyword) continue;
+
+      const itemKey = scope === 'page' ? (kw.targetUrl || kw.url || '').trim() : kw.id;
+      if (scope === 'page') {
+        if (!itemKey) continue;
+        const dedupe = `${cat}::${itemKey}`;
+        if (seenPageTask.has(dedupe)) continue;
+        seenPageTask.add(dedupe);
+      }
+      // Anything already ticked done in Weekly this week is not work again
+      if (itemKey && weeklyGetStatus(client.id, cat, itemKey) === 'done') continue;
+
+      const started = val === 1;
+      let priority = kw.mainKeyword ? 6 : 3;
+      if (started) priority += 1;                       // finishing beats starting
+      let why = started ? 'in progress' : 'not started';
+      if (kw.rank && kw.prevRank && kw.rank > kw.prevRank) {
+        priority += 4;                                   // losing position right now
+        why = `fell ${kw.prevRank} → ${kw.rank}`;
+      } else if (kw.rank) {
+        why = `${why}, currently #${kw.rank}`;
+      }
+      if (kw.volume) why += ` · ${kw.volume}/mo`;
+
+      push({
+        category: cat,
+        label: `${f.title} — ${kw.keyword}`,
+        why, itemKey, priority,
+        minutes: cat === 'supportPages' ? 90 : cat === 'contentOpt' ? 60 : 45,
+        kwId: kw.id,
+      });
+    }
+  }
+
+  // 2. Schema gaps, from the same evaluation the Schema tab renders
+  const store = schemaStore?.[client.id];
+  if (store?.pages?.length) {
+    const gaps = new Map();
+    let invalid = 0;
+    for (const p of store.pages) {
+      const ev = schemaEvaluate(p);
+      if (ev.status === 'blocked') invalid++;
+      for (const m of ev.missing) gaps.set(m, (gaps.get(m) || 0) + 1);
+    }
+    if (invalid) {
+      push({
+        category: 'schemaOpt',
+        label: `Fix ${invalid} page(s) with invalid JSON-LD`,
+        why: 'Google drops the whole block when it will not parse',
+        priority: 12, minutes: 30 * Math.min(invalid, 4), itemKey: '',
+      });
+    }
+    for (const [type, count] of [...gaps.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3)) {
+      push({
+        category: 'schemaOpt',
+        label: `Add ${type} markup`,
+        why: `missing on ${count} of ${store.pages.length} page(s)`,
+        priority: 5 + Math.min(3, Math.floor(count / 5)),
+        minutes: count > 10 ? 90 : 45,
+        itemKey: '',
+      });
+    }
+  }
+
+  // 3. Pages with no POP score yet — nothing has been measured
+  const unscored = kws.filter(k => k.mainKeyword && k.keyword && !k.popScore).length;
+  if (unscored) {
+    push({
+      category: 'contentOpt',
+      label: `Run POP on ${unscored} unscored main keyword(s)`,
+      why: 'no score on record, so content work would be guesswork',
+      priority: 7, minutes: 20 * Math.min(unscored, 4), itemKey: '',
+    });
+  }
+
+  return out.sort((a, b) => b.priority - a.priority);
+}
+
+/* ── generation ── */
+
+/* Pack candidates into a day's budget in priority order. This is the whole plan
+   when there is no API key, and the fallback when the call fails — the tab has
+   to stay useful either way, it just loses the sequencing. */
+function weekplanPack(candidates, budgetMin) {
+  const blocks = [];
+  let used = 0;
+  for (const c of candidates) {
+    if (used + c.minutes > budgetMin) continue;
+    blocks.push({ candidateId: c.id, minutes: c.minutes, order: blocks.length + 1, note: '' });
+    used += c.minutes;
+  }
+  return blocks;
+}
+
+async function weekplanGenerate() {
+  const key = isoWeekKey();
+  if (weekPlans[key] && !confirm(`A plan for ${weekplanLabel(key)} already exists. Replace it?`)) return;
+
+  const hours = weekplanState.hoursPerClient;
+  const byId  = new Map((rtData?.clients || []).map(c => [c.id, c]));
+
+  // The schedule stays owned by the Weekly tab — this only reads it
+  const schedule = WEEKLY_DAYS
+    .map(d => ({ day: d.key, ids: (weeklyData?.schedule?.[d.key] || []).filter(id => byId.has(id)) }))
+    .filter(d => d.ids.length);
+
+  /* A client's backlog is computed once, then handed out across the days that
+     client actually appears on. Computing per day instead would plan the same
+     work twice for a client scheduled Monday and Thursday — the second day
+     would be a copy of the first, not the next slice of the queue. */
+  const remaining = new Map();
+  for (const { ids } of schedule) {
+    for (const id of ids) if (!remaining.has(id)) remaining.set(id, weekplanCandidates(byId.get(id)));
+  }
+
+  const budgetMin = Math.round(hours * 60);
+  const days = [];
+  const allCandidates = {};
+  for (const { day, ids } of schedule) {
+    const clients = [];
+    for (const id of ids) {
+      const queue = remaining.get(id) || [];
+      // Take this day's share off the front of the queue, in priority order
+      const slice = [];
+      let used = 0;
+      while (queue.length && used + queue[0].minutes <= budgetMin) {
+        const c = queue.shift();
+        slice.push(c);
+        used += c.minutes;
+      }
+      if (!slice.length) continue;
+      slice.forEach(c => { allCandidates[c.id] = c; });
+      clients.push({ clientId: id, clientName: byId.get(id).name, candidates: slice });
+    }
+    if (clients.length) days.push({ day, clients });
+  }
+
+  if (!days.length) {
+    weekplanState.message = { text: 'No clients are assigned to any day. Set the week up in Weekly Tasks first.', tone: 'red' };
+    weekplanRender();
+    return;
+  }
+  if (!Object.keys(allCandidates).length) {
+    weekplanState.message = { text: 'Nothing outstanding for the scheduled clients — every tracked task is already done.', tone: 'green' };
+    weekplanRender();
+    return;
+  }
+
+  weekplanState.busy = true;
+  weekplanState.message = { text: 'Working out the week…', tone: '' };
+  weekplanRender();
+
+  let sequenced = null, note = '';
+  try {
+    const r = await fetch('/api/weekplan/sequence', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ days, hoursPerClient: hours }),
+    });
+    const data = await r.json();
+    if (r.ok && data.sequenced) {
+      sequenced = data.days;
+      if (data.dropped) note = `${data.dropped} suggested item(s) did not match a real task and were dropped.`;
+    } else {
+      note = data.reason ? `Ordered by priority — ${data.reason}` : 'Ordered by priority.';
+    }
+  } catch (e) {
+    note = `Ordered by priority — ${e.message}`;
+  }
+
+  // Build the record. Whether the blocks came from the model or the packer, they
+  // are resolved against the candidates computed here, so nothing can appear on
+  // the plan that was not derived from the data.
+  const record = { generatedAt: Date.now(), hoursPerClient: hours, note, days: {} };
+  for (const d of days) {
+    const seqDay = sequenced?.find(x => x.day === d.day);
+    record.days[d.day] = d.clients.map(c => {
+      const mine = new Set(c.candidates.map(x => x.id));
+      let blocks;
+      if (seqDay) {
+        const seen = new Set();
+        let used = 0;
+        blocks = seqDay.blocks
+          .filter(b => mine.has(b.candidateId))
+          // The server checks an id exists, not that it appears once. A repeat
+          // would render two checkboxes sharing a data-block, and ticking the
+          // second would toggle the first.
+          .filter(b => { if (seen.has(b.candidateId)) return false; seen.add(b.candidateId); return true; })
+          .sort((a, b) => a.order - b.order)
+          // The model may lengthen a block, so the budget is enforced here too —
+          // per-block clamping on the server says nothing about the day's total.
+          .filter(b => { if (used + b.minutes > budgetMin) return false; used += b.minutes; return true; });
+      } else {
+        blocks = weekplanPack(c.candidates, budgetMin);
+      }
+      return {
+        clientId: c.clientId,
+        clientName: c.clientName,
+        blocks: blocks.map(b => {
+          const cand = allCandidates[b.candidateId];
+          return {
+            id: b.candidateId,
+            category: cand.category,
+            label: cand.label,
+            why: cand.why,
+            itemKey: cand.itemKey || '',
+            minutes: b.minutes,
+            note: b.note || '',
+            done: false,
+          };
+        }),
+      };
+    }).filter(c => c.blocks.length);
+  }
+
+  weekPlans[key] = record;
+  const saved = await weekplanSave(key);
+  weekplanState.busy = false;
+  const parts = [`✓ Plan ready for ${weekplanLabel(key)}.`];
+  if (note)   parts.push(note);
+  if (!saved) parts.push('Could not save to the server — it is in this tab only.');
+  weekplanState.message = { text: parts.join(' '), tone: (saved && !note) ? 'green' : 'amber' };
+  weekplanRender();
+}
+
+async function weekplanLoad() {
+  try {
+    const r = await fetch('/api/weekplandata');
+    if (r.ok) weekPlans = await r.json() || {};
+  } catch { weekPlans = {}; }
+}
+
+async function weekplanSave(key) {
+  try {
+    const r = await fetch('/api/weekplandata', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [key]: weekPlans[key] }),
+    });
+    return r.ok;
+  } catch { return false; }
+}
+
+/* Ticking a block marks the underlying Weekly task done where there is one, so
+   the plan and the checklist cannot disagree — and the Activity Log entry comes
+   free, because weeklySetStatus already writes one. */
+async function weekplanToggle(dayKey, clientId, blockId, done) {
+  const key = isoWeekKey();
+  const day = weekPlans[key]?.days?.[dayKey];
+  const client = day?.find(c => c.clientId === clientId);
+  const block = client?.blocks.find(b => b.id === blockId);
+  if (!block) return;
+
+  block.done = done;
+  if (block.itemKey) weeklySetStatus(clientId, block.category, block.itemKey, done ? 'done' : 'in_progress');
+  await weekplanSave(key);
+  weekplanRender();
+}
+
+/* ── render ── */
+function weekplanRender() {
+  const root = document.getElementById('weekplan-root');
+  if (!root || !rtData) return;
+
+  const key    = isoWeekKey();
+  const plan   = weekPlans[key];
+  const msg    = weekplanState.message;
+  const hasSchedule = WEEKLY_DAYS.some(d => (weeklyData?.schedule?.[d.key] || []).length);
+
+  const totalMin = plan ? Object.values(plan.days).flat().flatMap(c => c.blocks).reduce((n, b) => n + b.minutes, 0) : 0;
+  const doneMin  = plan ? Object.values(plan.days).flat().flatMap(c => c.blocks).filter(b => b.done).reduce((n, b) => n + b.minutes, 0) : 0;
+
+  const body = !hasSchedule
+    ? `<div class="ah-empty">No clients are assigned to any weekday yet.<br>
+         Set your week up in <a href="#" class="wp-goto-weekly ah-link">Weekly Tasks</a>, then come back and generate.</div>`
+    : !plan
+    ? `<div class="ah-empty">No plan for ${escHtml(weekplanLabel(key))} yet — generate one to lay the week out.</div>`
+    : WEEKLY_DAYS.map(d => {
+        const clients = plan.days[d.key];
+        if (!clients?.length) return '';
+        const dayMin = clients.flatMap(c => c.blocks).reduce((n, b) => n + b.minutes, 0);
+        return `
+          <div class="wp-day">
+            <div class="wp-day-head">
+              <span class="wp-day-name">${escHtml(d.label)}</span>
+              <span class="wp-day-meta">${clients.length} client(s) · ${weekplanHours(dayMin)}</span>
+            </div>
+            ${clients.map(c => `
+              <div class="wp-client">
+                <div class="wp-client-head">
+                  <span class="wp-client-name">${escHtml(c.clientName)}</span>
+                  <span class="wp-day-meta">${weekplanHours(c.blocks.reduce((n, b) => n + b.minutes, 0))}</span>
+                </div>
+                ${c.blocks.map(b => `
+                  <label class="wp-block${b.done ? ' wp-block-done' : ''}">
+                    <input type="checkbox" class="wp-tick" ${b.done ? 'checked' : ''}
+                           data-day="${escHtml(d.key)}" data-client="${escHtml(c.clientId)}" data-block="${escHtml(b.id)}">
+                    <span class="wp-block-body">
+                      <span class="wp-block-top">
+                        <span class="wp-block-label">${escHtml(b.label)}</span>
+                        <span class="log-pill">${escHtml(WEEKPLAN_CAT_LABEL[b.category] || b.category)}</span>
+                        <span class="wp-mins">${b.minutes}m</span>
+                      </span>
+                      <span class="wp-why">${escHtml(b.why)}${b.note ? ` — ${escHtml(b.note)}` : ''}</span>
+                    </span>
+                  </label>`).join('')}
+              </div>`).join('')}
+          </div>`;
+      }).join('') || '<div class="ah-empty">The plan came out empty — nothing outstanding for the scheduled clients.</div>';
+
+  root.innerHTML = `
+    <div class="db-header" style="margin-bottom:0">
+      <h2 class="db-title">Week Plan</h2>
+      <p class="db-sub">Reads the day-by-client schedule from Weekly Tasks, then lays out what each client actually needs from your rank, schema and POP data.</p>
+    </div>
+
+    <div class="ah-toolbar">
+      <span class="wp-week">${escHtml(weekplanLabel(key))}</span>
+      <label class="indexy-label-inline">Hours per client</label>
+      <input id="wp-hours" type="number" min="1" max="12" step="0.5" class="indexy-select-sm" style="width:70px"
+             value="${weekplanState.hoursPerClient}">
+      <button id="wp-gen-btn" class="btn-sm">${plan ? 'Regenerate' : 'Generate this week’s plan'}</button>
+      <span id="wp-status" class="ah-status"${msg?.tone ? ` style="color:var(--${msg.tone === 'amber' ? 'text-primary' : msg.tone})"` : ''}>${escHtml(msg?.text || '')}</span>
+    </div>
+
+    ${plan ? `
+      <div class="ah-toolbar" style="gap:18px">
+        <span class="wk-opg-meta">Generated ${new Date(plan.generatedAt).toLocaleString()}</span>
+        <span class="log-pill wk-status-done">${weekplanHours(doneMin)} done</span>
+        <span class="log-pill">${weekplanHours(totalMin)} planned</span>
+      </div>` : ''}
+
+    ${body}
+  `;
+
+  const gen = root.querySelector('#wp-gen-btn');
+  if (gen) { gen.disabled = weekplanState.busy; if (weekplanState.busy) gen.textContent = 'Working…'; }
+  gen?.addEventListener('click', weekplanGenerate);
+
+  root.querySelector('#wp-hours')?.addEventListener('change', e => {
+    weekplanState.hoursPerClient = Math.max(1, Math.min(12, parseFloat(e.target.value) || 4.5));
+  });
+  root.querySelector('.wp-goto-weekly')?.addEventListener('click', e => { e.preventDefault(); switchTab('weekly'); });
+  root.querySelectorAll('.wp-tick').forEach(cb => {
+    cb.addEventListener('change', () => weekplanToggle(cb.dataset.day, cb.dataset.client, cb.dataset.block, cb.checked));
+  });
+}
+
+function weekplanHours(minutes) {
+  if (minutes < 60) return `${minutes}m`;
+  const h = Math.floor(minutes / 60), m = minutes % 60;
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+
 /* ═══════════════════════════════════════════════
    SCHEMA AUDIT
    Crawl the active client's site, report what structured data each page really

@@ -8,3 +8,4 @@ node_modules/
 .schemadata.json
 .exttokens.json
 llamaseo-extension-*.zip
+.weekplan.json

@@ -2057,3 +2057,31 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
 .setup-url-meta { margin-top: 8px; font-size: 11px; color: var(--text-muted); }
 .setup-actions { display: flex; align-items: center; gap: 10px; }
 .setup-saved { font-size: 12px; font-weight: 600; }
+
+/* ── WEEK PLAN ── */
+.wp-week { font-weight: 700; font-size: 13px; margin-right: 6px; }
+.wp-day { margin-bottom: 18px; }
+.wp-day-head {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 6px 0; border-bottom: 1px solid var(--border); margin-bottom: 8px;
+}
+.wp-day-name { font-family: var(--font-head, inherit); font-size: 15px; font-weight: 700; }
+.wp-day-meta { font-size: 11px; color: var(--text-muted); }
+.wp-client { margin: 0 0 10px 4px; }
+.wp-client-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+.wp-client-name { font-size: 12px; font-weight: 600; color: var(--accent); }
+.wp-block {
+  display: flex; align-items: flex-start; gap: 9px;
+  padding: 7px 10px; margin-bottom: 4px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  cursor: pointer; transition: border-color .15s;
+}
+.wp-block:hover { border-color: var(--accent); }
+.wp-block input { margin-top: 3px; flex-shrink: 0; cursor: pointer; }
+.wp-block-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.wp-block-top { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.wp-block-label { font-size: 12.5px; font-weight: 600; }
+.wp-mins { font-size: 10px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.wp-why { font-size: 11px; color: var(--text-muted); line-height: 1.45; }
+.wp-block-done .wp-block-label { text-decoration: line-through; opacity: .55; }
+.wp-block-done { opacity: .7; }
