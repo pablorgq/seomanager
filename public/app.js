@@ -9609,6 +9609,9 @@ async function schemaScan({ full = false } = {}) {
       source:    data.source || 'crawl',
       pages,
       recs,
+      // Kept so a block written before this crawl can still be flagged stale;
+      // rebuilding the entry without it made that pill unreachable.
+      generatedAt: schemaStore[id]?.generatedAt || null,
     };
     const saved = await schemaSaveStore(id);
     const dg    = data.diagnostics || {};
@@ -9674,8 +9677,24 @@ async function schemaGenerate() {
   if (!id || !cur?.pages?.length) return;
   const c = rtActiveClient();
 
+  let pending = cur.pages.filter(p => !cur.recs?.[p.url]?.jsonld);
+  if (!pending.length) {
+    // Resuming must not make rewriting impossible. A re-scan carries recs
+    // forward for every surviving URL, so it would leave nothing pending and
+    // this would refuse again — the way out has to be offered here.
+    if (!confirm(`Every page already has a block.\n\nRegenerate all ${cur.pages.length}? This replaces them and costs another AI run.`)) {
+      schemaSetMessage('Nothing to generate — every page already has a block.', 'green');
+      schemaRender();
+      return;
+    }
+    pending = cur.pages.slice();
+  }
+  const already = cur.pages.length - pending.length;
+
   schemaState.busy = true;
-  schemaSetMessage(`Writing advanced JSON-LD for ${cur.pages.length} page(s)… this takes a minute.`);
+  schemaSetMessage(already
+    ? `Continuing — ${pending.length} page(s) left of ${cur.pages.length}. This takes a minute.`
+    : `Writing advanced JSON-LD for ${pending.length} page(s)… this takes a minute.`);
   schemaRender();
 
   try {
@@ -9683,7 +9702,11 @@ async function schemaGenerate() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        pages: cur.pages.map(p => ({
+        // Only what is still missing. A run is bounded by both a 60-page cap and
+        // a time budget, so a large site needs several passes — sending the
+        // whole list each time would regenerate the same early pages forever and
+        // never reach the ones that got cut off.
+        pages: pending.map(p => ({
           url: p.url, pageType: p.pageType, title: p.title, h1: p.h1,
           metaDesc: p.metaDesc, types: p.types, signals: p.signals,
         })),
@@ -9714,13 +9737,21 @@ async function schemaGenerate() {
     const saved = await schemaSaveStore(id);
 
     const ok     = entry.pages.filter(p => entry.recs[p.url]?.jsonld).length;
-    const failed = entry.pages.filter(p => entry.recs[p.url]?.error).length;
-    const parts  = [`✓ JSON-LD ready for ${ok} page(s).`];
-    if (failed)         parts.push(`${failed} failed.`);
-    if (data.skipped)   parts.push(`${data.skipped} page(s) beyond the 60-page limit were skipped.`);
-    if (orphaned)       parts.push(`${orphaned} result(s) did not match a scanned page.`);
-    if (!saved)         parts.push('Could not save to the server — the result is in this tab only.');
-    schemaSetMessage(parts.join(' '), (failed || data.skipped || orphaned || !saved) ? 'amber' : 'green');
+    // Errored pages have no block, so they are part of what is left rather than
+    // a separate tally — counting both would report 6 failed + 6 remaining on a
+    // 10-page site and read as twelve problems.
+    const failed = entry.pages.filter(p => !entry.recs[p.url]?.jsonld && entry.recs[p.url]?.error).length;
+    const left   = entry.pages.length - ok;
+    const parts  = [`✓ JSON-LD ready for ${ok} of ${entry.pages.length} page(s).`];
+    if (orphaned) parts.push(`${orphaned} result(s) did not match a scanned page.`);
+    // A run is bounded by a page cap and a time budget, so a big site finishes
+    // over several passes. Saying what is left, and that clicking again picks it
+    // up, beats reporting a limit as though it were a dead end.
+    if (left) {
+      parts.push(`${left} page(s) still have no block${failed ? ` (${failed} returned an error)` : ''} — click Generate again to pick them up.`);
+    }
+    if (!saved)   parts.push('Could not save to the server — the result is in this tab only.');
+    schemaSetMessage(parts.join(' '), (left || orphaned || !saved) ? 'amber' : 'green');
     schemaState.subtab = 'advanced';
   } catch (e) {
     schemaSetMessage(e.message, 'red');
@@ -9770,6 +9801,9 @@ async function schemaImportReport(file) {
       source:    data.source || 'imported report',
       pages,
       recs,
+      // Kept so a block written before this crawl can still be flagged stale;
+      // rebuilding the entry without it made that pill unreachable.
+      generatedAt: schemaStore[id]?.generatedAt || null,
     };
     const saved = await schemaSaveStore(id);
     const dg    = data.diagnostics || {};
@@ -9859,6 +9893,13 @@ function schemaExportXlsx() {
   );
   const slug = (c?.name || cur.domain || 'client').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   XLSX.writeFile(wb, `schema-advanced-${slug}.xlsx`);
+}
+
+/* The path is what identifies a page when you are about to paste into it — the
+   title says what it is about, which is a different question. */
+function schemaShortPath(url) {
+  try { const u = new URL(url); return (u.pathname === '/' ? '/' : u.pathname.replace(/\/$/, '')) + (u.search || ''); }
+  catch { return String(url || ''); }
 }
 
 /* The model returns the graph as a JSON-encoded string; pretty-print it when it
@@ -9966,9 +10007,13 @@ function schemaAdvancedHtml(rows) {
       <div class="wk-item-row wk-item-offpage">
         <div class="wk-item-main">
           <button class="wk-opg-toggle sch-toggle" data-idx="${i}" title="Show JSON-LD">▸</button>
-          <span class="wk-item-label" title="${escHtml(p.url)}">${escHtml(p.title || p.url)}</span>
+          <span class="sch-adv-id">
+            <a href="${escHtml(p.url)}" target="_blank" rel="noopener" class="sch-adv-url">${escHtml(schemaShortPath(p.url))}</a>
+            <span class="sch-adv-title">${escHtml(p.title || '')}</span>
+          </span>
           <span class="log-pill ${SCHEMA_STATUS_META[ev.status].cls}">${escHtml(SCHEMA_STATUS_META[ev.status].label)}</span>
           ${stale ? '<span class="log-pill" title="Written before the latest crawl — regenerate to match current page content">stale</span>' : ''}
+          ${block ? `<button class="btn-sm sch-copy-btn sch-copy-inline" data-url="${escHtml(p.url)}">Copy block</button>` : ''}
         </div>
         <div class="wk-opg-accordion" id="sch-acc-${i}">
           <div class="wk-opg-inner">
