@@ -1346,8 +1346,10 @@ async function crawlForImages(startUrl, maxPages, pastedUrls) {
 
   // A pasted list raises the cap well past the old 10, and 8s per page serially
   // will outrun the platform's request timeout without a budget — the same
-  // reason crawlForSchema has one.
-  const deadline = Date.now() + 240000;
+  // reason crawlForSchema has one. Kept under the proxy's own patience: it
+  // answers a slow request with plain-text "upstream error", which is not a
+  // response any caller can do anything useful with.
+  const deadline = Date.now() + 100000;
 
   while (queue.length && visited.size < maxPages) {
     if (Date.now() > deadline) break;
@@ -1956,10 +1958,11 @@ async function crawlForSchema(startUrl, maxPages, explicitSitemap, pastedUrls) {
   if (!fromPasted && !queue.includes(base.href)) queue.unshift(base.href);
 
   // 100 pages at 10s apiece would run ~17 minutes and the platform proxy drops
-  // the request long before that. Stop at the budget and return what we have.
+  // the request long before that. Stop at the budget and return what we have —
+  // a truncated answer we can report beats a proxy error we cannot.
   // The clock starts here, after sitemap discovery — starting it earlier let a
   // slow sitemap consume the budget and return zero pages.
-  const deadline = Date.now() + 240000;
+  const deadline = Date.now() + 100000;
 
   /* Adaptive bot protection (SiteGround's, Cloudflare's) scores requests as they
      arrive, so a burst of sequential hits from a datacenter IP is itself the
@@ -2369,10 +2372,12 @@ async function recommendSchema(pages, clientName, wpUrl) {
   // A schema payload is far heavier per page than an alt-text line, so chunk it
   // rather than one-shotting the way recommendAltText does.
   const CHUNK = 6;
-  // Ten sequential 16k-token calls can outlast the platform's request timeout,
-  // which would throw away every chunk already generated and billed. Stop early
-  // and let the caller report what was skipped.
-  const deadline = Date.now() + 240000;
+  // Ten sequential 16k-token calls will outlast the platform's request timeout,
+  // which throws away every chunk already generated and billed and answers the
+  // caller with plain-text "upstream error". Return early with what is done;
+  // the caller resends only the pages still missing a block, so a large site
+  // finishes across a few clicks instead of failing on every one.
+  const deadline = Date.now() + 100000;
   let stopped = 0;
 
   for (let i = 0; i < pages.length; i += CHUNK) {

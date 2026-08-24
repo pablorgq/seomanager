@@ -9193,7 +9193,7 @@ async function weekplanGenerate() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ days, hoursPerClient: hours }),
     });
-    const data = await r.json();
+    const data = await readJson(r, 'Sequencing');
     if (r.ok && data.sequenced) {
       sequenced = data.days;
       if (data.dropped) note = `${data.dropped} suggested item(s) did not match a real task and were dropped.`;
@@ -9509,6 +9509,25 @@ async function schemaLoadStore() {
   }
 }
 
+/* A response is not always JSON. When a request runs long, the platform proxy
+   in front of the app gives up and answers with plain text — "upstream error" —
+   and r.json() then throws a parse error that says nothing about what actually
+   happened. Read the body once, and say what it was. */
+async function readJson(r, what) {
+  const text = await r.text();
+  try { return JSON.parse(text); }
+  catch {
+    const snippet = text.trim().replace(/\s+/g, ' ').slice(0, 120) || '(empty response)';
+    if ([502, 503, 504].includes(r.status) || /upstream|timeout|gateway/i.test(snippet)) {
+      // Deliberately not "what it finished was saved" — the result only reaches
+      // us in the response, so a cut connection loses that run's work entirely.
+      // What survives is whatever earlier runs already stored.
+      throw new Error(`${what} ran too long and the connection was cut before it could return, so this run's work is lost. Anything saved earlier is still there — click again to carry on from it.`);
+    }
+    throw new Error(`${what} returned something unreadable (HTTP ${r.status}): ${snippet}`);
+  }
+}
+
 /* Takes the client id explicitly — a scan runs for minutes and the user may
    switch client mid-run, so reading activeClientId here would file the result
    under whoever happens to be selected when it lands. */
@@ -9584,7 +9603,7 @@ async function schemaScan({ full = false } = {}) {
         pageUrls:   c?.pageUrls || [],
       }),
     });
-    const data = await r.json();
+    const data = await readJson(r, 'The scan');
     if (!r.ok) throw new Error(data?.error?.message || `Scan failed (${r.status})`);
 
     const pages = (data.pages || []).map(p => schemaSlimPage({ ...p, pageType: schemaPageType(p) }));
@@ -9714,7 +9733,7 @@ async function schemaGenerate() {
         wpUrl:      c?.wpUrl || '',
       }),
     });
-    const data = await r.json();
+    const data = await readJson(r, 'Generation');
     if (!r.ok) throw new Error(data?.error?.message || `Generation failed (${r.status})`);
 
     // Re-resolve the store entry rather than trusting the reference captured
@@ -9777,7 +9796,7 @@ async function schemaImportReport(file) {
     const fd = new FormData();
     fd.append('report', file);
     const r = await fetch('/api/schema/import', { method: 'POST', body: fd });
-    const data = await r.json();
+    const data = await readJson(r, 'The import');
     if (!r.ok) throw new Error(data?.error?.message || `Import failed (${r.status})`);
 
     // Importing site A's report while client B is selected would overwrite B's
