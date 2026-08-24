@@ -9397,7 +9397,7 @@ function weekplanHours(minutes) {
 ════════════════════════════════════════════════ */
 
 let schemaStore  = {};     // clientId → { domain, scannedAt, source, pages, recs }
-let schemaState  = { domain: '', maxPages: 25, busy: false, subtab: 'status', message: null };
+let schemaState  = { domain: '', maxPages: 25, busy: false, subtab: 'status', message: null, filter: '', filterStatus: '' };
 
 /* What each page type owes. `any` is an alternatives list — LocalBusiness
    satisfies the Organization slot, BlogPosting satisfies Article, and so on, so
@@ -9543,7 +9543,11 @@ function schemaSyncClient() {
   const c = rtActiveClient();
   const saved = schemaCurrent();
   schemaState.domain  = saved?.domain || ahrefsBareHost(c?.wpUrl) || '';
-  schemaState.message = null;                // a result for the previous client is not a result for this one
+  schemaState.message = null;
+  // A filter belongs to the client it was typed for; carrying it across hides
+  // the next client's pages behind a search they never made.
+  schemaState.filter = '';
+  schemaState.filterStatus = '';                // a result for the previous client is not a result for this one
 }
 
 /* ── actions ── */
@@ -9888,8 +9892,34 @@ function schemaRenderButtons() {
   if (scr) scr.disabled = schemaState.busy;
 }
 
+/* Match on everything visible in the row, so the same box answers "where is
+   /boilers" and "which pages still lack BreadcrumbList" — on a 65-page site the
+   second question is asked more often than the first. */
+function schemaFilterRows(rows) {
+  const q = (schemaState.filter || '').trim().toLowerCase();
+  const status = schemaState.filterStatus;
+  let out = rows;
+  if (status) out = out.filter(({ ev }) => ev.status === status);
+  if (!q) return out;
+  return out.filter(({ p, ev }) => {
+    let path = p.url;
+    try { path = new URL(p.url).pathname; } catch {}
+    return [path, p.url, p.title, ev.type, ev.found.join(' '), ev.missing.join(' ')]
+      .some(v => String(v || '').toLowerCase().includes(q));
+  });
+}
+
+function schemaFilterNote(rows) {
+  const shown = schemaFilterRows(rows).length;
+  if (shown === rows.length) return `${rows.length} page(s)`;
+  return `${shown} of ${rows.length} page(s)`;
+}
+
 function schemaStatusTableHtml(rows) {
   if (!rows.length) return '<div class="ah-empty">Scan the site to see which pages carry structured data.</div>';
+  const all = rows;
+  rows = schemaFilterRows(rows);
+  if (!rows.length) return `<div class="ah-empty">No page matches that filter — ${all.length} page(s) scanned.</div>`;
   const body = rows.map(({ p, ev }) => {
     const meta = SCHEMA_STATUS_META[ev.status];
     let path = p.url;
@@ -9918,9 +9948,14 @@ function schemaStatusTableHtml(rows) {
 }
 
 function schemaAdvancedHtml(rows) {
-  const withRecs = rows.filter(r => r.rec);
+  const withRecs = schemaFilterRows(rows).filter(r => r.rec);
   if (!withRecs.length) {
-    return '<div class="ah-empty">Scan the site, then click “Generate Advanced Schema” to write a nested @graph block for every page.</div>';
+    const anyRecs = rows.some(r => r.rec);
+    // Telling someone to generate work they already did, because a filter hid
+    // it, is worse than saying nothing
+    return anyRecs
+      ? '<div class="ah-empty">No generated block matches that filter.</div>'
+      : '<div class="ah-empty">Scan the site, then click “Generate Advanced Schema” to write a nested @graph block for every page.</div>';
   }
   const cur = schemaCurrent();
   return withRecs.map(({ p, ev, rec }, i) => {
@@ -9995,10 +10030,16 @@ function schemaRender() {
     ${rows.length ? `
       <div class="ah-toolbar" style="gap:18px">
         <span class="wk-opg-meta">${scannedNote}</span>
-        <span class="log-pill wk-status-done">${counts.done} complete</span>
-        <span class="log-pill wk-status-progress">${counts.progress} partial</span>
-        <span class="log-pill wk-status-not">${counts.not} none</span>
-        <span class="log-pill wk-status-blocked">${counts.blocked} invalid</span>
+        ${[['done', 'complete'], ['progress', 'partial'], ['not', 'none'], ['blocked', 'invalid']].map(([k, label]) =>
+          // The active class is emitted here too, or a full render would leave a
+          // filter applied with no pill showing it is on
+          `<button type="button" class="log-pill sch-filter-status wk-status-${k}${schemaState.filterStatus === k ? ' sch-filter-on' : ''}" data-status="${k}">${counts[k]} ${label}</button>`
+        ).join('')}
+      </div>
+      <div class="ah-toolbar">
+        <input id="sch-filter" type="search" class="ah-domain-input" placeholder="Filter pages — path, title, a schema type, or one that's missing"
+               value="${escHtml(schemaState.filter)}">
+        <span id="sch-filter-count" class="ah-status">${schemaFilterNote(rows)}</span>
       </div>` : ''}
 
     <div class="gsc-stab-nav" id="sch-tab-nav">
@@ -10024,6 +10065,55 @@ function schemaRender() {
   root.querySelector('#sch-gen-btn')?.addEventListener('click', schemaGenerate);
   root.querySelector('#sch-export-btn')?.addEventListener('click', schemaExportXlsx);
 
+  /* Everything inside the panels, re-bound after each repaint — filtering
+     replaces that markup, and with it every listener attached to it. */
+  function bindPanelHandlers() {
+    root.querySelectorAll('.sch-toggle').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const acc = root.querySelector(`#sch-acc-${btn.dataset.idx}`);
+        const open = acc?.classList.toggle('wk-opg-open');
+        btn.textContent = open ? '▾' : '▸';
+      });
+    });
+    root.querySelectorAll('.sch-copy-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        // Keyed by URL, not by index — the Advanced list is filtered to pages
+        // that have a recommendation, so its indexes do not line up with rows.
+        const rec = schemaCurrent()?.recs?.[btn.dataset.url];
+        if (!rec) return;
+        copyText(btn, schemaScriptBlock(rec));   // (btn, text) — handles its own ✓
+      });
+    });
+  }
+
+  /* Repaint the two panels only. A full schemaRender would rebuild the input
+     itself and drop focus and the caret on every keystroke. */
+  const repaint = () => {
+    const s = root.querySelector('#sch-panel-status');
+    const a = root.querySelector('#sch-panel-advanced');
+    const n = root.querySelector('#sch-filter-count');
+    if (s) s.innerHTML = schemaStatusTableHtml(rows);
+    if (a) a.innerHTML = schemaAdvancedHtml(rows);
+    if (n) n.textContent = schemaFilterNote(rows);
+    root.querySelectorAll('.sch-filter-status').forEach(b => {
+      b.classList.toggle('sch-filter-on', b.dataset.status === schemaState.filterStatus);
+    });
+    bindPanelHandlers();
+  };
+
+  root.querySelector('#sch-filter')?.addEventListener('input', e => {
+    schemaState.filter = e.target.value;
+    repaint();
+  });
+
+  root.querySelectorAll('.sch-filter-status').forEach(btn => {
+    btn.addEventListener('click', () => {
+      // Clicking the active one clears it, so the pills toggle rather than trap
+      schemaState.filterStatus = schemaState.filterStatus === btn.dataset.status ? '' : btn.dataset.status;
+      repaint();
+    });
+  });
+
   root.querySelectorAll('#sch-tab-nav .gsc-stab').forEach(btn => {
     btn.addEventListener('click', () => {
       schemaState.subtab = btn.dataset.schtab;
@@ -10034,24 +10124,7 @@ function schemaRender() {
     });
   });
 
-  root.querySelectorAll('.sch-toggle').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const acc = root.querySelector(`#sch-acc-${btn.dataset.idx}`);
-      const open = acc?.classList.toggle('wk-opg-open');
-      btn.textContent = open ? '▾' : '▸';
-    });
-  });
-
-  root.querySelectorAll('.sch-copy-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      // Keyed by URL, not by index — the Advanced list is filtered to pages that
-      // actually have a recommendation, so its indexes do not line up with rows.
-      const rec = schemaCurrent()?.recs?.[btn.dataset.url];
-      if (!rec) return;
-      copyText(btn, schemaScriptBlock(rec));   // (btn, text) — it handles its own ✓ feedback
-    });
-  });
-
+  bindPanelHandlers();
   schemaRenderButtons();
 }
 

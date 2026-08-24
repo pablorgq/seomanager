@@ -2085,3 +2085,12 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
 .wp-why { font-size: 11px; color: var(--text-muted); line-height: 1.45; }
 .wp-block-done .wp-block-label { text-decoration: line-through; opacity: .55; }
 .wp-block-done { opacity: .7; }
+
+/* ── SCHEMA FILTER ── */
+button.sch-filter-status {
+  cursor: pointer; font: inherit; font-size: 10px; font-weight: 600;
+  outline: 2px solid transparent; outline-offset: 1px; transition: outline-color .15s, opacity .15s;
+}
+button.sch-filter-status:hover { opacity: .8; }
+button.sch-filter-status.sch-filter-on { outline-color: var(--accent); }
+#sch-filter { min-width: 260px; }
