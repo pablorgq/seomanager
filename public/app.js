@@ -5937,6 +5937,18 @@ function rtShowAddClient() {
   document.getElementById('rt-campaignId').value           = '';
   document.getElementById('rt-wpUrl').value                = '';
   document.getElementById('rt-sitemapUrl').value           = '';
+  document.getElementById('rt-bizType').value               = '';
+  document.getElementById('rt-bizStreet').value             = '';
+  document.getElementById('rt-bizCity').value               = '';
+  document.getElementById('rt-bizRegion').value             = '';
+  document.getElementById('rt-bizPostal').value             = '';
+  document.getElementById('rt-bizCountry').value            = '';
+  document.getElementById('rt-bizPhone').value              = '';
+  document.getElementById('rt-bizPrice').value              = '';
+  document.getElementById('rt-bizHours').value              = '';
+  document.getElementById('rt-bizLogo').value               = '';
+  document.getElementById('rt-bizSameAs').value             = '';
+  document.getElementById('rt-bizAreas').value              = '';
   document.getElementById('rt-wpUser').value               = '';
   document.getElementById('rt-wpPass').value               = '';
   document.getElementById('rt-popLocation').value          = '';
@@ -5962,6 +5974,18 @@ function rtShowEditClientFields(c) {
   document.getElementById('rt-campaignId').value           = c.aaCampaignId || '';
   document.getElementById('rt-wpUrl').value                = c.wpUrl  || '';
   document.getElementById('rt-sitemapUrl').value           = c.sitemapUrl || '';
+  document.getElementById('rt-bizType').value = c.biz?.type || '';
+  document.getElementById('rt-bizStreet').value = c.biz?.street || '';
+  document.getElementById('rt-bizCity').value = c.biz?.city || '';
+  document.getElementById('rt-bizRegion').value = c.biz?.region || '';
+  document.getElementById('rt-bizPostal').value = c.biz?.postal || '';
+  document.getElementById('rt-bizCountry').value = c.biz?.country || '';
+  document.getElementById('rt-bizPhone').value = c.biz?.phone || '';
+  document.getElementById('rt-bizPrice').value = c.biz?.priceRange || '';
+  document.getElementById('rt-bizHours').value = c.biz?.hours || '';
+  document.getElementById('rt-bizLogo').value = c.biz?.logo || '';
+  document.getElementById('rt-bizSameAs').value = c.biz?.sameAs || '';
+  document.getElementById('rt-bizAreas').value = c.biz?.areas || '';
   document.getElementById('rt-wpUser').value               = c.wpUser || '';
   document.getElementById('rt-wpPass').value               = c.wpPass || '';
   document.getElementById('rt-popLocation').value          = c.popLocation || '';
@@ -5995,11 +6019,18 @@ function rtSaveClient() {
   const popLocation = document.getElementById('rt-popLocation').value;
   const popLanguage = document.getElementById('rt-popLanguage').value;
   const popGnl      = document.getElementById('rt-popGnl').checked;
+  const bizVal = id => document.getElementById(id)?.value.trim() || '';
+  const biz = {
+    type: bizVal('rt-bizType'), street: bizVal('rt-bizStreet'), city: bizVal('rt-bizCity'),
+    region: bizVal('rt-bizRegion'), postal: bizVal('rt-bizPostal'), country: bizVal('rt-bizCountry'),
+    phone: bizVal('rt-bizPhone'), priceRange: bizVal('rt-bizPrice'), hours: bizVal('rt-bizHours'),
+    logo: bizVal('rt-bizLogo'), sameAs: bizVal('rt-bizSameAs'), areas: bizVal('rt-bizAreas'),
+  };
   const pageUrls    = setupReadUrls();
   const mode        = document.getElementById('rt-saveClientBtn').dataset.mode;
   if (!name) { setupSetSaved('Client name is required.', true); return; }
   if (mode === 'add') {
-    const client = { id: rtUid(), name, aaCampaignId: cid, wpUrl, sitemapUrl, wpUser, wpPass, popLocation, popLanguage, popGnl, pageUrls, keywords: [] };
+    const client = { id: rtUid(), name, aaCampaignId: cid, wpUrl, sitemapUrl, wpUser, wpPass, popLocation, popLanguage, popGnl, pageUrls, biz, keywords: [] };
     rtData.clients.push(client);
     rtData.activeClientId = client.id;
   } else {
@@ -6008,7 +6039,7 @@ function rtSaveClient() {
     // real state — a fresh install, or right after deleting the last client.
     // Saying "Saved" while writing nothing would be a lie.
     if (!c) { setupSetSaved('No client selected — use + to add one.', true); return; }
-    c.name = name; c.aaCampaignId = cid; c.wpUrl = wpUrl; c.sitemapUrl = sitemapUrl; c.wpUser = wpUser; c.wpPass = wpPass; c.popLocation = popLocation; c.popLanguage = popLanguage; c.popGnl = popGnl; c.pageUrls = pageUrls;
+    c.name = name; c.aaCampaignId = cid; c.wpUrl = wpUrl; c.sitemapUrl = sitemapUrl; c.wpUser = wpUser; c.wpPass = wpPass; c.popLocation = popLocation; c.popLanguage = popLanguage; c.popGnl = popGnl; c.pageUrls = pageUrls; c.biz = biz;
   }
   rtSave();
   rtRender();
@@ -9513,6 +9544,19 @@ async function schemaLoadStore() {
    in front of the app gives up and answers with plain text — "upstream error" —
    and r.json() then throws a parse error that says nothing about what actually
    happened. Read the body once, and say what it was. */
+/* fetch() rejects outright when the connection never completes — the browser
+   says only "Failed to fetch", which names neither the request nor the cause.
+   Long calls are the ones this happens to, so they say which one it was. */
+async function postJson(url, body, what) {
+  let r;
+  try {
+    r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  } catch {
+    throw new Error(`${what} could not reach the server — it may have run too long and dropped the connection, or you may be offline. Anything saved earlier is still there.`);
+  }
+  return { r, data: await readJson(r, what) };
+}
+
 async function readJson(r, what) {
   const text = await r.text();
   try { return JSON.parse(text); }
@@ -9593,17 +9637,12 @@ async function schemaScan({ full = false } = {}) {
   schemaRender();
 
   try {
-    const r = await fetch('/api/schema/scan', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        url: /^https?:\/\//i.test(domain) ? domain : `https://${domain}`,
-        maxPages,
-        sitemapUrl: c?.sitemapUrl || '',
-        pageUrls:   c?.pageUrls || [],
-      }),
-    });
-    const data = await readJson(r, 'The scan');
+    const { r, data } = await postJson('/api/schema/scan', {
+      url: /^https?:\/\//i.test(domain) ? domain : `https://${domain}`,
+      maxPages,
+      sitemapUrl: c?.sitemapUrl || '',
+      pageUrls:   c?.pageUrls || [],
+    }, 'The scan');
     if (!r.ok) throw new Error(data?.error?.message || `Scan failed (${r.status})`);
 
     const pages = (data.pages || []).map(p => schemaSlimPage({ ...p, pageType: schemaPageType(p) }));
@@ -9696,7 +9735,17 @@ async function schemaGenerate() {
   if (!id || !cur?.pages?.length) return;
   const c = rtActiveClient();
 
-  let pending = cur.pages.filter(p => !cur.recs?.[p.url]?.jsonld);
+  /* Worst first. A run is bounded by a page cap and a time budget, so whatever
+     is at the front is what actually gets written — and sitemap order put the
+     blog first, spending the run on articles that were already Complete while
+     service pages sat Partial. schemaEvaluate's priority already encodes this:
+     invalid markup outranks missing types, and homepage and service pages count
+     double because they are what converts. */
+  let pending = cur.pages
+    .filter(p => !cur.recs?.[p.url]?.jsonld)
+    .map(p => ({ p, priority: schemaEvaluate(p).priority }))
+    .sort((a, b) => b.priority - a.priority)
+    .map(x => x.p);
   if (!pending.length) {
     // Resuming must not make rewriting impossible. A re-scan carries recs
     // forward for every surviving URL, so it would leave nothing pending and
@@ -9706,7 +9755,10 @@ async function schemaGenerate() {
       schemaRender();
       return;
     }
-    pending = cur.pages.slice();
+    pending = cur.pages
+      .map(p => ({ p, priority: schemaEvaluate(p).priority }))
+      .sort((a, b) => b.priority - a.priority)
+      .map(x => x.p);
   }
   const already = cur.pages.length - pending.length;
 
@@ -9717,10 +9769,7 @@ async function schemaGenerate() {
   schemaRender();
 
   try {
-    const r = await fetch('/api/schema/recommend', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    const { r, data } = await postJson('/api/schema/recommend', {
         // Only what is still missing. A run is bounded by both a 60-page cap and
         // a time budget, so a large site needs several passes — sending the
         // whole list each time would regenerate the same early pages forever and
@@ -9731,9 +9780,8 @@ async function schemaGenerate() {
         })),
         clientName: c?.name || '',
         wpUrl:      c?.wpUrl || '',
-      }),
-    });
-    const data = await readJson(r, 'Generation');
+        profile:    schemaBusinessProfile(c),
+      }, 'Generation');
     if (!r.ok) throw new Error(data?.error?.message || `Generation failed (${r.status})`);
 
     // Re-resolve the store entry rather than trusting the reference captured
@@ -9912,6 +9960,46 @@ function schemaExportXlsx() {
   );
   const slug = (c?.name || cur.domain || 'client').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   XLSX.writeFile(wb, `schema-advanced-${slug}.xlsx`);
+}
+
+/* The verified facts about a business, for the generator to use verbatim.
+
+   The prompt forbids inventing a telephone, an address or a social profile, and
+   with nothing supplied that left an Organization carrying little more than a
+   name and a URL. The answer is not to loosen the rule — it is to give it
+   something true to work from. Empty fields are dropped rather than sent blank,
+   so "not provided" stays distinguishable from "provided as empty". */
+function schemaBusinessProfile(client) {
+  const b = client?.biz || {};
+  const out = {};
+  const put = (k, v) => { const s = String(v || '').trim(); if (s) out[k] = s; };
+
+  put('businessType', b.type);
+  put('telephone', b.phone);
+  put('priceRange', b.priceRange);
+  // Comma-separated in the field, but "Mo-Fr 09:00-17:00, Sa 10:00-14:00" is two
+  // rules, not one value — schema.org wants them as separate entries.
+  const hours = String(b.hours || '').split(/[\r\n,]+/).map(x => x.trim()).filter(Boolean);
+  if (hours.length) out.openingHours = hours;
+  // The input is type="url" but there is no <form>, so nothing ever validates it
+  if (/^https?:\/\//i.test(String(b.logo || '').trim())) out.logo = String(b.logo).trim();
+
+  const addr = {};
+  const putA = (k, v) => { const s = String(v || '').trim(); if (s) addr[k] = s; };
+  putA('streetAddress', b.street);
+  putA('addressLocality', b.city);
+  putA('addressRegion', b.region);
+  putA('postalCode', b.postal);
+  putA('addressCountry', b.country);
+  if (Object.keys(addr).length) out.address = addr;
+
+  const sameAs = String(b.sameAs || '').split(/[\r\n,]+/).map(x => x.trim()).filter(x => /^https?:\/\//i.test(x));
+  if (sameAs.length) out.sameAs = sameAs;
+
+  const areas = String(b.areas || '').split(',').map(x => x.trim()).filter(Boolean);
+  if (areas.length) out.areasServed = areas;
+
+  return Object.keys(out).length ? out : null;
 }
 
 /* The path is what identifies a page when you are about to paste into it — the

@@ -2342,11 +2342,11 @@ STRUCTURE — this is what makes it "advanced":
 - One "@context":"https://schema.org" and one "@graph" array. Never emit multiple disconnected blocks.
 - Give every node a stable "@id" anchored to the page or site: "{origin}/#organization", "{origin}/#website", "{url}#webpage", "{url}#breadcrumb", "{url}#service", "{url}#article", "{url}#faq".
 - Cross-reference nodes by {"@id":"..."} instead of repeating a nested copy of the same entity. A WebPage links to its site via "isPartOf", to the org via "publisher"/"provider", to breadcrumbs via "breadcrumb", and to the primary entity via "mainEntityOfPage"/"about".
-- Add "sameAs" on the Organization only for profile URLs actually present in the page signals.
+- Add "sameAs", address, telephone, openingHours, priceRange, areaServed and logo from the VERIFIED BUSINESS PROFILE when one is supplied. A business node carrying only a name and a url is a wasted node — fill it with everything the profile confirms.
 - Include BreadcrumbList built from the URL path segments, with readable names.
 
 TYPE SELECTION by page type:
-- homepage → Organization (or LocalBusiness when the business serves a physical area) + WebSite + WebPage + BreadcrumbList
+- homepage → the business node + WebSite + WebPage + BreadcrumbList. Use the profile's businessType when one is given (a specific type such as Plumber or Dentist always beats a bare Organization); with no profile, use LocalBusiness when the page shows it serves a physical area, otherwise Organization. There must always be a business node, because the other page types reference it by @id.
 - service  → Service + WebPage + BreadcrumbList, provider referencing the Organization/LocalBusiness node; add FAQPage only when the page really has Q&A
 - article  → Article or BlogPosting + WebPage + BreadcrumbList + author node
 - contact  → LocalBusiness + ContactPoint + WebPage + BreadcrumbList
@@ -2354,12 +2354,13 @@ TYPE SELECTION by page type:
 NEVER INVENT FACTS. This is the most important rule:
 - Each signal ships the evidence next to it — signals.phone, signals.address, signals.hours, signals.rating, signals.price, signals.date, signals.author, signals.questions. Use those exact values verbatim. Never substitute a placeholder, an example, or a value you consider more plausible.
 - Only emit aggregateRating / ratingValue when signals.rating is a non-empty string, and use that number. Never invent reviewCount — omit it.
-- Only emit price / priceRange / Offer when signals.price is non-empty, and use that value.
-- Only emit address / PostalAddress when signals.address is non-empty; put the raw string in streetAddress rather than splitting it into city/region/postcode you cannot verify. Only emit openingHours when signals.hours is non-empty.
+- Only emit price / priceRange / Offer when signals.price is non-empty or the profile gives priceRange, and use that value.
+- Address: when the profile supplies an address object, emit a full PostalAddress using its parts exactly as given. Otherwise emit one only if signals.address is non-empty, and then put that raw string in streetAddress rather than splitting it into city/region/postcode you cannot verify.
+- Only emit openingHours when the profile supplies openingHours or signals.hours is non-empty. The profile gives an array — emit it as an array.
 - Only emit FAQPage when signals.questions is non-empty, and use those exact questions. Write each answer only from the page's title, h1 and meta description; if you cannot answer a question from those, drop that question.
 - Only emit HowTo when signals.hasSteps is true.
 - Only emit datePublished / dateModified when signals.date is non-empty, and author when signals.author is non-empty (use that name).
-- Leave out telephone, email, geo coordinates, images, logos, social profiles and sameAs entirely unless the value appears in the signals. Do not guess a URL.
+- Leave out telephone, email, geo coordinates, images, logos, social profiles and sameAs unless the value appears in the page signals OR in the verified business profile. Never guess one.
 - If a fact is not supported by the page title, h1, meta description or a signal value, leave the property out entirely. An omitted property is correct; a fabricated one is a Google penalty.
 
 Also state what is already on the page versus what you added, so the user can see the gap.
@@ -2367,7 +2368,7 @@ Also state what is already on the page versus what you added, so the user can se
 Return ONLY a valid JSON array — no prose, no markdown fences, before or after. One object per input page:
 {"url":"<exact url from input>","recommendedTypes":["Service","WebPage","BreadcrumbList"],"missing":["<types the page lacks today>"],"rationale":"<2-3 sentences: why these types, what was missing, what you deliberately left out for lack of evidence>","jsonld":"<the complete JSON-LD object as a JSON-encoded string>"}`;
 
-async function recommendSchema(pages, clientName, wpUrl) {
+async function recommendSchema(pages, clientName, wpUrl, profile) {
   const out = [];
   // A schema payload is far heavier per page than an alt-text line, so chunk it
   // rather than one-shotting the way recommendAltText does.
@@ -2394,6 +2395,16 @@ async function recommendSchema(pages, clientName, wpUrl) {
       `signals: ${JSON.stringify(p.signals || {})}`,
     ].join('\n')).join('\n\n');
 
+    /* Verified business facts, when the client record carries any. Without them
+       the generator can only emit a name and a URL — not because it is timid,
+       but because it is forbidden from inventing an address or a phone number.
+       The fix for a thin Organization is true data, not a looser rule. */
+    const profileBlock = profile && Object.keys(profile).length
+      ? `\n\nVERIFIED BUSINESS PROFILE — confirmed by the account manager, not scraped. Use these values verbatim wherever the schema calls for them, and use businessType in place of a bare Organization:\n${JSON.stringify(profile, null, 2)}`
+      // Not a ban on contact facts — the page's own signals are still valid
+      // evidence, and every client without a profile yet relies on them.
+      : '\n\nNo verified business profile was supplied for this client. Build the business node from the page signals alone, exactly as the rules describe, and invent nothing beyond them.';
+
     // One bad chunk must not discard the chunks already generated (and billed),
     // so every failure mode degrades to per-page error rows.
     try {
@@ -2406,7 +2417,7 @@ async function recommendSchema(pages, clientName, wpUrl) {
           model: 'claude-sonnet-5',
           max_tokens: 16000,
           system: SCHEMA_SYSTEM_PROMPT,
-          messages: [{ role: 'user', content: `Client: ${clientName || '(unknown)'}\nSite: ${wpUrl || ''}\n\nGenerate advanced JSON-LD for these ${batch.length} pages:\n\n${desc}` }],
+          messages: [{ role: 'user', content: `Client: ${clientName || '(unknown)'}\nSite: ${wpUrl || ''}${profileBlock}\n\nGenerate advanced JSON-LD for these ${batch.length} pages:\n\n${desc}` }],
         }),
       });
       const data = await up.json();
@@ -2540,14 +2551,14 @@ app.post('/api/weekplan/sequence', apiGuard, async (req, res) => {
 
 app.post('/api/schema/recommend', apiGuard, async (req, res) => {
   if (!ANTHROPIC_KEY) return res.status(503).json({ error: { message: 'ANTHROPIC_API_KEY not configured.' } });
-  const { pages, clientName = '', wpUrl = '' } = req.body || {};
+  const { pages, clientName = '', wpUrl = '', profile = null } = req.body || {};
   if (!Array.isArray(pages) || !pages.length) {
     return res.status(400).json({ error: { message: 'pages array required.' } });
   }
   const MAX = 60;
   const batch = pages.slice(0, MAX);
   try {
-    const { recommendations, stopped } = await recommendSchema(batch, clientName, wpUrl);
+    const { recommendations, stopped } = await recommendSchema(batch, clientName, wpUrl, profile);
     res.json({
       recommendations,
       // Say so rather than letting the dropped pages disappear without a word
