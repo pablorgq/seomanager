@@ -2368,11 +2368,76 @@ Also state what is already on the page versus what you added, so the user can se
 Return ONLY a valid JSON array — no prose, no markdown fences, before or after. One object per input page:
 {"url":"<exact url from input>","recommendedTypes":["Service","WebPage","BreadcrumbList"],"missing":["<types the page lacks today>"],"rationale":"<2-3 sentences: why these types, what was missing, what you deliberately left out for lack of evidence>","jsonld":"<the complete JSON-LD object as a JSON-encoded string>"}`;
 
+/* Same normalisation the client uses to join a model-echoed url back to a page
+   (schemaUrlKey in public/app.js). Exact string equality drifts on a trailing
+   slash or a capital letter, and a page judged "missed" is either re-billed or
+   overwritten with an error row. */
+function urlKey(u) {
+  try {
+    const x = new URL(String(u));
+    return (x.origin + x.pathname.replace(/\/+$/, '')).toLowerCase();
+  } catch { return String(u || '').replace(/\/+$/, '').toLowerCase(); }
+}
+
+/* Recover the complete objects from a truncated JSON array.
+
+   When a reply is cut off, everything before the break is still valid work that
+   was generated and billed. Walking the braces recovers those objects; throwing
+   the whole response away would re-bill the same pages on the retry. */
+function salvageJsonObjects(text) {
+  const out = [];
+  let depth = 0, start = -1, inStr = false, esc = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') { inStr = true; continue; }
+    if (ch === '{') { if (depth === 0) start = i; depth++; }
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        try { out.push(JSON.parse(text.slice(start, i + 1))); } catch { /* not an object we can use */ }
+        start = -1;
+      }
+    }
+  }
+  return out;
+}
+
 async function recommendSchema(pages, clientName, wpUrl, profile) {
   const out = [];
   // A schema payload is far heavier per page than an alt-text line, so chunk it
   // rather than one-shotting the way recommendAltText does.
-  const CHUNK = 6;
+  // Three, not six. Each page's answer carries a whole @graph as a JSON-encoded
+  // string, and six of those overran the 16k reply limit — the response stopped
+  // mid-string and the whole chunk was lost to a parse error.
+  const CHUNK = 3;
+
+  const describe = (list) => list.map((p, n) => [
+    `PAGE ${n + 1}`,
+    `url: ${p.url}`,
+    `pageType: ${p.pageType || 'unknown'}`,
+    `title: ${p.title || ''}`,
+    `h1: ${p.h1 || ''}`,
+    `metaDescription: ${p.metaDesc || ''}`,
+    `existingTypes: ${(p.types || []).join(', ') || '(none)'}`,
+    `signals: ${JSON.stringify(p.signals || {})}`,
+  ].join('\n')).join('\n\n');
+
+  /* Verified business facts, when the client record carries any. Without them
+     the generator can only emit a name and a URL — not because it is timid, but
+     because it is forbidden from inventing an address or a phone number. The fix
+     for a thin Organization is true data, not a looser rule. */
+  const profileBlock = profile && Object.keys(profile).length
+    ? `\n\nVERIFIED BUSINESS PROFILE — confirmed by the account manager, not scraped. Use these values verbatim wherever the schema calls for them, and use businessType in place of a bare Organization:\n${JSON.stringify(profile, null, 2)}`
+    // Not a ban on contact facts — the page's own signals are still valid
+    // evidence, and every client without a profile yet relies on them.
+    : '\n\nNo verified business profile was supplied for this client. Build the business node from the page signals alone, exactly as the rules describe, and invent nothing beyond them.';
+  const profileFor = () => profileBlock;
   // Ten sequential 16k-token calls will outlast the platform's request timeout,
   // which throws away every chunk already generated and billed and answers the
   // caller with plain-text "upstream error". Return early with what is done;
@@ -2381,29 +2446,47 @@ async function recommendSchema(pages, clientName, wpUrl, profile) {
   const deadline = Date.now() + 100000;
   let stopped = 0;
 
+  /* One request for one small batch. Used to retry what a truncated reply left
+     behind — deliberately not recursive, so a pathological page cannot fan out. */
+  async function generateChunk(sub) {
+    const subDesc = describe(sub);
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-5',
+        max_tokens: 16000,
+        system: SCHEMA_SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: `Client: ${clientName || '(unknown)'}
+Site: ${wpUrl || ''}${profileFor()}
+
+Generate advanced JSON-LD for these ${sub.length} pages:
+
+${subDesc}` }],
+      }),
+    });
+    const d = await r.json();
+    if (!r.ok || d?.error) return sub.map(p => ({ url: p.url, error: d?.error?.message || `Anthropic returned ${r.status}` }));
+    let t = (d.content?.find(b => b.type === 'text')?.text || '[]')
+      .replace(/^\s*```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+    let arr = null;
+    try { arr = JSON.parse(t); } catch { /* fall through to salvage */ }
+    if (Array.isArray(arr)) return arr;
+    const got = salvageJsonObjects(t);
+    const have = new Set(got.map(x => urlKey(x?.url)).filter(Boolean));
+    return [...got, ...sub.filter(p => !have.has(urlKey(p.url))).map(p => ({
+      url: p.url,
+      error: d.stop_reason === 'max_tokens'
+        ? 'The model could not fit this page into one reply.'
+        : 'Could not read the model output for this page.',
+    }))];
+  }
+
   for (let i = 0; i < pages.length; i += CHUNK) {
     const batch = pages.slice(i, i + CHUNK);
+    let salvagedRows = [];
     if (Date.now() > deadline) { stopped += batch.length; continue; }
-    const desc = batch.map((p, n) => [
-      `PAGE ${n + 1}`,
-      `url: ${p.url}`,
-      `pageType: ${p.pageType || 'unknown'}`,
-      `title: ${p.title || ''}`,
-      `h1: ${p.h1 || ''}`,
-      `metaDescription: ${p.metaDesc || ''}`,
-      `existingTypes: ${(p.types || []).join(', ') || '(none)'}`,
-      `signals: ${JSON.stringify(p.signals || {})}`,
-    ].join('\n')).join('\n\n');
-
-    /* Verified business facts, when the client record carries any. Without them
-       the generator can only emit a name and a URL — not because it is timid,
-       but because it is forbidden from inventing an address or a phone number.
-       The fix for a thin Organization is true data, not a looser rule. */
-    const profileBlock = profile && Object.keys(profile).length
-      ? `\n\nVERIFIED BUSINESS PROFILE — confirmed by the account manager, not scraped. Use these values verbatim wherever the schema calls for them, and use businessType in place of a bare Organization:\n${JSON.stringify(profile, null, 2)}`
-      // Not a ban on contact facts — the page's own signals are still valid
-      // evidence, and every client without a profile yet relies on them.
-      : '\n\nNo verified business profile was supplied for this client. Build the business node from the page signals alone, exactly as the rules describe, and invent nothing beyond them.';
+    const desc = describe(batch);
 
     // One bad chunk must not discard the chunks already generated (and billed),
     // so every failure mode degrades to per-page error rows.
@@ -2425,11 +2508,52 @@ async function recommendSchema(pages, clientName, wpUrl, profile) {
 
       let text = data.content?.find(b => b.type === 'text')?.text || '[]';
       text = text.replace(/^\s*```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
-      const parsed = JSON.parse(text);
-      if (!Array.isArray(parsed)) throw new Error('Model did not return an array');
-      out.push(...parsed);
+
+      let parsed = null;
+      try { parsed = JSON.parse(text); } catch { /* handled below */ }
+      if (Array.isArray(parsed)) { out.push(...parsed); continue; }
+
+      /* Not parseable. The usual reason is that the reply hit max_tokens and
+         stopped mid-string — several full @graph blocks in one response is a
+         lot of output. stop_reason says so outright, which is worth checking
+         before reporting a raw "Unterminated string in JSON" that names neither
+         the cause nor a way forward. */
+      const truncated = data.stop_reason === 'max_tokens';
+
+      /* Held locally, not pushed straight to `out`. If the retry below throws,
+         the catch must not emit error rows for pages already recovered here —
+         the client merges last-write-wins, so those rows would overwrite the
+         very blocks salvage exists to keep. */
+      salvagedRows = salvageJsonObjects(text);
+      const done = new Set(salvagedRows.map(x => urlKey(x?.url)).filter(Boolean));
+
+      // Retry only what did not come back, in smaller pieces so the reply fits.
+      // Needs real headroom, not merely an unexpired clock: a fresh 16k call
+      // started at the last moment runs well past the deadline, and overrunning
+      // the platform timeout discards everything generated so far.
+      const missed = batch.filter(p => !done.has(urlKey(p.url)));
+      if (truncated && missed.length && deadline - Date.now() > 30000) {
+        const half = Math.max(1, Math.ceil(missed.length / 2));
+        for (let k = 0; k < missed.length; k += half) {
+          if (deadline - Date.now() < 30000) { stopped += missed.length - k; break; }
+          salvagedRows.push(...await generateChunk(missed.slice(k, k + half)));
+        }
+      } else if (missed.length) {
+        const why = truncated
+          ? "The model's reply was cut off before this page — too many pages in one request."
+          : 'Could not read the model output for this page.';
+        for (const p of missed) salvagedRows.push({ url: p.url, error: why });
+      }
+      out.push(...salvagedRows);
+      salvagedRows = [];
     } catch (e) {
-      for (const p of batch) out.push({ url: p.url, error: e.message || 'Generation failed' });
+      // Keep whatever was already recovered; only the rest becomes error rows
+      out.push(...salvagedRows);
+      const have = new Set(salvagedRows.map(x => urlKey(x?.url)).filter(Boolean));
+      for (const p of batch) {
+        if (!have.has(urlKey(p.url))) out.push({ url: p.url, error: e.message || 'Generation failed' });
+      }
+      salvagedRows = [];
     }
   }
   return { recommendations: out, stopped };
