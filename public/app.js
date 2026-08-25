@@ -10,17 +10,21 @@ const OPENAI_TEXT_URL  = '/api/openai/text';
 const OPENAI_IMAGE_URL = '/api/openai/images';
 const IMAGE_MODELS     = ['gpt-image-1', 'dall-e-3', 'dall-e-2'];
 
+/* Camera angles, not a subject. These described a clinic — practitioners,
+   patients, treatment rooms, medical devices — so every generated set drifted
+   into one no matter what the topic said. A framing should say where the camera
+   is; the topic says what it is pointed at. */
 const FRAMING_VARIATIONS = [
-  'wide establishing shot of the professional environment',
-  'close-up detail of the equipment and tools used',
-  'medium shot showing the professional consultation',
-  'over-the-shoulder perspective of the practitioner at work',
-  'wide shot of the clean modern clinical space',
-  'close-up of professional hands performing the treatment',
-  'candid moment of patient and practitioner discussing results',
-  'product flatlay of professional tools and equipment',
-  'environmental shot of the welcoming reception area',
-  'detail shot of modern medical technology and devices'
+  'wide establishing shot of the whole scene',
+  'close-up detail of the key object',
+  'medium shot showing the activity taking place',
+  'over-the-shoulder perspective of the work being done',
+  'wide shot of the clean, modern space',
+  'close-up of hands at work',
+  'candid moment of people in conversation',
+  'overhead flatlay of the relevant tools and equipment',
+  'environmental shot of the surrounding setting',
+  'detail shot of the equipment involved',
 ];
 
 const STYLE_MAP = {
@@ -39,20 +43,31 @@ const STYLE_MAP = {
   lineart:    'minimal line-art illustration, single-weight strokes, generous white space, monochrome, no text'
 };
 
+/* Softens wording that image models routinely refuse, without deciding what the
+   picture is about. These began as an aesthetics client's vocabulary and were
+   rewritten into clinical language — which then leaked into every unrelated
+   topic, so a hot tub article came back as a doctor's office. Substitutions are
+   neutral now: they defuse a refusal, they do not pick a setting. */
 const SANITIZE_MAP = [
-  [/body contouring/gi, 'non-invasive body sculpting medical treatment'],
-  [/liposuction/gi,     'medical body contouring procedure'],
-  [/lip filler/gi,      'non-surgical facial enhancement procedure'],
-  [/\bbutt\b/gi,        'posterior treatment area'],
-  [/\bbreast\b/gi,      'chest area medical treatment'],
-  [/\bbikini\b/gi,      'lower treatment area'],
+  [/body contouring/gi, 'body sculpting treatment'],
+  [/liposuction/gi,     'body sculpting procedure'],
+  [/lip filler/gi,      'non-surgical facial enhancement'],
+  [/\bbutt\b/gi,        'lower body'],
+  [/\bbreast\b/gi,      'chest'],
+  [/\bbikini\b/gi,       'swimwear'],
   [/\bnude\b/gi,        'natural'],
   [/sensual/gi,         'elegant'],
-  [/\bsexy\b/gi,        'confident professional'],
-  [/intimate/gi,        'personalized medical']
+  [/\bsexy\b/gi,        'confident'],
+  [/intimate/gi,        'personal'],
 ];
 
-const SAFETY_PREFIX = 'Editorial healthcare photography for a professional medical blog. Fully clothed patients in clinical attire, licensed medical professionals in uniforms, sterile modern medical facility. ';
+/* A refusal guard, not a brief. It used to name a medical blog, clinical attire
+   and a sterile facility, so every image arrived in a clinic whatever the topic
+   said — the Article Image and service-page tools each opted out of it rather
+   than fix it. What remains is the part that actually prevents refusals; the
+   subject and setting come from the topic, and Clinical is a Visual Style for
+   anyone who does want a medical look. */
+const SAFETY_PREFIX = 'Everyone shown is fully clothed and dressed appropriately for the setting. ';
 
 /* ── STATE ── */
 let apiKey = null;
@@ -747,11 +762,13 @@ async function handleGenerateImages() {
 
   // Generate all images (parallel, capped at 3 concurrent)
   const sanitized = sanitizeTopic(topic);
+  // The topic is free text and usually ends in a full stop already
+  const body = sanitized.replace(/[.\s]+$/, '');
   const stylePrompt = STYLE_MAP[style] || STYLE_MAP.realistic;
 
   const tasks = cards.map((card, i) => async () => {
     const framing = FRAMING_VARIATIONS[i % FRAMING_VARIATIONS.length];
-    const prompt  = `${SAFETY_PREFIX}${sanitized}. ${framing}. ${stylePrompt}.`;
+    const prompt  = `${SAFETY_PREFIX}${body}. ${framing}. ${stylePrompt}.`;
     const imgDiv  = card.querySelector('.ig-card-img');
     const actions = card.querySelector('.ig-card-actions');
 
@@ -1763,9 +1780,9 @@ function agImageFilename(keyword, locName) {
   return `${base}.jpg`;
 }
 
-/* Build the image prompt from the page's topic, style and negatives. Note this
-   does NOT use SAFETY_PREFIX (that is medical-specific) — service pages want a
-   generic realistic-workplace scene. */
+/* Build the image prompt from the page's topic, style and negatives. Leaves out
+   SAFETY_PREFIX because a service-page scene is described entirely by its own
+   keyword and location; the prefix is a refusal guard for free-text topics. */
 function agBuildImagePrompt({ keyword, locName, style, negative, extra }) {
   const stylePrompt = STYLE_MAP[style] || STYLE_MAP.realistic;
   const topic = sanitizeTopic(keyword || 'local service');
@@ -10444,8 +10461,8 @@ async function aigWriteBrief() {
   }
 }
 
-/* Compose the final image prompt. Deliberately no SAFETY_PREFIX — that one is
-   medical-specific (see agBuildImagePrompt). */
+/* Compose the final image prompt. No SAFETY_PREFIX: the brief is written from
+   the article itself, so it already says what the picture shows. */
 function aigBuildPrompt({ brief, style, extra, negative, framing }) {
   const stylePrompt = STYLE_MAP[style] || STYLE_MAP.realistic;
   let p = `${sanitizeTopic(String(brief || '').trim())} ${stylePrompt}.`;
