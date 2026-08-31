@@ -1771,6 +1771,68 @@ function schemaPlainText(html) {
     .trim();
 }
 
+/* Which system is emitting the schema, from markup fingerprints.
+
+   Two active generators on one page is the most common cause of broken
+   structured data — duplicate @ids, conflicting @types, or one silently
+   suppressing the other. Naming them is the difference between "add a
+   BreadcrumbList" and "you have two plugins fighting; fix that first".
+
+   Matched only inside attributes and generator meta, never page prose: an
+   article about Yoast should not make the site look like it runs Yoast, and a
+   theme by Brainstorm Force is not a schema plugin. A false positive here
+   raises a red banner and tells the generator to hold back, so the cost of
+   guessing wrong is higher than the cost of missing one. */
+function detectSchemaGenerators(html) {
+  const doc = String(html || '');
+  // class/id/src/href values, plus <meta name="generator" content="…">
+  const surfaces = [
+    ...doc.matchAll(/\b(?:class|id|src|href)\s*=\s*["']([^"']{0,300})["']/gi),
+    ...doc.matchAll(/<meta[^>]+name=["']generator["'][^>]+content=["']([^"']*)["']/gi),
+    // The collector's reduced HTML carries the attribute values it found, since
+    // the reduction strips the attributes themselves
+    ...doc.matchAll(/<meta[^>]+name=["']llamaseo-generators["'][^>]+content=["']([^"']*)["']/gi),
+  ].map(m => m[1]).join(' ');
+
+  const found = [];
+  const seen = (name) => { if (!found.includes(name)) found.push(name); };
+
+  if (/rank[-_]?math/i.test(surfaces))                    seen('Rank Math');
+  if (/\byoast\b|wpseo/i.test(surfaces))                  seen('Yoast SEO');
+  if (/saswp|schema-and-structured-data-for-wp/i.test(surfaces)) seen('Schema & Structured Data for WP');
+  if (/aioseo|all-in-one-seo/i.test(surfaces))            seen('All in One SEO');
+  if (/seopress/i.test(surfaces))                         seen('SEOPress');
+  if (/squirrly/i.test(surfaces))                         seen('Squirrly');
+  if (/wp-schema-pro|bsf-schema/i.test(surfaces))         seen('Schema Pro');
+  if (/slim-seo/i.test(surfaces))                         seen('Slim SEO');
+  return found;
+}
+
+/* Every @id already on the page with the @type it carries. These are the
+   anchors a new block must reference rather than redefine — restating the
+   business on a service page is how you end up with two Organizations.
+
+   A graph mentions an @id before it defines it: Yoast's WebPage node points at
+   isPartOf/about/breadcrumb first, and those bare references carry no @type. So
+   a later typed definition upgrades an entry rather than being discarded —
+   otherwise every id reaches the model blank and there is nothing to reference. */
+function collectSchemaIds(node, out = [], depth = 0) {
+  if (!node || typeof node !== 'object' || depth > 12) return out;
+  if (Array.isArray(node)) { node.forEach(n => collectSchemaIds(n, out, depth + 1)); return out; }
+  if (typeof node['@id'] === 'string') {
+    const t = node['@type'];
+    const type = Array.isArray(t) ? t.filter(x => typeof x === 'string').join('/') : (typeof t === 'string' ? t : '');
+    const existing = out.find(x => x.id === node['@id']);
+    if (!existing) out.push({ id: node['@id'], type });
+    else if (!existing.type && type) existing.type = type;
+  }
+  for (const [k, v] of Object.entries(node)) {
+    if (k === '@id' || !v || typeof v !== 'object') continue;
+    collectSchemaIds(v, out, depth + 1);
+  }
+  return out;
+}
+
 function parsePageSchema(html, pageUrl) {
   const blocks      = [];
   const parseErrors = [];
@@ -1780,6 +1842,7 @@ function parsePageSchema(html, pageUrl) {
   // from the presence of an Organization node — Yoast emits one as `publisher`
   // on every post, which would report an author-less BlogPosting as complete.
   const props = { author: false, publisher: false, breadcrumbItems: false };
+  const ids = [];        // existing @id anchors — what a new block must reference, not redefine
   const walkProps = (n, d = 0) => {
     if (!n || typeof n !== 'object' || d > 12) return;
     if (Array.isArray(n)) { n.forEach(x => walkProps(x, d + 1)); return; }
@@ -1807,6 +1870,7 @@ function parsePageSchema(html, pageUrl) {
       const parsed = JSON.parse(raw);
       collectSchemaTypes(parsed, types);
       walkProps(parsed);
+      collectSchemaIds(parsed, ids);
       blocks.push(parsed);
     } catch (e) {
       // A malformed block is a finding, not something to swallow — Google drops
@@ -1827,6 +1891,10 @@ function parsePageSchema(html, pageUrl) {
     ogType:    attr(/<meta[^>]+property=["']og:type["'][^>]+content=["']([^"']*)["']/i),
     types:     [...types],
     props,
+    // Existing anchors and who emitted them — Phase 1 of the audit: know what is
+    // already live before writing anything new.
+    ids:        ids.slice(0, 40),
+    generators: detectSchemaGenerators(html),
     blocks,
     parseErrors,
     signals:   extractSchemaSignals(html, text),
@@ -2334,39 +2402,52 @@ app.post('/api/schema/scan', apiGuard, async (req, res) => {
   }
 });
 
-const SCHEMA_SYSTEM_PROMPT = `You are a technical SEO specialist writing advanced schema.org JSON-LD for a client's website.
+const SCHEMA_SYSTEM_PROMPT = `You are a technical SEO specialist writing schema.org JSON-LD for a client's website.
 
-For each page you are given, output ONE complete JSON-LD block using a single @graph that a developer can paste into the page's <head> with no edits.
+For each page you are given, output ONE complete JSON-LD block using a single @graph that a developer can paste into that page's <head> with no edits.
 
-STRUCTURE — this is what makes it "advanced":
-- One "@context":"https://schema.org" and one "@graph" array. Never emit multiple disconnected blocks.
-- Give every node a stable "@id" anchored to the page or site: "{origin}/#organization", "{origin}/#website", "{url}#webpage", "{url}#breadcrumb", "{url}#service", "{url}#article", "{url}#faq".
-- Cross-reference nodes by {"@id":"..."} instead of repeating a nested copy of the same entity. A WebPage links to its site via "isPartOf", to the org via "publisher"/"provider", to breadcrumbs via "breadcrumb", and to the primary entity via "mainEntityOfPage"/"about".
-- Add "sameAs", address, telephone, openingHours, priceRange, areaServed and logo from the VERIFIED BUSINESS PROFILE when one is supplied. A business node carrying only a name and a url is a wasted node — fill it with everything the profile confirms.
-- Include BreadcrumbList built from the URL path segments, with readable names.
+WORK FROM WHAT IS ALREADY LIVE
+Each page arrives with existingTypes, existingIds (every @id already on the page and its @type) and generators (which system emits the markup).
+- Reference an existing @id, never redefine it. If existingIds already contains the business entity, a Service node's "provider" is {"@id":"<that exact id>"} — do not restate the name, address or phone alongside it. Two definitions of one entity is worse than none.
+- Reuse the site's existing @id conventions when they exist. Only fall back to "{origin}/#organization", "{origin}/#website", "{url}#webpage", "{url}#breadcrumb", "{url}#service", "{url}#article", "{url}#faq" when the page has no anchors of its own.
+- If generators lists more than one system, say so first in the rationale and keep the block minimal. Two active generators is the most common cause of broken structured data, and adding a third source makes it worse. Recommend settling on one before anything is pasted.
+
+STRUCTURE
+- One "@context":"https://schema.org" and one "@graph". Never emit multiple disconnected blocks.
+- Cross-reference by {"@id":"..."} rather than nesting a second copy of the same entity. A WebPage links to its site via "isPartOf", to the business via "publisher"/"provider", to breadcrumbs via "breadcrumb", and to the page's subject via "mainEntityOfPage"/"about".
+- Fill the business node from the VERIFIED BUSINESS PROFILE when one is supplied — sameAs, address, telephone, openingHours, priceRange, areaServed, logo. A business node carrying only a name and a url is a wasted node.
+- BreadcrumbList must follow the real URL structure, not an invented hierarchy. A flat URL is Home → Page; do not insert a category level the path does not contain.
 
 TYPE SELECTION by page type:
-- homepage → the business node + WebSite + WebPage + BreadcrumbList. Use the profile's businessType when one is given (a specific type such as Plumber or Dentist always beats a bare Organization); with no profile, use LocalBusiness when the page shows it serves a physical area, otherwise Organization. There must always be a business node, because the other page types reference it by @id.
-- service  → Service + WebPage + BreadcrumbList, provider referencing the Organization/LocalBusiness node; add FAQPage only when the page really has Q&A
-- article  → Article or BlogPosting + WebPage + BreadcrumbList + author node
+- homepage → business node + WebSite + WebPage + BreadcrumbList. Use the profile's businessType when given — the most specific type that still covers everything the business does. Never force a narrow type that excludes real parts of it. With no profile, use LocalBusiness when the page shows it serves a physical area, otherwise Organization. There must always be a business node, because other pages reference it by @id.
+- service  → Service (or Product) + WebPage + BreadcrumbList, provider referencing the business node
+- article  → Article or BlogPosting + WebPage + BreadcrumbList + author
 - contact  → LocalBusiness + ContactPoint + WebPage + BreadcrumbList
+- utility  → plain WebPage + BreadcrumbList only. Privacy policies, terms and thank-you pages are pages, not offerings; do not force a Service or a business node onto them.
 
 NEVER INVENT FACTS. This is the most important rule:
-- Each signal ships the evidence next to it — signals.phone, signals.address, signals.hours, signals.rating, signals.price, signals.date, signals.author, signals.questions. Use those exact values verbatim. Never substitute a placeholder, an example, or a value you consider more plausible.
-- Only emit aggregateRating / ratingValue when signals.rating is a non-empty string, and use that number. Never invent reviewCount — omit it.
-- Only emit price / priceRange / Offer when signals.price is non-empty or the profile gives priceRange, and use that value.
-- Address: when the profile supplies an address object, emit a full PostalAddress using its parts exactly as given. Otherwise emit one only if signals.address is non-empty, and then put that raw string in streetAddress rather than splitting it into city/region/postcode you cannot verify.
-- Only emit openingHours when the profile supplies openingHours or signals.hours is non-empty. The profile gives an array — emit it as an array.
-- Only emit FAQPage when signals.questions is non-empty, and use those exact questions. Write each answer only from the page's title, h1 and meta description; if you cannot answer a question from those, drop that question.
+- Each signal ships its evidence — signals.phone, signals.address, signals.hours, signals.rating, signals.price, signals.date, signals.author, signals.questions. Use those values verbatim. Never substitute a placeholder, an example, or a value you consider more plausible.
+- Only emit aggregateRating / ratingValue when signals.rating is non-empty, and use that number. Never invent reviewCount — omit it. A rating must describe genuine reviews of this exact business.
+- Only emit price / priceRange / Offer when signals.price is non-empty or the profile gives priceRange. Never fabricate pricing.
+- Address: when the profile supplies an address object, emit a full PostalAddress using its parts exactly. Otherwise emit one only if signals.address is non-empty, and put that raw string in streetAddress rather than splitting it into city/region/postcode you cannot verify.
+- Only emit openingHours when the profile supplies it or signals.hours is non-empty. The profile gives an array — emit an array.
+- Only emit FAQPage when signals.questions is non-empty, and use those exact questions. FAQPage requires Q&A a visitor can actually see on that page; a template that looks FAQ-shaped is not enough. Answer only from the page's title, h1 and meta description, and drop any question you cannot answer from those.
 - Only emit HowTo when signals.hasSteps is true.
-- Only emit datePublished / dateModified when signals.date is non-empty, and author when signals.author is non-empty (use that name).
-- Leave out telephone, email, geo coordinates, images, logos, social profiles and sameAs unless the value appears in the page signals OR in the verified business profile. Never guess one.
-- If a fact is not supported by the page title, h1, meta description or a signal value, leave the property out entirely. An omitted property is correct; a fabricated one is a Google penalty.
+- Only emit datePublished / dateModified when signals.date is non-empty, and author when signals.author is non-empty.
+- Only add "image" when the page has a genuine, relevant image. Never point it at a logo, badge or generic icon to fill the slot.
+- Leave out telephone, email, geo, images, logos and sameAs unless the value appears in the page signals or the verified profile. Never guess one.
+- If a fact is not supported by the title, h1, meta description, a signal or the profile, leave the property out. An omitted property is correct; a fabricated one is a penalty.
 
-Also state what is already on the page versus what you added, so the user can see the gap.
+FLAG RATHER THAN FIX
+Some things need a human. Put them in the rationale instead of guessing:
+- A telephone that looks like call tracking or dynamic insertion rather than the real business line — schema must carry the number on the Google Business Profile, so say which you used and that it needs confirming.
+- A business type that does not obviously fit.
+- Anything you left out because the evidence was missing.
+
+Say what was already on the page versus what you added, and warn when a block is only valid on this page — a fragment that references a business node by @id merges correctly only where that node is actually rendered.
 
 Return ONLY a valid JSON array — no prose, no markdown fences, before or after. One object per input page:
-{"url":"<exact url from input>","recommendedTypes":["Service","WebPage","BreadcrumbList"],"missing":["<types the page lacks today>"],"rationale":"<2-3 sentences: why these types, what was missing, what you deliberately left out for lack of evidence>","jsonld":"<the complete JSON-LD object as a JSON-encoded string>"}`;
+{"url":"<exact url from input>","recommendedTypes":["Service","WebPage","BreadcrumbList"],"missing":["<types the page lacks today>"],"reusedIds":["<existing @ids you referenced rather than redefined>"],"flags":["<anything a human must confirm, empty if none>"],"rationale":"<2-3 sentences: why these types, what was missing, what you deliberately left out for lack of evidence>","jsonld":"<the complete JSON-LD object as a JSON-encoded string>"}`;
 
 /* Same normalisation the client uses to join a model-echoed url back to a page
    (schemaUrlKey in public/app.js). Exact string equality drifts on a trailing
@@ -2425,6 +2506,8 @@ async function recommendSchema(pages, clientName, wpUrl, profile) {
     `h1: ${p.h1 || ''}`,
     `metaDescription: ${p.metaDesc || ''}`,
     `existingTypes: ${(p.types || []).join(', ') || '(none)'}`,
+    `existingIds: ${(p.ids || []).map(x => `${x.id}${x.type ? ` (${x.type})` : ''}`).join(' | ') || '(none)'}`,
+    `generators: ${(p.generators || []).join(', ') || '(unknown)'}`,
     `signals: ${JSON.stringify(p.signals || {})}`,
   ].join('\n')).join('\n\n');
 

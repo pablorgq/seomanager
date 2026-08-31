@@ -102,6 +102,21 @@ window.__llamaseoCollectSchema = async function ({ download = false } = {}) {
       /<meta[^>]+property=["']og:type["'][^>]*>/i,
     ]) { const m = (head || html).match(rx); if (m) keep.push(m[0]); }
 
+    /* Keep the fingerprints that say which plugin emits the schema. The server
+       reads them from class/src/href attributes and the generator meta, all of
+       which this reduction otherwise strips — so an imported report used to
+       arrive with the generator unknown and the two-plugins-fighting check
+       silently disabled. Attributes only, never page prose. */
+    const marks = new Set();
+    for (const m of html.matchAll(/(?:class|id|src|href)\s*=\s*["']([^"']{0,300})["']/gi)) {
+      if (/rank[-_]?math|yoast|wpseo|saswp|aioseo|all-in-one-seo|seopress|squirrly|wp-schema-pro|bsf-schema|slim-seo/i.test(m[1])) {
+        marks.add(m[1].slice(0, 120));
+        if (marks.size >= 12) break;
+      }
+    }
+    for (const m of html.matchAll(/<meta[^>]+name=["']generator["'][^>]*>/gi)) keep.push(m[0]);
+    if (marks.size) keep.push(`<meta name="llamaseo-generators" content="${[...marks].join(' ').replace(/"/g, '')}">`);
+
     const body = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i)?.[1] || html;
     const h1   = body.match(/<h1[^>]*>[\s\S]*?<\/h1>/i)?.[0] || '';
     // Headings carry the FAQ and HowTo signals, so keep them as markup

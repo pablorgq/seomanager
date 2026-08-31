@@ -9471,6 +9471,12 @@ const SCHEMA_EXPECTED = {
     { label: 'WebPage',        any: ['WebPage', 'ItemPage'] },
     { label: 'BreadcrumbList', any: ['BreadcrumbList'] },
   ],
+  // Privacy policies and terms are pages, not offerings. Demanding a Service
+  // node here produced a permanent gap nobody should ever close.
+  utility: [
+    { label: 'WebPage',        any: ['WebPage', 'ItemPage', 'CollectionPage'] },
+    { label: 'BreadcrumbList', any: ['BreadcrumbList'] },
+  ],
   contact: [
     { label: 'LocalBusiness',  any: ['LocalBusiness', 'Organization', 'ProfessionalService'] },
     { label: 'ContactPoint',   any: ['ContactPoint', 'ContactPage'] },
@@ -9479,7 +9485,7 @@ const SCHEMA_EXPECTED = {
   ],
 };
 
-const SCHEMA_TYPE_LABELS = { home: 'Homepage', service: 'Service', article: 'Article', contact: 'Contact' };
+const SCHEMA_TYPE_LABELS = { home: 'Homepage', service: 'Service', article: 'Article', contact: 'Contact', utility: 'Utility' };
 
 /* Infer the page type from the URL shape, falling back to crawl signals. Keeps
    the same service/article split the Article Generator uses (AG_PAGE_TYPES), so
@@ -9497,6 +9503,15 @@ function schemaPageType(page) {
 
   if (/contact|get-in-touch|book|appointment/.test(path)) return 'contact';
   if (/\/(blog|news|article|articles|post|posts|guide|guides|resources)\//.test(path + '/')) return 'article';
+
+  /* Legal and housekeeping pages. Matched against the last path segment as a
+     whole, not anywhere in the URL: a substring test made /conditions/back-pain
+     a utility page and /keyword-research one too, and both then owed nothing
+     but a WebPage. Runs after the article rule so /blog/cookie-policy stays an
+     article. */
+  const slug = path.split('/').filter(Boolean).pop() || '';
+  const UTILITY_SLUGS = /^(privacy(-policy)?|terms(-of-(service|use))?|terms-and-conditions|disclaimer|accessibility(-statement)?|cookie(-policy)?|cookies|sitemap|thank-you|thanks|404|not-found|search|legal|refund-policy|shipping-policy)$/;
+  if (UTILITY_SLUGS.test(slug)) return 'utility';
   const s = page.signals || {};
   if (s.hasDate && s.hasAuthor) return 'article';
   return 'service';
@@ -9553,7 +9568,9 @@ async function schemaLoadStore() {
   // lives here. Backfill on load so every path ends up with a page type — an
   // "unknown" reaches the generator prompt and degrades a paid call.
   for (const entry of Object.values(schemaStore)) {
-    for (const p of entry?.pages || []) if (!p.pageType) p.pageType = schemaPageType(p);
+    // Always recompute: the rules change with the app, and a scan stored before
+    // a rule was added would otherwise keep its stale type until a full re-scan.
+    for (const p of entry?.pages || []) p.pageType = schemaPageType(p);
   }
 }
 
@@ -9794,6 +9811,7 @@ async function schemaGenerate() {
         pages: pending.map(p => ({
           url: p.url, pageType: p.pageType, title: p.title, h1: p.h1,
           metaDesc: p.metaDesc, types: p.types, signals: p.signals,
+          ids: p.ids, generators: p.generators,
         })),
         clientName: c?.name || '',
         wpUrl:      c?.wpUrl || '',
@@ -9965,6 +9983,8 @@ function schemaExportXlsx() {
     'Recommended Types': schemaCell((rec.recommendedTypes || []).join(', ')),
     'Missing Before':    schemaCell((rec.missing || ev.missing).join(', ')),
     'Why':               schemaCell(rec.rationale || rec.error || ''),
+    'Needs Confirming':  schemaCell((rec.flags || []).join(' | ')),
+    'Reused @ids':       schemaCell((rec.reusedIds || []).join(' | ')),
     'JSON-LD':           schemaCell(schemaPrettyJsonld(rec.jsonld)),
   }));
 
@@ -10057,6 +10077,19 @@ function schemaRenderButtons() {
   if (scr) scr.disabled = schemaState.busy;
 }
 
+/* Which systems are emitting schema across the site, and on how many pages.
+
+   Two active generators is the most common cause of broken structured data —
+   duplicate @ids, conflicting @types, or one silently suppressing the other.
+   That is worth saying before anyone pastes a third source into the page. */
+function schemaGeneratorSummary(pages) {
+  const counts = new Map();
+  for (const p of pages || []) {
+    for (const g of p.generators || []) counts.set(g, (counts.get(g) || 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count }));
+}
+
 /* Match on everything visible in the row, so the same box answers "where is
    /boilers" and "which pages still lack BreadcrumbList" — on a 65-page site the
    second question is asked more often than the first. */
@@ -10137,6 +10170,7 @@ function schemaAdvancedHtml(rows) {
           </span>
           <span class="log-pill ${SCHEMA_STATUS_META[ev.status].cls}">${escHtml(SCHEMA_STATUS_META[ev.status].label)}</span>
           ${stale ? '<span class="log-pill" title="Written before the latest crawl — regenerate to match current page content">stale</span>' : ''}
+          ${(rec.flags || []).length ? `<span class="log-pill wk-status-progress" title="${escHtml(rec.flags.join(' · '))}">${rec.flags.length} to confirm</span>` : ''}
           ${block ? `<button class="btn-sm sch-copy-btn sch-copy-inline" data-url="${escHtml(p.url)}">Copy block</button>` : ''}
         </div>
         <div class="wk-opg-accordion" id="sch-acc-${i}">
@@ -10146,6 +10180,13 @@ function schemaAdvancedHtml(rows) {
               ${(rec.recommendedTypes || []).map(t => `<span class="wk-opg-badge wk-opg-badge-active">${escHtml(t)}</span>`).join('')}
             </div>
             <div class="wk-opg-desc" style="font-style:normal">${escHtml(rec.rationale || rec.error || '')}</div>
+            ${(rec.flags || []).length ? `
+              <div class="sch-flags">
+                <span class="sch-flags-title">Needs your confirmation</span>
+                <ul>${rec.flags.map(f => `<li>${escHtml(f)}</li>`).join('')}</ul>
+              </div>` : ''}
+            ${(rec.reusedIds || []).length ? `
+              <div class="wk-opg-meta">Referenced existing: ${escHtml(rec.reusedIds.join(', '))}</div>` : ''}
             ${block ? `
               <div class="wk-opg-row">
                 <button class="btn-sm sch-copy-btn" data-url="${escHtml(p.url)}">Copy block</button>
@@ -10210,6 +10251,16 @@ function schemaRender() {
                value="${escHtml(schemaState.filter)}">
         <span id="sch-filter-count" class="ah-status">${schemaFilterNote(rows)}</span>
       </div>` : ''}
+
+    ${(() => {
+      const gens = schemaGeneratorSummary(cur?.pages || []);
+      if (!gens.length) return '';
+      const list = gens.map(g => `${escHtml(g.name)} (${g.count} page${g.count === 1 ? '' : 's'})`).join(' and ');
+      return gens.length > 1
+        ? `<div class="error-banner sch-gen-warn">${gens.length} schema generators are active on this site — ${list}.
+             Duplicate @ids and conflicting types usually follow. Settle on one before pasting anything new.</div>`
+        : `<div class="ah-toolbar"><span class="wk-opg-meta">Schema generated by ${list}</span></div>`;
+    })()}
 
     <div class="gsc-stab-nav" id="sch-tab-nav">
       <button class="gsc-stab${schemaState.subtab === 'status' ? ' active' : ''}" data-schtab="status">📋 Status</button>
