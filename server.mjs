@@ -30,6 +30,10 @@ const PORT = process.env.PORT || 3000;
 const OPENAI_KEY        = process.env.OPENAI_API_KEY      || null;
 const ANTHROPIC_KEY     = process.env.ANTHROPIC_API_KEY   || null;
 const AHREFS_KEY        = process.env.AHREFS_API_KEY      || null;
+/* ClickUp personal token (pk_...). Note it goes in the Authorization header
+   raw — ClickUp rejects it with a Bearer prefix. */
+const CLICKUP_TOKEN     = process.env.CLICKUP_API_TOKEN   || null;
+const CLICKUP_BASE      = 'https://api.clickup.com/api/v2';
 /* Optional fetch proxy for client sites whose firewall challenges datacenter IPs
    (SiteGround Anti-Bot, Sucuri, Cloudflare). A URL template containing {url};
    the encoded target. Only used after a direct fetch comes back as a challenge,
@@ -231,6 +235,10 @@ const WEEKLYDATA_FILE = join(DATA_DIR, '.weeklydata.json');
 const WEEKLYDATA_DEFAULT = {
   schedule: { mon: [], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] },
   tasks: {},
+  /* Which ClickUp task each checklist row was matched to, keyed exactly like
+     `tasks`: clickup[clientId][category][itemKey] = { taskId, taskName, listName, syncedTs }.
+     Remembering the match is what makes the second click on a row a single click. */
+  clickup: {},
 };
 
 function loadWeeklyData() {
@@ -239,7 +247,8 @@ function loadWeeklyData() {
     const raw = JSON.parse(readFileSync(WEEKLYDATA_FILE, 'utf8'));
     return {
       schedule: { ...WEEKLYDATA_DEFAULT.schedule, ...(raw.schedule || {}) },
-      tasks:    raw.tasks || {},
+      tasks:    raw.tasks   || {},
+      clickup:  raw.clickup || {},
     };
   } catch (e) {
     console.warn('[weeklydata] Failed to load weekly data store:', e.message);
@@ -831,6 +840,7 @@ app.get('/api/config', (req, res) => res.json({
   hasAA:        !!AA_KEY,
   hasPop:       !!POP_KEY,
   hasAhrefs:    !!AHREFS_KEY,
+  hasClickUp:   !!CLICKUP_TOKEN,
   commit:       GIT_COMMIT,
   // Whether the JSON data files survive a redeploy. False means DATA_DIR fell
   // back to the app directory, which the platform rebuilds on every deploy —
@@ -967,11 +977,15 @@ app.get('/api/weeklydata', apiGuard, (req, res) => {
 });
 
 app.post('/api/weeklydata', apiGuard, (req, res) => {
-  const { schedule, tasks } = req.body || {};
+  const { schedule, tasks, clickup } = req.body || {};
   if (!schedule || typeof schedule !== 'object') {
     return res.status(400).json({ error: { message: 'Missing schedule in request body.' } });
   }
-  saveWeeklyData({ schedule, tasks: (tasks && typeof tasks === 'object') ? tasks : {} });
+  saveWeeklyData({
+    schedule,
+    tasks:   (tasks   && typeof tasks   === 'object') ? tasks   : {},
+    clickup: (clickup && typeof clickup === 'object') ? clickup : {},
+  });
   res.json({ ok: true });
 });
 
@@ -1177,6 +1191,140 @@ app.post('/api/indexy/extract', apiGuard, upload.fields([{ name: 'pdf', maxCount
     res.status(up.status).json(await up.json());
   } catch (e) {
     res.status(502).json({ error: { message: e.message } });
+  }
+});
+
+/* ─────────────────────────────────────────────
+   CLICKUP PROXY
+   Closes the ClickUp task behind a weekly checklist row. Work is organised one
+   ClickUp folder per client, so the client record stores a folder id and the
+   folder is the search scope for matching a row to a task.
+───────────────────────────────────────────── */
+
+/* Both listing calls fan out over several ClickUp requests (team → space →
+   folder, or folder → list → task) and ClickUp allows ~100 req/min per token,
+   so both results are cached. Folders change rarely and are held until the
+   process restarts or ?refresh=1; task lists go stale as soon as someone works
+   in ClickUp, so they get a short TTL. */
+let clickupFoldersCache = null;
+const clickupTasksCache = new Map();   // folderId → { ts, tasks }
+const CLICKUP_TASKS_TTL = 60 * 1000;
+
+async function clickupFetch(path, init = {}) {
+  const r = await fetch(`${CLICKUP_BASE}${path}`, {
+    ...init,
+    headers: {
+      // ClickUp personal tokens are sent bare — a Bearer prefix is rejected
+      'Authorization': CLICKUP_TOKEN,
+      'Content-Type':  'application/json',
+      ...(init.headers || {}),
+    },
+    signal: AbortSignal.timeout(20000),
+  });
+  const text = await r.text();
+  let body;
+  try { body = text ? JSON.parse(text) : {}; } catch { body = { err: text }; }
+  if (!r.ok) {
+    const err = new Error(body?.err || body?.error || `ClickUp ${r.status}`);
+    err.status = r.status;
+    throw err;
+  }
+  return body;
+}
+
+/* Guard shared by all three routes: without a token every one of them is a 503
+   with the same fix, and the UI hides the feature on the hasClickUp flag. */
+function clickupGuard(res) {
+  if (CLICKUP_TOKEN) return false;
+  res.status(503).json({ error: { message: 'CLICKUP_API_TOKEN is not configured on this server.' } });
+  return true;
+}
+
+/* Flat folder list for the Client Setup dropdown. */
+app.get('/api/clickup/folders', apiGuard, async (req, res) => {
+  if (clickupGuard(res)) return;
+  if (clickupFoldersCache && req.query.refresh !== '1') return res.json(clickupFoldersCache);
+  try {
+    const { teams = [] } = await clickupFetch('/team');
+    const folders = [];
+    for (const team of teams) {
+      const { spaces = [] } = await clickupFetch(`/team/${team.id}/space?archived=false`);
+      for (const space of spaces) {
+        const body = await clickupFetch(`/space/${space.id}/folder?archived=false`);
+        for (const f of (body.folders || [])) {
+          folders.push({ id: f.id, name: f.name, spaceName: space.name, teamName: team.name });
+        }
+      }
+    }
+    clickupFoldersCache = { folders };
+    res.json(clickupFoldersCache);
+  } catch (e) {
+    res.status(e.status || 502).json({ error: { message: e.message } });
+  }
+});
+
+/* Open tasks in one folder — the candidates a checklist row can be matched to. */
+app.get('/api/clickup/tasks', apiGuard, async (req, res) => {
+  if (clickupGuard(res)) return;
+  const folderId = String(req.query.folderId || '').trim();
+  if (!folderId) return res.status(400).json({ error: { message: 'folderId required' } });
+
+  const cached = clickupTasksCache.get(folderId);
+  if (cached && req.query.refresh !== '1' && Date.now() - cached.ts < CLICKUP_TASKS_TTL) {
+    return res.json({ tasks: cached.tasks });
+  }
+  try {
+    const { lists = [] } = await clickupFetch(`/folder/${folderId}/list?archived=false`);
+    const tasks = [];
+    for (const list of lists) {
+      const body = await clickupFetch(
+        `/list/${list.id}/task?archived=false&subtasks=true&include_closed=false`);
+      for (const t of (body.tasks || [])) {
+        tasks.push({
+          id: t.id, name: t.name, listName: list.name,
+          status: t.status?.status || '', url: t.url || '',
+        });
+      }
+    }
+    clickupTasksCache.set(folderId, { ts: Date.now(), tasks });
+    res.json({ tasks });
+  } catch (e) {
+    res.status(e.status || 502).json({ error: { message: e.message } });
+  }
+});
+
+/* Close one task. Lists carry their own status names ("complete", "closed",
+   "shipped"…), so the closing status is read off the task's own list rather
+   than guessed — and if the list has none, say so with the names it does have
+   instead of failing opaquely. */
+app.post('/api/clickup/complete', apiGuard, async (req, res) => {
+  if (clickupGuard(res)) return;
+  const taskId = String(req.body?.taskId || '').trim();
+  if (!taskId) return res.status(400).json({ error: { message: 'taskId required' } });
+  try {
+    const task   = await clickupFetch(`/task/${taskId}`);
+    const listId = task?.list?.id;
+    if (!listId) return res.status(502).json({ error: { message: 'ClickUp task has no list.' } });
+
+    const list     = await clickupFetch(`/list/${listId}`);
+    const statuses = list.statuses || [];
+    const closing  = statuses.find(s => s.type === 'closed')
+                  || statuses.find(s => s.type === 'done');
+    if (!closing) {
+      return res.status(409).json({ error: { message:
+        `List "${list.name}" has no done or closed status. It has: ` +
+        (statuses.map(s => s.status).join(', ') || '(none)') } });
+    }
+
+    const updated = await clickupFetch(`/task/${taskId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ status: closing.status }),
+    });
+    // The task just changed, so the cached candidate list for its folder is stale
+    if (task?.folder?.id) clickupTasksCache.delete(String(task.folder.id));
+    res.json({ ok: true, status: updated?.status?.status || closing.status, url: updated?.url || task.url || '' });
+  } catch (e) {
+    res.status(e.status || 502).json({ error: { message: e.message } });
   }
 });
 

@@ -1027,6 +1027,34 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
 .wk-status-blocked   { background: rgba(229,56,59,.1);   color: var(--red);   border-color: transparent; }
 :root[data-theme="dark"] .wk-status-progress { color: #e8a838; }
 
+/* ── CLICKUP SYNC BUTTON ── */
+.wk-cu-btn {
+  flex-shrink: 0; font-size: 10px; font-weight: 700; letter-spacing: .03em;
+  padding: 3px 7px; border-radius: 100px; cursor: pointer; line-height: 1.4;
+  border: 1px solid var(--border); background: var(--surface);
+  color: var(--text-muted); transition: color .15s, background .15s, border-color .15s;
+}
+.wk-cu-btn:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.wk-cu-off     { opacity: .4; cursor: not-allowed; }
+.wk-cu-linked  { color: var(--accent); border-color: var(--accent); }
+.wk-cu-done    { background: rgba(45,158,107,.14); color: var(--green); border-color: transparent; }
+.wk-cu-err     { background: rgba(229,56,59,.1);   color: var(--red);   border-color: transparent; }
+.wk-cu-busy    { opacity: .6; cursor: default; }
+
+/* ── CLICKUP TASK PICKER ── */
+.cu-picker-sub  { font-size: 13px; color: var(--text-secondary); margin: -8px 0 12px; }
+.cu-picker-list { max-height: 340px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+.cu-picker-item {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  width: 100%; text-align: left; cursor: pointer; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface);
+  transition: border-color .15s, background .15s;
+}
+.cu-picker-item:hover { border-color: var(--accent); background: var(--surface-2); }
+.cu-picker-name  { font-size: 13px; color: var(--text-primary); }
+.cu-picker-meta  { font-size: 11px; color: var(--text-muted); }
+.cu-picker-empty { font-size: 12px; color: var(--text-muted); font-style: italic; padding: 8px 2px; }
+
 /* ── OFF-PAGE ACCORDION (SEONEO strategy) ── */
 .wk-item-offpage { flex-direction: column; align-items: stretch; gap: 0; }
 .wk-item-main { display: flex; align-items: center; gap: 10px; }

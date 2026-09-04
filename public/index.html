@@ -876,6 +876,19 @@
       </div>
       <div id="wk-scheduleStrip" class="wk-schedule-strip"></div>
       <div id="wk-dayBody" class="wk-day-body"></div>
+
+      <!-- ClickUp task picker — shown when a row's name does not match exactly one open task -->
+      <div class="rt-modal-overlay hidden" id="cu-taskPickerModal">
+        <div class="rt-modal" style="width:560px">
+          <div class="rt-modal-title">Which ClickUp task?</div>
+          <p class="cu-picker-sub" id="cu-pickerSub"></p>
+          <input type="text" id="cu-pickerFilter" class="form-input" placeholder="Filter tasks…" style="margin-bottom:10px">
+          <div id="cu-pickerList" class="cu-picker-list"></div>
+          <div class="rt-modal-actions" style="margin-top:12px">
+            <button class="btn btn-ghost" onclick="rtCloseModal('cu-taskPickerModal')">Cancel</button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- ── AHREFS TAB ── -->
@@ -907,6 +920,12 @@
         <div class="form-group" style="margin-bottom:14px">
           <label class="form-label">Agency Analytics Campaign ID</label>
           <input type="text" id="rt-campaignId" class="form-input" placeholder="e.g. 12345">
+        </div>
+        <div id="rt-clickupFolderWrap" class="form-group hidden" style="margin-bottom:14px">
+          <label class="form-label">ClickUp Folder <span style="font-weight:400;color:var(--text-muted)">— the folder this client's tasks live in</span></label>
+          <select id="rt-clickupFolder" class="form-input" style="cursor:pointer">
+            <option value="">— loading… —</option>
+          </select>
         </div>
         <div class="form-group" style="margin-bottom:4px">
           <label class="form-label">WordPress Site URL</label>
