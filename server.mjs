@@ -1196,19 +1196,17 @@ app.post('/api/indexy/extract', apiGuard, upload.fields([{ name: 'pdf', maxCount
 
 /* ─────────────────────────────────────────────
    CLICKUP PROXY
-   Closes the ClickUp task behind a weekly checklist row. Work is organised one
-   ClickUp folder per client, so the client record stores a folder id and the
-   folder is the search scope for matching a row to a task.
+   Adds a ClickUp task for the weekly checklist row you just finished, already
+   marked done. Work is organised one ClickUp *list* per client — set once in
+   Client Setup — so there is nothing to search for or match: every click
+   creates a fresh task straight in that list.
 ───────────────────────────────────────────── */
 
-/* Both listing calls fan out over several ClickUp requests (team → space →
-   folder, or folder → list → task) and ClickUp allows ~100 req/min per token,
-   so both results are cached. Folders change rarely and are held until the
-   process restarts or ?refresh=1; task lists go stale as soon as someone works
-   in ClickUp, so they get a short TTL. */
-let clickupFoldersCache = null;
-const clickupTasksCache = new Map();   // folderId → { ts, tasks }
-const CLICKUP_TASKS_TTL = 60 * 1000;
+/* The list crawl fans out over several ClickUp requests (team → space →
+   folder → list, plus folderless lists straight under a space) against a
+   ~100 req/min per-token budget, so it's cached until the process restarts
+   or ?refresh=1. Lists are added/renamed rarely enough that this is fine. */
+let clickupListsCache = null;
 
 async function clickupFetch(path, init = {}) {
   const r = await fetch(`${CLICKUP_BASE}${path}`, {
@@ -1232,80 +1230,57 @@ async function clickupFetch(path, init = {}) {
   return body;
 }
 
-/* Guard shared by all three routes: without a token every one of them is a 503
-   with the same fix, and the UI hides the feature on the hasClickUp flag. */
+/* Guard shared by both routes: without a token each is a 503 with the same
+   fix, and the UI hides the feature on the hasClickUp flag. */
 function clickupGuard(res) {
   if (CLICKUP_TOKEN) return false;
   res.status(503).json({ error: { message: 'CLICKUP_API_TOKEN is not configured on this server.' } });
   return true;
 }
 
-/* Flat folder list for the Client Setup dropdown. */
-app.get('/api/clickup/folders', apiGuard, async (req, res) => {
+/* Every list in the workspace, for the Client Setup "ClickUp List" dropdown.
+   Lists can sit directly under a Space ("folderless") or inside a Folder —
+   ClickUp exposes those as two different endpoints, so both are walked. */
+app.get('/api/clickup/lists', apiGuard, async (req, res) => {
   if (clickupGuard(res)) return;
-  if (clickupFoldersCache && req.query.refresh !== '1') return res.json(clickupFoldersCache);
+  if (clickupListsCache && req.query.refresh !== '1') return res.json(clickupListsCache);
   try {
     const { teams = [] } = await clickupFetch('/team');
-    const folders = [];
+    const lists = [];
     for (const team of teams) {
       const { spaces = [] } = await clickupFetch(`/team/${team.id}/space?archived=false`);
       for (const space of spaces) {
-        const body = await clickupFetch(`/space/${space.id}/folder?archived=false`);
-        for (const f of (body.folders || [])) {
-          folders.push({ id: f.id, name: f.name, spaceName: space.name, teamName: team.name });
+        const folderless = await clickupFetch(`/space/${space.id}/list?archived=false`);
+        for (const l of (folderless.lists || [])) {
+          lists.push({ id: l.id, name: l.name, path: `${space.name} / ${l.name}` });
+        }
+        const { folders = [] } = await clickupFetch(`/space/${space.id}/folder?archived=false`);
+        for (const folder of folders) {
+          const inFolder = await clickupFetch(`/folder/${folder.id}/list?archived=false`);
+          for (const l of (inFolder.lists || [])) {
+            lists.push({ id: l.id, name: l.name, path: `${space.name} / ${folder.name} / ${l.name}` });
+          }
         }
       }
     }
-    clickupFoldersCache = { folders };
-    res.json(clickupFoldersCache);
+    clickupListsCache = { lists };
+    res.json(clickupListsCache);
   } catch (e) {
     res.status(e.status || 502).json({ error: { message: e.message } });
   }
 });
 
-/* Open tasks in one folder — the candidates a checklist row can be matched to. */
-app.get('/api/clickup/tasks', apiGuard, async (req, res) => {
+/* Create one task, already in the list's closing status. Lists carry their
+   own status names ("complete", "closed", "shipped"…), so the closing status
+   is read off the list rather than guessed — and if it has none, say so with
+   the names it does have instead of failing opaquely. */
+app.post('/api/clickup/create-task', apiGuard, async (req, res) => {
   if (clickupGuard(res)) return;
-  const folderId = String(req.query.folderId || '').trim();
-  if (!folderId) return res.status(400).json({ error: { message: 'folderId required' } });
-
-  const cached = clickupTasksCache.get(folderId);
-  if (cached && req.query.refresh !== '1' && Date.now() - cached.ts < CLICKUP_TASKS_TTL) {
-    return res.json({ tasks: cached.tasks });
-  }
+  const listId = String(req.body?.listId || '').trim();
+  const name   = String(req.body?.name   || '').trim();
+  if (!listId) return res.status(400).json({ error: { message: 'listId required' } });
+  if (!name)   return res.status(400).json({ error: { message: 'name required' } });
   try {
-    const { lists = [] } = await clickupFetch(`/folder/${folderId}/list?archived=false`);
-    const tasks = [];
-    for (const list of lists) {
-      const body = await clickupFetch(
-        `/list/${list.id}/task?archived=false&subtasks=true&include_closed=false`);
-      for (const t of (body.tasks || [])) {
-        tasks.push({
-          id: t.id, name: t.name, listName: list.name,
-          status: t.status?.status || '', url: t.url || '',
-        });
-      }
-    }
-    clickupTasksCache.set(folderId, { ts: Date.now(), tasks });
-    res.json({ tasks });
-  } catch (e) {
-    res.status(e.status || 502).json({ error: { message: e.message } });
-  }
-});
-
-/* Close one task. Lists carry their own status names ("complete", "closed",
-   "shipped"…), so the closing status is read off the task's own list rather
-   than guessed — and if the list has none, say so with the names it does have
-   instead of failing opaquely. */
-app.post('/api/clickup/complete', apiGuard, async (req, res) => {
-  if (clickupGuard(res)) return;
-  const taskId = String(req.body?.taskId || '').trim();
-  if (!taskId) return res.status(400).json({ error: { message: 'taskId required' } });
-  try {
-    const task   = await clickupFetch(`/task/${taskId}`);
-    const listId = task?.list?.id;
-    if (!listId) return res.status(502).json({ error: { message: 'ClickUp task has no list.' } });
-
     const list     = await clickupFetch(`/list/${listId}`);
     const statuses = list.statuses || [];
     const closing  = statuses.find(s => s.type === 'closed')
@@ -1316,13 +1291,14 @@ app.post('/api/clickup/complete', apiGuard, async (req, res) => {
         (statuses.map(s => s.status).join(', ') || '(none)') } });
     }
 
-    const updated = await clickupFetch(`/task/${taskId}`, {
-      method: 'PUT',
-      body: JSON.stringify({ status: closing.status }),
+    const task = await clickupFetch(`/list/${listId}/task`, {
+      method: 'POST',
+      body: JSON.stringify({ name, status: closing.status }),
     });
-    // The task just changed, so the cached candidate list for its folder is stale
-    if (task?.folder?.id) clickupTasksCache.delete(String(task.folder.id));
-    res.json({ ok: true, status: updated?.status?.status || closing.status, url: updated?.url || task.url || '' });
+    res.json({
+      ok: true, taskId: task.id, taskName: task.name, listName: list.name,
+      status: task.status?.status || closing.status, url: task.url || '',
+    });
   } catch (e) {
     res.status(e.status || 502).json({ error: { message: e.message } });
   }

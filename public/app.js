@@ -4523,9 +4523,10 @@ function weeklyStatusSelectHtml(clientId, category, itemKey) {
 }
 
 /* ── CLICKUP SYNC ──
-   Each checklist row can close its counterpart task in ClickUp. The match is
-   found once (by name, within the client's ClickUp folder, asking when it is
-   ambiguous) and then remembered, so every later click is a single click. */
+   Each checklist row can add itself as a ClickUp task, already marked done.
+   No searching or matching — every client points at one ClickUp list (set in
+   Client Setup), and the click just creates the task there. The result is
+   remembered so a second click asks before adding a duplicate. */
 
 function clickupGetLink(clientId, category, itemKey) {
   return weeklyData?.clickup?.[clientId]?.[category]?.[itemKey] || null;
@@ -4539,51 +4540,6 @@ function clickupSetLink(clientId, category, itemKey, link) {
   weeklyScheduleServerSync();
 }
 
-/* Comparison key for name matching. Checklist rows are either a keyword or a
-   page URL, and ClickUp task names are typed by hand, so both sides are
-   lowercased and stripped of the punctuation and URL scaffolding that differs
-   without changing what the task is about. */
-function clickupMatchKey(s) {
-  return String(s || '')
-    .toLowerCase()
-    .replace(/^https?:\/\//, '')
-    .replace(/^www\./, '')
-    .replace(/\/+$/, '')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
-}
-
-/* What a row can legitimately be called in ClickUp. Half the checklist rows are
-   page URLs, and those are rarely typed out in full over there — a task is far
-   more likely to be named "Schema — /services/implants/". So a URL row is also
-   matched on its path alone, without the domain every row shares anyway. */
-function clickupMatchKeys(label) {
-  const full = clickupMatchKey(label);
-  const keys = full ? [full] : [];
-  if (/^https?:\/\//i.test(String(label).trim())) {
-    try {
-      const path = clickupMatchKey(new URL(label).pathname);
-      if (path && path !== full) keys.push(path);
-    } catch (_) { /* not a parseable URL — the full key is all we have */ }
-  }
-  return keys;
-}
-
-/* Candidates for one row, best first: an exact key match, else a task whose
-   name contains the row or vice versa. */
-function clickupRankTasks(tasks, label) {
-  const wants = clickupMatchKeys(label);
-  if (!wants.length) return { exact: [], ranked: tasks };
-  const exact = [], partial = [], rest = [];
-  for (const t of tasks) {
-    const key = clickupMatchKey(t.name);
-    if (wants.some(w => key === w)) exact.push(t);
-    else if (wants.some(w => key.includes(w) || w.includes(key))) partial.push(t);
-    else rest.push(t);
-  }
-  return { exact, ranked: [...exact, ...partial, ...rest] };
-}
-
 function clickupBtnHtml(clientId, category, itemKey, label) {
   const client = rtData?.clients?.find(c => c.id === clientId);
   const link   = clickupGetLink(clientId, category, itemKey);
@@ -4593,51 +4549,56 @@ function clickupBtnHtml(clientId, category, itemKey, label) {
   if (!hasClickUp) {
     return `<button class="wk-cu-btn wk-cu-off" ${data} title="ClickUp is not configured on the server">CU</button>`;
   }
-  if (!client?.clickupFolderId) {
-    return `<button class="wk-cu-btn wk-cu-off" ${data} title="No ClickUp folder set for this client — set one in Client Setup">CU</button>`;
+  if (!client?.clickupListId) {
+    return `<button class="wk-cu-btn wk-cu-off" ${data} title="No ClickUp List set for this client — set one in Client Setup">CU</button>`;
   }
   if (link?.syncedTs) {
     const when = new Date(link.syncedTs).toLocaleString();
-    return `<button class="wk-cu-btn wk-cu-done" ${data} title="Closed in ClickUp as &quot;${escHtml(link.taskName || '')}&quot; on ${escHtml(when)}">✓</button>`;
+    return `<button class="wk-cu-btn wk-cu-done" ${data} title="Added to ClickUp as &quot;${escHtml(link.taskName || '')}&quot; on ${escHtml(when)}">✓</button>`;
   }
-  if (link?.taskId) {
-    return `<button class="wk-cu-btn wk-cu-linked" ${data} title="Linked to ClickUp task &quot;${escHtml(link.taskName || '')}&quot;${link.listName ? ' in ' + escHtml(link.listName) : ''} — click to complete it">CU</button>`;
-  }
-  return `<button class="wk-cu-btn" ${data} title="Complete in ClickUp">CU</button>`;
+  return `<button class="wk-cu-btn" ${data} title="Add as a ClickUp task">CU</button>`;
 }
 
 function clickupSetBtnState(btn, state, title) {
-  btn.classList.remove('wk-cu-busy', 'wk-cu-done', 'wk-cu-err', 'wk-cu-linked');
+  btn.classList.remove('wk-cu-busy', 'wk-cu-done', 'wk-cu-err');
   if (state) btn.classList.add('wk-cu-' + state);
   btn.disabled    = state === 'busy';
   btn.textContent = state === 'busy' ? '⋯' : state === 'done' ? '✓' : 'CU';
   if (title) btn.title = title;
 }
 
-async function clickupFetchTasks(folderId) {
-  const r    = await fetch(`/api/clickup/tasks?folderId=${encodeURIComponent(folderId)}`);
-  const data = await r.json();
-  if (!r.ok) throw new Error(data?.error?.message || `ClickUp error ${r.status}`);
-  return data.tasks || [];
-}
-
-/* Close the task and bring the row in line with it. The local status is only
+/* Create the task and bring the row in line with it. The local status is only
    moved to Done once ClickUp has confirmed — a row must never claim Done
    because a push failed. */
-async function clickupCompleteTask(btn, task) {
-  const { client: clientId, category, item: itemKey } = btn.dataset;
+async function clickupHandleClick(btn) {
+  const { client: clientId, category, item: itemKey, label } = btn.dataset;
+  const client = rtData?.clients?.find(c => c.id === clientId);
+
+  if (!hasClickUp) { alert('ClickUp API token is not configured on the server.'); return; }
+  if (!client?.clickupListId) {
+    alert(`Set the ClickUp List for "${client?.name || 'this client'}" in Client Setup first.`);
+    return;
+  }
+
+  const link = clickupGetLink(clientId, category, itemKey);
+  if (link?.syncedTs && !confirm(`Already added to ClickUp as "${link.taskName}". Add another task?`)) return;
+
+  const cat      = WEEKLY_CATEGORIES.find(c => c.key === category);
+  const taskName = `${cat?.label || category} — ${label}`;
+
   clickupSetBtnState(btn, 'busy');
   try {
-    const r    = await fetch('/api/clickup/complete', {
+    const r    = await fetch('/api/clickup/create-task', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ taskId: task.id }),
+      body: JSON.stringify({ listId: client.clickupListId, name: taskName }),
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data?.error?.message || `ClickUp error ${r.status}`);
 
     clickupSetLink(clientId, category, itemKey, {
-      taskId: task.id, taskName: task.name, listName: task.listName || '', syncedTs: Date.now(),
+      taskId: data.taskId, taskName: data.taskName,
+      listName: data.listName || client.clickupListName || '', syncedTs: Date.now(),
     });
     // Goes through weeklySetStatus so the activity log entry and the debounced
     // server sync happen on the path everything else already uses.
@@ -4649,90 +4610,10 @@ async function clickupCompleteTask(btn, task) {
       sel.className = 'wk-status-select ' + (WEEKLY_STATUSES.find(s => s.key === 'done')?.cls || '');
     }
     clickupSetBtnState(btn, 'done',
-      `Closed in ClickUp as "${task.name}" on ${new Date().toLocaleString()}`);
+      `Added to ClickUp as "${data.taskName}" on ${new Date().toLocaleString()}`);
   } catch (e) {
     clickupSetBtnState(btn, 'err', `ClickUp: ${e.message}`);
   }
-}
-
-/* Picker, shown when the row name matches no task or several. */
-function clickupOpenPicker(btn, tasks, label) {
-  const listEl   = document.getElementById('cu-pickerList');
-  const filterEl = document.getElementById('cu-pickerFilter');
-  const subEl    = document.getElementById('cu-pickerSub');
-  if (!listEl || !filterEl) return;
-
-  subEl.textContent = `Pick the ClickUp task for “${label}”. The choice is remembered.`;
-
-  const render = q => {
-    const needle = clickupMatchKey(q);
-    const shown  = needle
-      ? tasks.filter(t => clickupMatchKey(t.name).includes(needle))
-      : tasks;
-    listEl.innerHTML = shown.length
-      ? shown.map(t =>
-          `<button class="cu-picker-item" data-task-id="${escHtml(t.id)}">
-             <span class="cu-picker-name">${escHtml(t.name)}</span>
-             <span class="cu-picker-meta">${escHtml(t.listName || '')}${t.status ? ' · ' + escHtml(t.status) : ''}</span>
-           </button>`).join('')
-      : '<div class="cu-picker-empty">No open tasks match.</div>';
-  };
-
-  // The rows are rebuilt on every keystroke, so the click is delegated once
-  // rather than rebound per row.
-  listEl.onclick = e => {
-    const item = e.target.closest('.cu-picker-item');
-    if (!item) return;
-    const task = tasks.find(t => t.id === item.dataset.taskId);
-    rtCloseModal('cu-taskPickerModal');
-    if (task) clickupCompleteTask(btn, task);
-  };
-  filterEl.oninput = () => render(filterEl.value);
-
-  filterEl.value = '';   // the list is already ranked with the likely matches on top
-  render('');
-  rtOpenModal('cu-taskPickerModal');
-  filterEl.focus();
-}
-
-async function clickupHandleClick(btn) {
-  const { client: clientId, category, item: itemKey, label } = btn.dataset;
-  const client = rtData?.clients?.find(c => c.id === clientId);
-
-  if (!hasClickUp) { alert('ClickUp API token is not configured on the server.'); return; }
-  if (!client?.clickupFolderId) {
-    alert(`Set the ClickUp Folder for "${client?.name || 'this client'}" in Client Setup first.`);
-    return;
-  }
-
-  const link = clickupGetLink(clientId, category, itemKey);
-  if (link?.syncedTs) {
-    if (!confirm(`Already closed in ClickUp as "${link.taskName}". Pick a different task?`)) return;
-  } else if (link?.taskId) {
-    clickupCompleteTask(btn, { id: link.taskId, name: link.taskName, listName: link.listName });
-    return;
-  }
-
-  clickupSetBtnState(btn, 'busy');
-  let tasks;
-  try {
-    tasks = await clickupFetchTasks(client.clickupFolderId);
-  } catch (e) {
-    clickupSetBtnState(btn, 'err', `ClickUp: ${e.message}`);
-    return;
-  }
-  if (!tasks.length) {
-    clickupSetBtnState(btn, 'err',
-      `No open tasks in the ClickUp folder "${client.clickupFolderName || client.clickupFolderId}"`);
-    return;
-  }
-
-  const { exact, ranked } = clickupRankTasks(tasks, label);
-  // Relinking always asks, even when one name matches — the point is to override
-  // a match that was wrong.
-  if (exact.length === 1 && !link?.syncedTs) { clickupCompleteTask(btn, exact[0]); return; }
-  clickupSetBtnState(btn, link?.syncedTs ? 'done' : link?.taskId ? 'linked' : null);
-  clickupOpenPicker(btn, ranked, label);
 }
 
 function weeklyCategorySectionHtml(client, category) {
@@ -6012,26 +5893,24 @@ async function rtLoadCampaigns(preselectId) {
   sel.disabled = false;
 }
 
-/* Client Setup → ClickUp Folder dropdown. Work is organised one folder per
-   client, so this folder is the search scope when a weekly task row goes
-   looking for its ClickUp task. */
-async function rtLoadClickUpFolders(preselectId) {
-  const wrap = document.getElementById('rt-clickupFolderWrap');
-  const sel  = document.getElementById('rt-clickupFolder');
+/* Client Setup → ClickUp List dropdown. Every completed task for a client is
+   created directly in this one list — no searching, no matching. */
+async function rtLoadClickUpLists(preselectId) {
+  const wrap = document.getElementById('rt-clickupListWrap');
+  const sel  = document.getElementById('rt-clickupList');
   if (!wrap || !sel) return;
   wrap.classList.remove('hidden');
-  sel.innerHTML = '<option value="">— loading folders… —</option>';
+  sel.innerHTML = '<option value="">— loading lists… —</option>';
   sel.disabled  = true;
   try {
-    const r    = await fetch('/api/clickup/folders');
+    const r    = await fetch('/api/clickup/lists');
     const data = await r.json();
     if (!r.ok) throw new Error(data?.error?.message || `ClickUp error ${r.status}`);
-    const list = data.folders || [];
-    if (!list.length) throw new Error('No folders found in your ClickUp account');
+    const list = data.lists || [];
+    if (!list.length) throw new Error('No lists found in your ClickUp account');
     sel.innerHTML = '<option value="">— none —</option>' +
-      list.map(f =>
-        `<option value="${escHtml(f.id)}" data-name="${escHtml(f.name)}">` +
-        `${escHtml(f.spaceName ? f.spaceName + ' / ' : '')}${escHtml(f.name)}</option>`
+      list.map(l =>
+        `<option value="${escHtml(l.id)}" data-name="${escHtml(l.name)}">${escHtml(l.path || l.name)}</option>`
       ).join('');
     if (preselectId) sel.value = String(preselectId);
   } catch (e) {
@@ -6229,8 +6108,8 @@ function rtShowAddClient() {
   document.getElementById('rt-saveClientBtn').dataset.mode = 'add';
   if (hasAA) rtLoadCampaigns();
   else document.getElementById('rt-campaignPickWrap').classList.add('hidden');
-  if (hasClickUp) rtLoadClickUpFolders();
-  else document.getElementById('rt-clickupFolderWrap')?.classList.add('hidden');
+  if (hasClickUp) rtLoadClickUpLists();
+  else document.getElementById('rt-clickupListWrap')?.classList.add('hidden');
   rtPopLocAcClose();
   rtLoadPopLocations().then(rtPopLocValidate);
   rtLoadPopLanguages();
@@ -6268,8 +6147,8 @@ function rtShowEditClientFields(c) {
   document.getElementById('rt-saveClientBtn').dataset.mode = 'edit';
   if (hasAA) rtLoadCampaigns(c.aaCampaignId);
   else document.getElementById('rt-campaignPickWrap').classList.add('hidden');
-  if (hasClickUp) rtLoadClickUpFolders(c.clickupFolderId);
-  else document.getElementById('rt-clickupFolderWrap')?.classList.add('hidden');
+  if (hasClickUp) rtLoadClickUpLists(c.clickupListId);
+  else document.getElementById('rt-clickupListWrap')?.classList.add('hidden');
   rtPopLocAcClose();
   rtLoadPopLocations().then(rtPopLocValidate);
   rtLoadPopLanguages();
@@ -6301,10 +6180,10 @@ async function rtSaveClient() {
     phone: bizVal('rt-bizPhone'), priceRange: bizVal('rt-bizPrice'), hours: bizVal('rt-bizHours'),
     logo: bizVal('rt-bizLogo'), sameAs: bizVal('rt-bizSameAs'), areas: bizVal('rt-bizAreas'),
   };
-  // The folder list loads asynchronously. While it is still loading — or if it
+  // The list loads asynchronously. While it is still loading — or if it
   // failed — the select holds no real options, and reading it would silently
-  // wipe a folder the client already has. null means "don't know, leave it".
-  const cuSel   = document.getElementById('rt-clickupFolder');
+  // wipe a list the client already has. null means "don't know, leave it".
+  const cuSel   = document.getElementById('rt-clickupList');
   const cuReady = !!cuSel && !cuSel.disabled && !!cuSel.querySelector('option[data-name]');
   const cuId    = cuReady ? cuSel.value : null;
   const cuName  = cuReady ? (cuSel.selectedOptions[0]?.dataset.name || '') : null;
@@ -6312,7 +6191,7 @@ async function rtSaveClient() {
   const mode        = document.getElementById('rt-saveClientBtn').dataset.mode;
   if (!name) { setupSetSaved('Client name is required.', true); return; }
   if (mode === 'add') {
-    const client = { id: rtUid(), name, aaCampaignId: cid, wpUrl, sitemapUrl, wpUser, wpPass, popLocation, popLanguage, popGnl, pageUrls, biz, clickupFolderId: cuId || '', clickupFolderName: cuName || '', keywords: [] };
+    const client = { id: rtUid(), name, aaCampaignId: cid, wpUrl, sitemapUrl, wpUser, wpPass, popLocation, popLanguage, popGnl, pageUrls, biz, clickupListId: cuId || '', clickupListName: cuName || '', keywords: [] };
     rtData.clients.push(client);
     rtData.activeClientId = client.id;
   } else {
@@ -6322,7 +6201,7 @@ async function rtSaveClient() {
     // Saying "Saved" while writing nothing would be a lie.
     if (!c) { setupSetSaved('No client selected — use + to add one.', true); return; }
     c.name = name; c.aaCampaignId = cid; c.wpUrl = wpUrl; c.sitemapUrl = sitemapUrl; c.wpUser = wpUser; c.wpPass = wpPass; c.popLocation = popLocation; c.popLanguage = popLanguage; c.popGnl = popGnl; c.pageUrls = pageUrls; c.biz = biz;
-    if (cuId !== null) { c.clickupFolderId = cuId; c.clickupFolderName = cuName; }
+    if (cuId !== null) { c.clickupListId = cuId; c.clickupListName = cuName; }
   }
   rtSave();
   rtRender();
@@ -6742,7 +6621,7 @@ function rtCloseModal(id) { document.getElementById(id).classList.add('hidden');
 
 // Close modals on overlay click
 document.addEventListener('click', e => {
-  ['rt-importModal', 'rt-editModal', 'cu-taskPickerModal'].forEach(id => {
+  ['rt-importModal', 'rt-editModal'].forEach(id => {
     const el = document.getElementById(id);
     if (el && !el.classList.contains('hidden') && e.target === el) rtCloseModal(id);
   });
