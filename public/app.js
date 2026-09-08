@@ -2814,17 +2814,19 @@ function rtLoadLocal() {
 let rtSyncTimer = null;
 function rtScheduleServerSync() {
   if (rtSyncTimer) clearTimeout(rtSyncTimer);
-  rtSyncTimer = setTimeout(rtSyncToServer, 600);
+  // Background saves (keyword edits, task toggles, …) stay silent on failure —
+  // only the explicit Save Client button (rtSaveClient) awaits this directly
+  // and needs to know when it fails.
+  rtSyncTimer = setTimeout(() => { rtSyncToServer().catch(() => {}); }, 600);
 }
 async function rtSyncToServer() {
   rtSyncTimer = null;
-  try {
-    await fetch('/api/rankdata', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rtData, reports: reportsCache }),
-    });
-  } catch (_) {}
+  const r = await fetch('/api/rankdata', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rtData, reports: reportsCache }),
+  });
+  if (!r.ok) throw new Error(`Server returned ${r.status}`);
 }
 
 // Loads from the server; falls back to (and migrates up) local data if the
@@ -6282,7 +6284,7 @@ function rtShowEditClient() {
   switchTab('setup');
 }
 
-function rtSaveClient() {
+async function rtSaveClient() {
   const name        = document.getElementById('rt-clientName').value.trim();
   const cid         = document.getElementById('rt-campaignId').value.trim();
   const wpUrl       = document.getElementById('rt-wpUrl').value.trim();
@@ -6328,7 +6330,23 @@ function rtSaveClient() {
   // The page stays open — it is a settings page now, not a modal to dismiss
   document.getElementById('rt-saveClientBtn').dataset.mode = 'edit';
   document.getElementById('rt-deleteClientBtn')?.classList.remove('hidden');
-  setupSetSaved(`Saved · ${pageUrls.length} URL(s)`);
+
+  // "Saved" is a claim about the server, not just localStorage — rtSave() above
+  // only *schedules* the real write 600ms out, and a refresh right after seeing
+  // a premature "Saved" used to silently lose it to the server's stale copy.
+  // Skip the debounce here and wait for the real thing.
+  const saveBtn = document.getElementById('rt-saveClientBtn');
+  saveBtn.disabled = true;
+  setupSetSaved('Saving…');
+  if (rtSyncTimer) { clearTimeout(rtSyncTimer); rtSyncTimer = null; }
+  try {
+    await rtSyncToServer();
+    setupSetSaved(`Saved · ${pageUrls.length} URL(s)`);
+  } catch (e) {
+    setupSetSaved('Save failed — check your connection and try again.', true);
+  } finally {
+    saveBtn.disabled = false;
+  }
   setupRenderUrlCount();
 }
 
