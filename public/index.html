@@ -380,9 +380,9 @@
           <div>
             <div class="ag-card-title">Report Options</div>
             <label class="toggle-label" style="margin-bottom:10px">
-              <input type="checkbox" id="ag-enableNlp" class="toggle-input">
+              <input type="checkbox" id="ag-enableNlp" class="toggle-input" checked disabled>
               <span class="toggle-track"><span class="toggle-thumb"></span></span>
-              Google NLP Analysis
+              Google NLP Analysis <span style="font-weight:400;color:var(--text-muted);font-size:11px">(always on)</span>
             </label>
             <label class="toggle-label" style="margin-bottom:12px">
               <input type="checkbox" id="ag-overOpt" class="toggle-input">
@@ -392,7 +392,7 @@
             <div class="form-group" style="margin-bottom:10px">
               <label class="form-label">Strategy</label>
               <select id="ag-strategy" class="form-select">
-                <option value="target">Target – all competitors (recommended)</option>
+                <option value="target" selected>Target – all competitors (recommended)</option>
                 <option value="adjusted">Adjusted – by word count</option>
                 <option value="focus">Focus – top 3 competitors</option>
                 <option value="max">Max – highest signal</option>
@@ -401,7 +401,7 @@
             <div class="form-group">
               <label class="form-label">Approach</label>
               <select id="ag-approach" class="form-select">
-                <option value="regular">Regular (most common)</option>
+                <option value="regular" selected>Regular (most common)</option>
                 <option value="conservative">Conservative (already ranking)</option>
                 <option value="aggressive">Aggressive (stuck pages)</option>
                 <option value="hyper_aggressive">Hyper Aggressive (last resort)</option>
@@ -415,7 +415,7 @@
               <select id="ag-tone" class="form-select">
                 <option value="informative">Informative / educational</option>
                 <option value="conversational">Conversational / friendly</option>
-                <option value="professional">Professional / authoritative</option>
+                <option value="professional" selected>Professional / authoritative</option>
               </select>
             </div>
             <div class="form-group">

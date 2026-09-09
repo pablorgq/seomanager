@@ -3651,7 +3651,7 @@ async function rtOptimizeInAG(kwId) {
   setSelect('ag-targetLanguage', String(client?.popLanguage || 'english').toLowerCase());
 
   // Strategy + approach carry over from the score's chosen settings
-  setSelect('ag-strategy', kw.popStrategy || 'focus');
+  setSelect('ag-strategy', kw.popStrategy || 'target');
   setSelect('ag-approach', kw.popApproach || 'regular');
 
   // Page type decides the shape of the piece, so it is never guessed — a keyword

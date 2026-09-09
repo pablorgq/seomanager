@@ -350,6 +350,8 @@ body {
   flex-shrink: 0;
 }
 .toggle-input:checked + .toggle-track { background: var(--accent); border-color: var(--accent); }
+.toggle-input:disabled + .toggle-track { opacity: .7; }
+.toggle-input:disabled ~ * { cursor: default; }
 .toggle-thumb {
   width: 14px; height: 14px;
   background: var(--text-muted);
