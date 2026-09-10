@@ -9384,7 +9384,8 @@ async function weekplanGenerate() {
         slice.push(c);
         used += c.minutes;
       }
-      if (!slice.length) continue;
+      // A client with nothing outstanding still belongs on its day — the plan is
+      // the week's roster, not just its workload. It simply gets no task blocks.
       slice.forEach(c => { allCandidates[c.id] = c; });
       clients.push({ clientId: id, clientName: byId.get(id).name, candidates: slice });
     }
@@ -9396,32 +9397,33 @@ async function weekplanGenerate() {
     weekplanRender();
     return;
   }
-  if (!Object.keys(allCandidates).length) {
-    weekplanState.message = { text: 'Nothing outstanding for the scheduled clients — every tracked task is already done.', tone: 'green' };
-    weekplanRender();
-    return;
-  }
+
+  const hasWork = Object.keys(allCandidates).length > 0;
 
   weekplanState.busy = true;
-  weekplanState.message = { text: 'Working out the week…', tone: '' };
+  weekplanState.message = { text: hasWork ? 'Working out the week…' : 'Laying out the roster…', tone: '' };
   weekplanRender();
 
   let sequenced = null, note = '';
-  try {
-    const r = await fetch('/api/weekplan/sequence', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ days, hoursPerClient: hours }),
-    });
-    const data = await readJson(r, 'Sequencing');
-    if (r.ok && data.sequenced) {
-      sequenced = data.days;
-      if (data.dropped) note = `${data.dropped} suggested item(s) did not match a real task and were dropped.`;
-    } else {
-      note = data.reason ? `Ordered by priority — ${data.reason}` : 'Ordered by priority.';
+  if (hasWork) {
+    try {
+      const r = await fetch('/api/weekplan/sequence', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ days, hoursPerClient: hours }),
+      });
+      const data = await readJson(r, 'Sequencing');
+      if (r.ok && data.sequenced) {
+        sequenced = data.days;
+        if (data.dropped) note = `${data.dropped} suggested item(s) did not match a real task and were dropped.`;
+      } else {
+        note = data.reason ? `Ordered by priority — ${data.reason}` : 'Ordered by priority.';
+      }
+    } catch (e) {
+      note = `Ordered by priority — ${e.message}`;
     }
-  } catch (e) {
-    note = `Ordered by priority — ${e.message}`;
+  } else {
+    note = 'Nothing outstanding yet — every scheduled client is listed, ready for when work lands.';
   }
 
   // Build the record. Whether the blocks came from the model or the packer, they
@@ -9466,7 +9468,7 @@ async function weekplanGenerate() {
           };
         }),
       };
-    }).filter(c => c.blocks.length);
+    });
   }
 
   weekPlans[key] = record;
@@ -9547,7 +9549,7 @@ function weekplanRender() {
                   <span class="wp-client-name">${escHtml(c.clientName)}</span>
                   <span class="wp-day-meta">${weekplanHours(c.blocks.reduce((n, b) => n + b.minutes, 0))}</span>
                 </div>
-                ${c.blocks.map(b => `
+                ${c.blocks.length ? c.blocks.map(b => `
                   <label class="wp-block${b.done ? ' wp-block-done' : ''}">
                     <input type="checkbox" class="wp-tick" ${b.done ? 'checked' : ''}
                            data-day="${escHtml(d.key)}" data-client="${escHtml(c.clientId)}" data-block="${escHtml(b.id)}">
@@ -9559,7 +9561,7 @@ function weekplanRender() {
                       </span>
                       <span class="wp-why">${escHtml(b.why)}${b.note ? ` — ${escHtml(b.note)}` : ''}</span>
                     </span>
-                  </label>`).join('')}
+                  </label>`).join('') : `<div class="wp-block-empty">Nothing outstanding — every tracked task is done, or none are set up yet.</div>`}
               </div>`).join('')}
           </div>`;
       }).join('') || '<div class="ah-empty">The plan came out empty — nothing outstanding for the scheduled clients.</div>';

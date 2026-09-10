@@ -2100,6 +2100,10 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
 .wp-why { font-size: 11px; color: var(--text-muted); line-height: 1.45; }
 .wp-block-done .wp-block-label { text-decoration: line-through; opacity: .55; }
 .wp-block-done { opacity: .7; }
+.wp-block-empty {
+  font-size: 11px; color: var(--text-muted); font-style: italic;
+  padding: 6px 10px; border: 1px dashed var(--border); border-radius: 8px;
+}
 
 /* ── SCHEMA FILTER ── */
 button.sch-filter-status {
