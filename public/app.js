@@ -6601,6 +6601,17 @@ async function rtImportFromAA() {
 
     rtSave();
     rtRender();
+
+    // A batch import is exactly the work you'd hate to lose to a silently
+    // dropped background sync, so push it now and say so if the server balks.
+    if (rtSyncTimer) { clearTimeout(rtSyncTimer); rtSyncTimer = null; }
+    try {
+      await rtSyncToServer();
+    } catch (e) {
+      alert(`Imported ${added} keyword(s), but saving to the server failed (${e.message}). ` +
+            `They may not survive a refresh — try the import again in a moment.`);
+    }
+
     document.getElementById('rt-lastRefresh').textContent =
       `Added ${added} new · marked ${markedMk} existing as MK via "sm" tag (${skipped} unchanged) — fetching ranks…`;
 

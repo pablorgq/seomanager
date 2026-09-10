@@ -575,6 +575,11 @@ button:disabled{opacity:.45;cursor:not-allowed}
    the 512kb default — after the user has waited out a full crawl. */
 app.use('/api/schemadata',         express.json({ limit: '8mb' }));
 app.use('/api/ext/schema/report',  express.json({ limit: '8mb' }));
+/* Rank Tracker posts the whole client list AND every saved POP report in one
+   body, which clears 512kb once a few competitor reports pile up. A 413 here
+   is swallowed by the debounced sync, so the save silently never lands and a
+   refresh looks like the work (an AA keyword import, say) was lost. */
+app.use('/api/rankdata',           express.json({ limit: '8mb' }));
 app.use(express.json({ limit: '512kb' }));
 app.use(express.urlencoded({ extended: false, limit: '16kb' }));
 
