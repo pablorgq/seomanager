@@ -158,6 +158,10 @@
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"/></svg>
       Week Plan
     </button>
+    <button class="tab-btn" data-tab="auditfix">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="m9 15 2 2 4-4"/></svg>
+      Audit Fixes
+    </button>
   </nav>
 
   <!-- ── MAIN ── -->
@@ -1037,6 +1041,92 @@
     <!-- ── WEEK PLAN TAB ── -->
     <div class="tab-panel" id="tab-weekplan">
       <div id="weekplan-root"></div>
+    </div>
+
+    <!-- ── AUDIT FIXES TAB ── -->
+    <div class="tab-panel" id="tab-auditfix">
+      <div class="db-header">
+        <h2 class="db-title">Fundamental SEO Audit — Fix Execution</h2>
+        <p class="db-sub">Companion to the Fundamental SEO Audit template — that one finds issues, this one fixes them. Run it once you have a saved audit for the client; never cold.</p>
+      </div>
+
+      <div class="form-card af-card">
+        <div class="af-card-head">
+          <h3 class="af-h">A. Paste-ready prompt — run this per client</h3>
+          <button class="btn-sm" id="af-copyPromptBtn">Copy prompt</button>
+        </div>
+        <p class="af-lead">Run once you have a saved <code>clients/&lt;client&gt;-fundamental-seo-audit-YYYY-MM-DD.md</code> for the client — it always starts from a specific audit's issues table.</p>
+        <div class="af-quote">
+          <p>Fix the issues from the fundamental SEO audit for <strong>[CLIENT NAME]</strong>.</p>
+          <ol>
+            <li>Read <code>clients/[CLIENT]-fundamental-seo-audit-[DATE].md</code> (use the most recent one if more than one exists) and pull its Issues table.</li>
+            <li>For each issue, in Severity × Effort priority order (Critical → High → Medium → Low, and within a tier, Small effort before Large):
+              <ul>
+                <li><strong>Re-verify it live first.</strong> Don't fix something off a stale finding — check the actual current state (fetch the page, read the live schema, re-run the search) before touching anything. If it's already resolved, mark it fixed-and-verified and move on without changing anything.</li>
+                <li><strong>If it's agency-executable</strong> (a copy edit, a schema field, a sitemap exclusion, a redirect, alt text, a title/meta rewrite) — produce the exact fix: the literal text to paste, the exact field to change, or the file edit to make. If there's direct access to make the change (e.g. a connected CMS/plugin), make it and re-verify live. Without that access, give the fix in copy-paste-ready form.</li>
+                <li><strong>If it needs the client or a developer</strong> (hosting/server access, GBP login, social media login, DNS, anything needing their credentials) — write it as a clear, standalone handoff ticket: what's wrong, exactly what to do, where to do it, and how to confirm it worked. Don't attempt it directly, don't ask them to paste credentials into this chat.</li>
+                <li><strong>Never:</strong> don't recommend PBNs, fake/incentivized reviews, scaled unedited AI content, disavow requests outside a manual action, or any of the prohibited actions in the system rules (entering passwords, executing purchases, permanently deleting data, etc.).</li>
+              </ul>
+            </li>
+            <li>After each fix (or handoff ticket), update that row of the audit's issues table with an <strong>Outcome</strong> column: <code>Fixed &amp; verified live</code> / <code>Handed off to [client/dev] — see ticket</code> / <code>Already resolved, no action needed</code> / <code>Blocked — [reason]</code>.</li>
+            <li>If a client to-do tracker (<code>.xlsx</code>) exists for this client, update it to match — don't let the two go out of sync.</li>
+            <li>When done, save the updated audit doc back to the same path (don't create a new dated file — this is an update, not a new audit) and give a short summary: what got fixed and verified, what's waiting on the client/dev with tickets ready, and what's blocked and why.</li>
+          </ol>
+          <p>Work through Critical and High items fully before touching Medium/Low unless told otherwise. If more than roughly 10 minutes of tool time would be needed for one single issue (e.g. a full image-optimization pass across dozens of files), do a representative sample, confirm the fix pattern works, and hand off the bulk repetition as a scoped ticket rather than grinding through every instance.</p>
+        </div>
+      </div>
+
+      <div class="form-card af-card">
+        <h3 class="af-h">B. How to read "agency-executable" in practice</h3>
+        <p class="af-lead">Based on the access a session actually has, issue types typically fall into one of two buckets:</p>
+        <div class="af-two-col">
+          <div>
+            <div class="af-subhead af-subhead-ok">Self-serve — doable directly</div>
+            <ul class="af-list">
+              <li>Schema/JSON-LD field corrections (via the Per-Page Head Code plugin pattern)</li>
+              <li>Sitemap exclusions, title/meta rewrites, alt text, internal link additions — when there's a connected CMS session; otherwise copy-paste-ready text</li>
+              <li>On-page content rewrites, FAQ additions, schema snippets — drafted directly into project docs</li>
+              <li>Re-verification of any fix (live fetch, DOM read, re-run the failing check)</li>
+            </ul>
+          </div>
+          <div>
+            <div class="af-subhead af-subhead-warn">Needs the client or a developer</div>
+            <ul class="af-list">
+              <li>GBP category/services/posts changes</li>
+              <li>Facebook/Instagram/LinkedIn profile edits (NAP fixes, <code>sameAs</code> target changes)</li>
+              <li>Hosting-level changes (credential rotation, server file deletion, DNS, DNI/call-tracking setup)</li>
+              <li>Actually publishing a drafted page to the live CMS, if there's no connected session</li>
+              <li>Directory/citation submissions requiring the client's own business login</li>
+            </ul>
+          </div>
+        </div>
+        <p class="af-note">When unsure which bucket an issue falls into, default to writing the client/dev ticket — a ticket that turns out to be unnecessary costs nothing; a change made without real access either fails or, worse, gets attempted against the wrong account.</p>
+      </div>
+
+      <div class="form-card af-card">
+        <div class="af-card-head">
+          <h3 class="af-h">C. Ticket format for client/dev handoffs</h3>
+          <button class="btn-sm" id="af-copyTicketBtn">Copy template</button>
+        </div>
+        <p class="af-lead">Keep every handoff ticket in this shape so they're consistent and pastable into email, Slack, or a project-management tool:</p>
+        <div class="af-quote af-mono">
+          <p><strong>[Issue title]</strong> — Severity: [X] · Effort: [S/M/L]<br>
+          <strong>What's wrong:</strong> [one or two sentences, plain language]<br>
+          <strong>Where:</strong> [exact URL / platform / admin screen]<br>
+          <strong>What to do:</strong> [numbered steps, specific field names/values]<br>
+          <strong>How to confirm it worked:</strong> [the exact check — a URL to reload, a tool to re-run]</p>
+        </div>
+      </div>
+
+      <div class="form-card af-card">
+        <h3 class="af-h">D. Guardrails carried over from the audit instructions</h3>
+        <ul class="af-list">
+          <li>Evidence-based only — never mark something "fixed" without re-verifying it live.</li>
+          <li>No PBNs, no fake reviews, no scaled unedited AI content, no disavow outside manual actions or known link schemes.</li>
+          <li>Cosmetic-only changes (e.g. bumping a date with no real content change) don't count as a fix.</li>
+          <li>Respect the standing action-permission rules — this prompt authorizes working through the audit's issues, not entering credentials, making purchases, or taking irreversible actions without asking first.</li>
+        </ul>
+      </div>
     </div>
 
     <!-- ── SCHEMA TAB ── -->

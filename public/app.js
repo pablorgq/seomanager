@@ -116,6 +116,7 @@ const TAB_ROUTES = {
   schema:    '/schema',
   setup:     '/client-setup',
   weekplan:  '/week-plan',
+  auditfix:  '/audit-fixes',
   artimage:  '/article-image',
   artcontent:'/article-content',
 };
@@ -159,6 +160,29 @@ function switchTab(tab, { pushState = true } = {}) {
 window.addEventListener('popstate', () => {
   switchTab(ROUTE_TABS[window.location.pathname] || 'dashboard', { pushState: false });
 });
+
+/* Audit Fixes tab — plain-markdown copies of the on-page prompt/template, kept
+   in sync with the rendered HTML by hand since this tab is static reference
+   content, not data-driven. */
+const AF_FIX_PROMPT = `Fix the issues from the fundamental SEO audit for [CLIENT NAME].
+
+1. Read clients/[CLIENT]-fundamental-seo-audit-[DATE].md (use the most recent one if more than one exists) and pull its Issues table.
+2. For each issue, in Severity × Effort priority order (Critical → High → Medium → Low, and within a tier, Small effort before Large):
+   - Re-verify it live first. Don't fix something off a stale finding — check the actual current state (fetch the page, read the live schema, re-run the search) before touching anything. If it's already resolved, mark it fixed-and-verified and move on without changing anything.
+   - If it's agency-executable (a copy edit, a schema field, a sitemap exclusion, a redirect, alt text, a title/meta rewrite) — produce the exact fix: the literal text to paste, the exact field to change, or the file edit to make. If I have direct access to make the change (e.g. a connected CMS/plugin), make it and re-verify live. If I don't have that access, give the fix in copy-paste-ready form.
+   - If it needs the client or a developer (hosting/server access, GBP login, social media login, DNS, anything needing their credentials) — write it as a clear, standalone handoff ticket: what's wrong, exactly what to do, where to do it, and how to confirm it worked. Don't attempt it yourself, don't ask them to paste credentials into this chat.
+   - Never: don't recommend PBNs, fake/incentivized reviews, scaled unedited AI content, disavow requests outside a manual action, or any of the prohibited actions in the system rules (entering passwords, executing purchases, permanently deleting data, etc.).
+3. After each fix (or handoff ticket), update that row of the audit's issues table with an Outcome column: Fixed & verified live / Handed off to [client/dev] — see ticket / Already resolved, no action needed / Blocked — [reason].
+4. If a client to-do tracker (.xlsx) exists for this client, update it to match — don't let the two go out of sync.
+5. When done, save the updated audit doc back to the same path (don't create a new dated file — this is an update, not a new audit) and give me a short summary: what got fixed and verified, what's waiting on the client/dev with tickets ready, and what's blocked and why.
+
+Work through Critical and High items fully before touching Medium/Low unless I say otherwise. If more than roughly 10 minutes of tool time would be needed for one single issue (e.g. a full image-optimization pass across dozens of files), do a representative sample, confirm the fix pattern works, and hand off the bulk repetition as a scoped ticket rather than grinding through every instance.`;
+
+const AF_TICKET_TEMPLATE = `**[Issue title]** — Severity: [X] · Effort: [S/M/L]
+**What's wrong:** [one or two sentences, plain language]
+**Where:** [exact URL / platform / admin screen]
+**What to do:** [numbered steps, specific field names/values]
+**How to confirm it worked:** [the exact check — a URL to reload, a tool to re-run]`;
 
 /* ── INIT ── */
 async function init() {
@@ -263,6 +287,9 @@ function bindEvents() {
   document.getElementById('extTokenCopy')?.addEventListener('click', e => {
     copyText(e.currentTarget, document.getElementById('extTokenValue').value);
   });
+
+  document.getElementById('af-copyPromptBtn')?.addEventListener('click', e => copyText(e.currentTarget, AF_FIX_PROMPT));
+  document.getElementById('af-copyTicketBtn')?.addEventListener('click', e => copyText(e.currentTarget, AF_TICKET_TEMPLATE));
 
   /* Fetched rather than a plain <a download>: an anchor writes whatever comes
      back, so an expired session or a rate-limit would be saved to disk as a
