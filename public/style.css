@@ -2167,3 +2167,16 @@ button.sch-filter-status.sch-filter-on { outline-color: var(--accent); }
 .af-list { margin: 0; padding-left: 18px; }
 .af-list li { font-size: 12px; line-height: 1.6; color: var(--text-secondary); margin-bottom: 6px; }
 .af-list li:last-child { margin-bottom: 0; }
+.af-fields {
+  background: var(--surface-3); border-radius: 6px; padding: 10px 14px;
+  font-size: 11.5px; line-height: 1.7; color: var(--text-secondary);
+}
+.af-step {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--accent); margin: 18px 0 6px;
+}
+.af-quote > .af-step:first-of-type { margin-top: 4px; }
+.af-section-divider {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--text-muted); margin: 4px 0 12px; padding-top: 8px; border-top: 1px dashed var(--border);
+}

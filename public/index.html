@@ -158,9 +158,9 @@
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"/></svg>
       Week Plan
     </button>
-    <button class="tab-btn" data-tab="auditfix">
+    <button class="tab-btn" data-tab="audit">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="m9 15 2 2 4-4"/></svg>
-      Audit Fixes
+      Audit
     </button>
   </nav>
 
@@ -1044,11 +1044,130 @@
     </div>
 
     <!-- ── AUDIT FIXES TAB ── -->
-    <div class="tab-panel" id="tab-auditfix">
+    <div class="tab-panel" id="tab-audit">
       <div class="db-header">
-        <h2 class="db-title">Fundamental SEO Audit — Fix Execution</h2>
-        <p class="db-sub">Companion to the Fundamental SEO Audit template — that one finds issues, this one fixes them. Run it once you have a saved audit for the client; never cold.</p>
+        <h2 class="db-title">Fundamental SEO Audit</h2>
+        <p class="db-sub">Two prompts: run the audit to find issues, save the result, then come back and run the fix prompt against that saved file.</p>
       </div>
+
+      <div class="form-card af-card">
+        <div class="af-card-head">
+          <h3 class="af-h">1. Find Issues — run the audit</h3>
+          <button class="btn-sm" id="af-copyAuditBtn">Copy prompt</button>
+        </div>
+        <p class="af-lead">Paste per client, filling in the bracketed fields at the top. Produces the <code>clients/&lt;client&gt;-fundamental-seo-audit-YYYY-MM-DD.md</code> file the Fix Issues prompt below reads from.</p>
+        <div class="af-quote">
+          <p>You are a Senior SEO Campaign Manager at a digital marketing agency. Run a complete fundamental (traditional/technical) SEO audit for the client and site below, then report back with evidence-backed findings and a prioritized fix plan.</p>
+          <p class="af-fields">
+            <strong>CLIENT:</strong> [client name]<br>
+            <strong>DOMAIN:</strong> [domain, e.g. example.com]<br>
+            <strong>CMS:</strong> [WordPress / Shopify / Wix / custom / unknown — find out if unknown]<br>
+            <strong>BUSINESS MODEL:</strong> [local service / e-commerce / lead-gen / other]<br>
+            <strong>SERVICE AREA:</strong> [city/region, or "none — national/global"]<br>
+            <strong>TOP 3 MONEY PAGES OR PRODUCTS:</strong> [list, or "not sure — infer from the site"]<br>
+            <strong>KNOWN COMPETITORS:</strong> [list, or "none given — identify from SERPs/map pack for the money keywords"]<br>
+            <strong>ACCESS AVAILABLE:</strong> [Google Search Console / GA4 / Google Business Profile / CMS admin / none of these — browser and public tools only]
+          </p>
+
+          <p><strong>Core rule:</strong> AI search crawls the same web Google does. Foundation problems block AI visibility too — fix the foundation before any AI-SEO/GEO tactics.</p>
+          <p>Never recommend PBNs, fake or incentivized reviews, scaled unedited AI content, or disavowing links outside a real manual action or known link-scheme history.</p>
+
+          <p><strong>Use current standards, not outdated ones:</strong></p>
+          <ul>
+            <li><strong>Core Web Vitals:</strong> LCP ≤ 2.5s, INP ≤ 200ms (not FID — retired March 2024), CLS ≤ 0.1. Prefer real-user field data (CrUX/GSC) over lab data; lab data is for diagnosis only.</li>
+            <li>No fixed word-count targets. Depth is judged against what's actually ranking for the query and against real search intent, not a number.</li>
+            <li>FAQPage/HowTo schema helps machine understanding but does <strong>not</strong> guarantee rich results or AI citations — don't promise either to the client.</li>
+            <li>A cosmetic freshness bump (changing only a date, with no real content change) is not a fix and can hurt trust. Only count real updates: new facts, prices, photos, FAQs.</li>
+            <li>Toxic-link disavowal is rarely needed — Google ignores most spam by default; reserve it for an actual manual action or a clear, documented link-scheme history.</li>
+          </ul>
+
+          <p><strong>Collect evidence for every finding.</strong> Never report an issue without the URL, the exact tool/method used to check it, and what was actually seen (a status code, a metric, a snippet of text). If something can't be verified with the access/tools available, say so explicitly as an open item — never guess or assume a finding still holds from memory.</p>
+
+          <p>Work through these steps in order:</p>
+
+          <h4 class="af-step">Step 0 — Intake</h4>
+          <p>Confirm/establish: CMS, business model, service area, top 3 money pages, and the real top competitors (don't just take a guess — check the actual SERP/map pack for the money keywords). Note which of GSC/GA4/GBP/CMS access is actually available vs. not.</p>
+
+          <h4 class="af-step">Step 1 — Technical Audit</h4>
+          <p>Check each of the following, live, with evidence:</p>
+          <ul>
+            <li><strong>HTTPS:</strong> valid SSL, HTTP→HTTPS redirects, no mixed content, one canonical host (www vs non-www)</li>
+            <li><strong>Indexing:</strong> no important pages wrongly excluded/noindexed, no manual actions, no soft 404s</li>
+            <li><strong>robots.txt:</strong> doesn't block CSS/JS or key sections, lists the sitemap, blocks admin paths; confirm AI crawlers (GPTBot, OAI-SearchBot, PerplexityBot, Google-Extended) aren't blocked unless the client has explicitly chosen to opt out</li>
+            <li><strong>XML sitemap:</strong> every URL returns 200 and is indexable/canonical; no redirects, 404s, or noindexed URLs inside it; submitted to Search Console</li>
+            <li><strong>Core Web Vitals</strong> (mobile, field data): LCP/INP/CLS against the thresholds above</li>
+            <li><strong>Mobile:</strong> responsive, real tap targets, no horizontal scroll, readable text size</li>
+            <li><strong>URL structure:</strong> short, lowercase, hyphenated, descriptive — don't recommend changing a working URL just for keywords without also planning the 301</li>
+            <li><strong>Canonicals:</strong> self-referencing on the real pages; parameter/tag/archive duplicates handled</li>
+            <li><strong>Status codes:</strong> no internal links pointing to redirect chains, 4xx, or 5xx</li>
+            <li><strong>Schema:</strong> validates with zero errors on the key page templates (see Step 3)</li>
+            <li><strong>Click depth:</strong> every money page reachable within 3 clicks of the homepage</li>
+            <li><strong>Orphan pages:</strong> none of the indexable pages are unlinked internally</li>
+          </ul>
+
+          <h4 class="af-step">Step 2 — On-Page &amp; Content Audit</h4>
+          <p>For the money pages (and the top pages by traffic if that data exists), check per page:</p>
+          <ul>
+            <li><strong>Title:</strong> unique, primary keyword near the start, roughly 50–60 characters, compelling — add a year only if the content is genuinely time-sensitive</li>
+            <li><strong>Meta description:</strong> unique, roughly 150–160 characters, includes the keyword and a CTA (affects click-through rate, not ranking directly)</li>
+            <li><strong>Headings:</strong> exactly one H1, logical H2/H3 structure, headings that mirror real questions</li>
+            <li><strong>Content quality:</strong> answers the query directly in the first 1–2 paragraphs; matches or beats what the top 3 ranking competitors actually cover for that topic and intent</li>
+            <li><strong>Freshness:</strong> when it was last meaningfully updated; flag anything money/informational untouched for 6+ months</li>
+            <li><strong>E-E-A-T:</strong> real author bylines and credentials on articles; an About page with real team, history, licenses/certifications, real photos; visible contact info; real reviews</li>
+            <li><strong>Internal linking:</strong> 3–5 related outbound links with descriptive anchors; inbound links from relevant hub/authority pages</li>
+            <li><strong>Images:</strong> descriptive filenames, real alt text, WebP/AVIF, compressed, lazy-loaded below the fold (never the LCP image)</li>
+            <li><strong>FAQ content:</strong> genuine customer questions, not a padded fixed count</li>
+            <li><strong>Long guides:</strong> table of contents present</li>
+          </ul>
+
+          <h4 class="af-step">Step 3 — Schema Audit</h4>
+          <p>Check for, and validate the JSON-LD of:</p>
+          <ul>
+            <li><strong>Organization</strong> (or a LocalBusiness subtype for local clients) sitewide, with <code>sameAs</code> pointing at the correct, currently-used brand profiles, logo, and accurate NAP (name/address/phone matching what's actually displayed and used elsewhere)</li>
+            <li><strong>Service or Product</strong> schema on relevant pages (price/availability/brand where applicable)</li>
+            <li><strong>Article/BlogPosting</strong> with a real Person author on content pages</li>
+            <li><strong>BreadcrumbList</strong> sitewide</li>
+            <li><strong>FAQPage/HowTo</strong> where the content genuinely matches (for machine understanding — don't promise rich results; Google limited FAQ rich results to authoritative gov/health sites in 2023 and removed HowTo rich results)</li>
+            <li><strong>Review/AggregateRating</strong> ONLY from genuine, on-page, first-party review data — never recommend adding review-star markup from a third-party widget or hand-typed numbers</li>
+          </ul>
+          <p>Validate everything against schema.org's own validator and Google's Rich Results Test logic (zero errors, no dangling @ids, no duplicate/conflicting entities).</p>
+
+          <h4 class="af-step">Step 4 — Off-Page &amp; Local Audit</h4>
+          <ul>
+            <li><strong>Backlink profile:</strong> referring domain trend, top linked pages, anchor-text distribution (flag over-optimized exact-match), any lost links worth reclaiming, broken inbound links that should 301</li>
+            <li><strong>Unlinked brand mentions</strong> that could convert to real links</li>
+            <li><strong>Local</strong> (if applicable): Google Business Profile completeness (categories, services, photos, posts, Q&amp;A, review count/rating and response rate); NAP consistency across the client's own social profiles AND third-party citations/directories — actually check the client's live social profiles and a sample of directory listings, don't assume; map-pack/geogrid visibility if checkable</li>
+            <li>Any link-building recommendation must be for real, relevant, manually-reviewed placements — never a private blog network, never link farms, regardless of their authority metrics</li>
+          </ul>
+
+          <h4 class="af-step">Step 5 — Competitor Analysis</h4>
+          <p>For the top 3 real competitors (confirmed from actual SERPs/map pack, not assumed): compare content depth on the money topics, what they cover that the client doesn't, their schema implementation, their backlink profile strength, their GBP review count/rating, and their Core Web Vitals where checkable. Output this as a gap table.</p>
+
+          <h4 class="af-step">Step 6 — AI-Visibility Baseline</h4>
+          <p>Quick — this is a baseline, not the focus. Search the 5 main money queries in Google AI Overviews/AI Mode (and ChatGPT/Perplexity if checkable) and note plainly whether the client is cited/mentioned and who is cited instead. This is a snapshot to revisit after the foundation issues are fixed — don't start optimizing for AI citation before Critical/High items are resolved.</p>
+
+          <p><strong>Scoring</strong> — rate every issue found:</p>
+          <ul>
+            <li><strong>Severity:</strong> Critical (blocks indexing/ranking or is losing revenue right now: noindex on a money page, sitewide robots block, an active manual action, broken HTTPS, an orphaned money page, CWV failing on mobile for a key template) / High (clear ranking or citation impact: missing LocalBusiness schema, duplicate or missing titles on money pages, thin money pages vs. competitors, NAP inconsistencies, internal links broken at scale) / Medium (real optimization gains: meta descriptions, image alt text, internal linking, FAQ additions) / Low (hygiene, nice-to-have)</li>
+            <li><strong>Effort:</strong> S / M / L</li>
+          </ul>
+          <p>Prioritize Severity × Impact ÷ Effort. As a default 80/20: fix direct-answer content on money pages, internal linking, schema, and NAP consistency before anything else.</p>
+
+          <p><strong>Deliver the following, in this order:</strong></p>
+          <ol>
+            <li><strong>Executive summary</strong> — 5 bullets, client-friendly: overall health score out of 100, top 3 problems, top 3 opportunities, expected impact of fixing them.</li>
+            <li><strong>Scorecard</strong> — one line per area (Technical, On-page, Content/E-E-A-T, Schema, Off-page, Local, AI baseline), each rated Pass / Needs work / Fail.</li>
+            <li><strong>Issues table</strong> — columns: # | Area | Issue | Evidence (URL + tool/method used) | Severity | Effort | Fix | Owner (agency / developer / client).</li>
+            <li><strong>7-day fix plan</strong> — every Critical item, the top money pages refreshed, missing schema added, internal linking fixes, sitemap resubmitted.</li>
+            <li><strong>30/60/90-day roadmap</strong> with concrete KPIs at each checkpoint.</li>
+            <li><strong>Open items / access needed</strong> — anything that couldn't be verified this pass because of a missing login, a missing tool, or an unanswered question. Be specific about what access would unblock it.</li>
+          </ol>
+
+          <p><strong>Success criteria</strong> to measure against after fixes land: zero Critical errors on recrawl; schema validates cleanly on every key template; Core Web Vitals passing on mobile field data; every money page within 3 clicks and internally linked; top pages refreshed within the last 30 days; clean indexing in Search Console.</p>
+        </div>
+      </div>
+
+      <div class="af-section-divider">2. Fix Issues — after the audit is saved</div>
 
       <div class="form-card af-card">
         <div class="af-card-head">
