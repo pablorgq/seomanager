@@ -899,6 +899,41 @@ app.post('/api/auditdata', apiGuard, (req, res) => {
 });
 
 /* ─────────────────────────────────────────────
+   AUDIT REPORTS  (Audit tab — Run Audit results, per client, newest first)
+───────────────────────────────────────────── */
+const AUDITREPORTS_FILE = join(DATA_DIR, '.auditreports.json');
+const AUDITREPORTS_MAX_PER_CLIENT = 5;   // bounds file growth; older runs are rarely revisited
+function loadAuditReports() {
+  if (!existsSync(AUDITREPORTS_FILE)) return {};
+  try { return JSON.parse(readFileSync(AUDITREPORTS_FILE, 'utf8')); }
+  catch { return {}; }
+}
+function saveAuditReports(data) {
+  try { writeFileSync(AUDITREPORTS_FILE, JSON.stringify(data)); }
+  catch (e) { console.warn('[auditreports] Failed to persist:', e.message); }
+}
+
+app.get('/api/auditreports', apiGuard, (req, res) => res.json(loadAuditReports()));
+
+/* Patch one issue's Outcome (and optional ticket) within a saved audit — the
+   only field the Fix Issues panel writes back, so this stays a small merge
+   rather than round-tripping the whole report. */
+app.post('/api/auditreports/outcome', apiGuard, (req, res) => {
+  const { clientId, auditId, issueId, outcome, ticket } = req.body || {};
+  if (!clientId || !auditId || !issueId) {
+    return res.status(400).json({ error: { message: 'clientId, auditId and issueId required.' } });
+  }
+  const data  = loadAuditReports();
+  const audit = (data[clientId] || []).find(a => a.id === auditId);
+  const issue = audit?.issues?.find(i => i.id === issueId);
+  if (!issue) return res.status(404).json({ error: { message: 'Audit or issue not found.' } });
+  if (outcome !== undefined) issue.outcome = outcome;
+  if (ticket  !== undefined) issue.ticket  = ticket;
+  saveAuditReports(data);
+  res.json({ ok: true });
+});
+
+/* ─────────────────────────────────────────────
    WEEK PLAN  (one record per ISO week)
 
    Keyed by week — 2026-W35 — rather than being a single current-plan blob, so
@@ -2529,6 +2564,258 @@ app.post('/api/schema/scan', apiGuard, async (req, res) => {
   } catch (e) {
     res.status(502).json({ error: { message: e.message } });
   }
+});
+
+/* ─────────────────────────────────────────────
+   RUN AUDIT  (Audit tab — actually performs the fundamental SEO audit,
+   instead of handing back a prompt to run somewhere else)
+
+   Reuses the schema crawler's sitemap discovery and per-page JSON-LD parser
+   (schemaSitemapUrls, parsePageSchema, SCHEMA_UA) so technical, on-page and
+   schema evidence come from one fetch pass per page, not three.
+
+   Every sub-check is wrapped so one failure (a blocked robots.txt, a dead
+   Ahrefs key, a timed-out page) degrades that section to an error note
+   instead of failing the whole run — the report should say what it could
+   not check, never guess or silently skip it.
+───────────────────────────────────────────── */
+const AUDIT_MAX_PAGES   = 12;     // money pages + sitemap sample, combined
+const AUDIT_TIME_BUDGET = 70000;  // wall-clock cap on the page-fetch loop
+
+function auditNoindex(html) {
+  const m = html.match(/<meta[^>]+name=["']robots["'][^>]+content=["']([^"']*)["']/i);
+  return /noindex/i.test(m?.[1] || '');
+}
+function auditWordCount(html) {
+  const text = html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ');
+  return (text.match(/\S+/g) || []).length;
+}
+function auditImagesNoAlt(html) {
+  const imgs = html.match(/<img\b[^>]*>/gi) || [];
+  return imgs.filter(tag => !/\balt\s*=\s*["'][^"']+["']/i.test(tag)).length;
+}
+
+async function auditFetchPage(url) {
+  const started = Date.now();
+  try {
+    const r = await fetch(url, {
+      headers: { 'User-Agent': SCHEMA_UA, 'Accept': 'text/html,application/xhtml+xml,*/*' },
+      redirect: 'follow', signal: AbortSignal.timeout(9000),
+    });
+    const html = r.ok ? await r.text() : '';
+    if (!r.ok) return { url, status: r.status, error: `HTTP ${r.status}`, ms: Date.now() - started };
+    const parsed = parsePageSchema(html, url);
+    return {
+      url, status: r.status, finalUrl: r.url, redirected: r.redirected,
+      title: parsed.title, h1: parsed.h1, h1Count: (html.match(/<h1[^>]*>/gi) || []).length,
+      metaDesc: parsed.metaDesc, canonical: parsed.canonical,
+      noindex: auditNoindex(html), wordCount: auditWordCount(html), imagesNoAlt: auditImagesNoAlt(html),
+      schemaTypes: parsed.types, schemaParseErrors: parsed.parseErrors.length, schemaGenerators: parsed.generators,
+      ms: Date.now() - started,
+    };
+  } catch (e) {
+    return { url, error: e.message, ms: Date.now() - started };
+  }
+}
+
+async function auditCheckRobots(origin) {
+  try {
+    const r = await fetch(`${origin}/robots.txt`, { headers: { 'User-Agent': SCHEMA_UA }, signal: AbortSignal.timeout(8000), redirect: 'follow' });
+    if (!r.ok) return { exists: false, note: `robots.txt returned HTTP ${r.status}` };
+    const txt = await r.text();
+    const disallowsAll = /^\s*user-agent:\s*\*[\s\S]*?^\s*disallow:\s*\/\s*$/im.test(txt);
+    const hasSitemap   = /^\s*sitemap:/im.test(txt);
+    const aiBots       = ['GPTBot', 'OAI-SearchBot', 'PerplexityBot', 'Google-Extended'];
+    // A block only counts if it's under that bot's own (or a wildcard) group with a real Disallow.
+    const blocksAi = aiBots.filter(bot => {
+      const groupRe = new RegExp(`user-agent:\\s*${bot}[\\s\\S]*?(?=user-agent:|$)`, 'i');
+      const group = txt.match(groupRe)?.[0] || '';
+      return /disallow:\s*\/\s*$/im.test(group);
+    });
+    return { exists: true, disallowsAll, hasSitemap, blocksAi, raw: txt.slice(0, 4000) };
+  } catch (e) {
+    return { exists: null, note: `Could not fetch robots.txt: ${e.message}` };
+  }
+}
+
+async function auditCheckHttps(domain) {
+  const out = { httpsOk: null, redirectsFromHttp: null, canonicalHost: null, issues: [] };
+  try {
+    const httpsR = await fetch(`https://${domain}`, { headers: { 'User-Agent': SCHEMA_UA }, redirect: 'follow', signal: AbortSignal.timeout(9000) });
+    out.httpsOk = httpsR.ok;
+    out.canonicalHost = new URL(httpsR.url).hostname;
+    if (!httpsR.ok) out.issues.push(`https:// returned HTTP ${httpsR.status}`);
+  } catch (e) {
+    out.httpsOk = false;
+    out.issues.push(`https:// failed to load: ${e.message}`);
+  }
+  try {
+    const httpR = await fetch(`http://${domain}`, { headers: { 'User-Agent': SCHEMA_UA }, redirect: 'manual', signal: AbortSignal.timeout(9000) });
+    out.redirectsFromHttp = httpR.status >= 300 && httpR.status < 400 && /^https:/i.test(httpR.headers.get('location') || '');
+    if (!out.redirectsFromHttp) out.issues.push('http:// does not redirect to https://');
+  } catch (e) {
+    out.issues.push(`http:// check failed: ${e.message}`);
+  }
+  return out;
+}
+
+async function ahrefsFetchDirect(endpoint, params) {
+  const u = new URL(`https://api.ahrefs.com/v3/${endpoint.replace(/^\/+/, '')}`);
+  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== '') u.searchParams.set(k, v);
+  const r = await fetch(u.href, { headers: { 'Authorization': `Bearer ${AHREFS_KEY}`, 'Accept': 'application/json' }, signal: AbortSignal.timeout(20000) });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data?.error || `Ahrefs ${r.status}`);
+  return data;
+}
+
+async function auditGatherBacklinks(domain) {
+  if (!AHREFS_KEY) return { ok: false, note: 'AHREFS_API_KEY not configured on the server.' };
+  const today = new Date().toISOString().slice(0, 10);
+  try {
+    const [rating, stats, refdomains] = await Promise.all([
+      ahrefsFetchDirect('site-explorer/domain-rating',    { target: domain, date: today }).catch(e => ({ error: e.message })),
+      ahrefsFetchDirect('site-explorer/backlinks-stats',  { target: domain, mode: 'domain', date: today }).catch(e => ({ error: e.message })),
+      ahrefsFetchDirect('site-explorer/refdomains', {
+        target: domain, mode: 'domain', limit: 5, order_by: 'domain_rating:desc',
+        select: 'domain,domain_rating,links_to_target,traffic_domain',
+      }).catch(e => ({ error: e.message })),
+    ]);
+    return { ok: true, domainRating: rating, backlinksStats: stats, topReferringDomains: refdomains };
+  } catch (e) {
+    return { ok: false, note: e.message };
+  }
+}
+
+const AUDIT_SYNTHESIS_SYSTEM_PROMPT = `You are a Senior SEO Campaign Manager writing up a fundamental (traditional/technical) SEO audit from evidence already collected by tools — you did not browse the site yourself, so never state anything the evidence does not support, and never invent a URL, metric or fact.
+
+CORE RULE: AI search crawls the same web Google does. Foundation problems block AI visibility too.
+
+Never recommend PBNs, fake or incentivized reviews, scaled unedited AI content, or disavowing links outside a real manual action or known link-scheme history. No fixed word-count targets — judge depth against what the evidence shows, not a number. A cosmetic freshness bump (only a date changed) is not a fix. FAQPage/HowTo schema helps machine understanding but does not guarantee rich results or AI citations.
+
+Rate every issue:
+- Severity: Critical (blocks indexing/ranking or losing revenue now: noindex on a money page, sitewide robots block, broken HTTPS, an orphaned money page) / High (clear ranking impact: missing business schema, duplicate/missing titles on money pages, thin content vs. competitors) / Medium (real optimization gains: meta descriptions, alt text, internal linking) / Low (hygiene).
+- Effort: S / M / L.
+
+Return ONLY a valid JSON object, no prose and no markdown fences, exactly this shape:
+{
+  "execSummary": ["bullet 1", "bullet 2", "bullet 3", "bullet 4", "bullet 5"],
+  "scorecard": [{"area":"Technical","rating":"Pass|Needs work|Fail"}, {"area":"On-page","rating":"..."}, {"area":"Schema","rating":"..."}, {"area":"Off-page","rating":"..."}],
+  "issues": [{"area":"Technical|On-page|Schema|Off-page","issue":"...","evidence":"the URL and what was actually seen","severity":"Critical|High|Medium|Low","effort":"S|M|L","fix":"the exact fix — literal text or field to change","owner":"agency|developer|client"}],
+  "plan7": "7-day fix plan as a short paragraph or bullet list in one string",
+  "plan306090": "30/60/90-day roadmap as one string with the three checkpoints",
+  "openItems": ["anything the evidence could not settle"]
+}
+The first bullet of execSummary must state an overall health score out of 100. Owner "agency" means a copy edit, schema field, sitemap exclusion, alt text or title/meta rewrite — anything needing hosting/server access, a Google Business Profile login, a social login, or DNS is "developer" or "client", never "agency".`;
+
+async function auditSynthesize(evidence) {
+  if (!ANTHROPIC_KEY) return { synthesized: false, reason: 'ANTHROPIC_API_KEY not configured on the server.' };
+  try {
+    const up = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-5',
+        max_tokens: 8000,
+        system: AUDIT_SYNTHESIS_SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: `Evidence collected for this audit:\n\n${JSON.stringify(evidence, null, 2)}` }],
+      }),
+      signal: AbortSignal.timeout(90000),
+    });
+    const data = await up.json();
+    if (!up.ok || data?.error) throw new Error(data?.error?.message || `Anthropic returned ${up.status}`);
+    let text = data.content?.find(b => b.type === 'text')?.text || '{}';
+    text = text.replace(/^\s*```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed.issues)) throw new Error('Model response had no issues array');
+    return { synthesized: true, ...parsed };
+  } catch (e) {
+    return { synthesized: false, reason: e.message };
+  }
+}
+
+app.post('/api/audit/run', apiGuard, async (req, res) => {
+  const { clientId, domain: rawDomain, cms, businessModel, serviceArea, moneyPages, competitors, accessAvailable } = req.body || {};
+  const domain = bareHost(rawDomain);
+  if (!clientId || !domain) return res.status(400).json({ error: { message: 'clientId and domain required.' } });
+  const origin = `https://${domain}`;
+
+  const [robots, https, sitemap] = await Promise.all([
+    auditCheckRobots(origin),
+    auditCheckHttps(domain),
+    schemaSitemapUrls(origin, 30, '').catch(e => ({ urls: [], attempts: [], error: e.message })),
+  ]);
+
+  // Money pages first — those are the ones the audit is actually for — then
+  // fill out the sample from the sitemap, deduped, capped for run time.
+  const seen = new Set();
+  const pageQueue = [];
+  for (const u of [...(Array.isArray(moneyPages) ? moneyPages : []), ...(sitemap.urls || [])]) {
+    if (!u || seen.has(u)) continue;
+    seen.add(u);
+    pageQueue.push(u);
+    if (pageQueue.length >= AUDIT_MAX_PAGES) break;
+  }
+
+  const pages = [];
+  const deadline = Date.now() + AUDIT_TIME_BUDGET;
+  for (const url of pageQueue) {
+    if (Date.now() > deadline) { pages.push({ url, error: 'skipped — time budget reached' }); continue; }
+    pages.push(await auditFetchPage(url));
+  }
+
+  const backlinks = await auditGatherBacklinks(domain);
+
+  const evidence = {
+    domain, cms, businessModel, serviceArea,
+    moneyPages: moneyPages || [], competitors: competitors || [], accessAvailable: accessAvailable || [],
+    robots, https,
+    sitemap: { found: !!sitemap.urls?.length, count: sitemap.urls?.length || 0, sample: (sitemap.urls || []).slice(0, 15), attempts: sitemap.attempts || [] },
+    pages, backlinks,
+  };
+
+  const synthesis = await auditSynthesize(evidence);
+
+  // These need access this app never has (a login, an API this server isn't
+  // wired to) — flagged regardless of what the model said, not left to chance.
+  const alwaysOpen = [
+    'Google Business Profile completeness, reviews and posts — needs a connected GBP login.',
+    'Core Web Vitals (field data) — needs a Google PageSpeed Insights / CrUX API key, not configured.',
+    'GA4 traffic and conversion data — needs a connected GA4 login.',
+    'Social profile NAP consistency (Facebook/Instagram/LinkedIn) and directory citations — needs manual review of each profile.',
+    'AI Overview / ChatGPT / Perplexity citation baseline — needs a manual search of the money queries.',
+  ];
+
+  const record = {
+    id: 'a_' + Math.random().toString(36).slice(2, 10),
+    date: new Date().toISOString().slice(0, 10),
+    generatedAt: Date.now(),
+    domain, cms, businessModel, serviceArea, moneyPages: moneyPages || [], competitors: competitors || [], accessAvailable: accessAvailable || [],
+    synthesized: synthesis.synthesized,
+    synthesisError: synthesis.synthesized ? null : synthesis.reason,
+    execSummary: synthesis.execSummary || [],
+    scorecard: synthesis.scorecard || [],
+    issues: (synthesis.issues || []).map(i => ({
+      id: 'i_' + Math.random().toString(36).slice(2, 8),
+      area: i.area || '', issue: i.issue || '', evidence: i.evidence || '',
+      severity: i.severity || 'Medium', effort: i.effort || 'M', fix: i.fix || '',
+      owner: i.owner || 'client', outcome: '', ticket: null,
+    })),
+    plan7: synthesis.plan7 || '', plan306090: synthesis.plan306090 || '',
+    openItems: [...(synthesis.openItems || []), ...alwaysOpen],
+    evidenceMeta: {
+      pagesChecked: pages.filter(p => !p.error).length, pagesFailed: pages.filter(p => p.error).length,
+      robotsOk: robots.exists === true, httpsOk: https.httpsOk === true,
+      sitemapFound: evidence.sitemap.found, backlinksOk: backlinks.ok === true,
+    },
+  };
+
+  const store = loadAuditReports();
+  store[clientId] = [record, ...(store[clientId] || [])].slice(0, AUDITREPORTS_MAX_PER_CLIENT);
+  saveAuditReports(store);
+  res.json(record);
 });
 
 const SCHEMA_SYSTEM_PROMPT = `You are a technical SEO specialist writing schema.org JSON-LD for a client's website.

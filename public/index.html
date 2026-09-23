@@ -1047,15 +1047,17 @@
     <div class="tab-panel" id="tab-audit">
       <div class="db-header">
         <h2 class="db-title">Fundamental SEO Audit</h2>
-        <p class="db-sub">Two prompts: run the audit to find issues, save the result, then come back and run the fix prompt against that saved file.</p>
+        <p class="db-sub">Run the audit against the selected client's site, then work the issues table below — a ready-to-paste fix for anything the agency can do, a standalone ticket for anything the client or a developer needs to.</p>
       </div>
 
       <div class="form-card af-card">
         <div class="af-card-head">
           <h3 class="af-h">1. Find Issues — run the audit</h3>
-          <button class="btn-sm" id="af-copyAuditBtn">Copy prompt</button>
         </div>
-        <p class="af-lead">Paste per client, filling in the bracketed fields at the top. Produces the <code>clients/&lt;client&gt;-fundamental-seo-audit-YYYY-MM-DD.md</code> file the Fix Issues prompt below reads from.</p>
+        <div id="audit-runPanel"></div>
+        <details class="af-details">
+          <summary>What this checks</summary>
+        <p class="af-lead">The Run Audit button above does everything below automatically for what this app can already reach — technical crawl, on-page, schema, backlinks, competitors. Google Business Profile, Core Web Vitals, GA4, social-profile NAP, and AI-visibility need logins/API keys this app doesn't have, so those always land in Open Items instead of being guessed at.</p>
         <div class="af-quote">
           <p>You are a Senior SEO Campaign Manager at a digital marketing agency. Run a complete fundamental (traditional/technical) SEO audit for the client and site below, then report back with evidence-backed findings and a prioritized fix plan.</p>
           <p class="af-fields">
@@ -1165,16 +1167,19 @@
 
           <p><strong>Success criteria</strong> to measure against after fixes land: zero Critical errors on recrawl; schema validates cleanly on every key template; Core Web Vitals passing on mobile field data; every money page within 3 clicks and internally linked; top pages refreshed within the last 30 days; clean indexing in Search Console.</p>
         </div>
+        </details>
       </div>
 
-      <div class="af-section-divider">2. Fix Issues — after the audit is saved</div>
+      <div class="af-section-divider">2. Fix Issues — after the audit runs</div>
 
       <div class="form-card af-card">
         <div class="af-card-head">
-          <h3 class="af-h">A. Paste-ready prompt — run this per client</h3>
-          <button class="btn-sm" id="af-copyPromptBtn">Copy prompt</button>
+          <h3 class="af-h">Work the issues table</h3>
         </div>
-        <p class="af-lead">Run once you have a saved <code>clients/&lt;client&gt;-fundamental-seo-audit-YYYY-MM-DD.md</code> for the client — it always starts from a specific audit's issues table.</p>
+        <div id="audit-fixPanel"></div>
+        <details class="af-details">
+          <summary>What this follows</summary>
+        <p class="af-lead">Every agency-owned issue gets a ready-to-paste fix; everything needing the client or a developer gets a standalone ticket in the format below. Nothing is pushed to a live site automatically.</p>
         <div class="af-quote">
           <p>Fix the issues from the fundamental SEO audit for <strong>[CLIENT NAME]</strong>.</p>
           <ol>
@@ -1193,6 +1198,7 @@
           </ol>
           <p>Work through Critical and High items fully before touching Medium/Low unless told otherwise. If more than roughly 10 minutes of tool time would be needed for one single issue (e.g. a full image-optimization pass across dozens of files), do a representative sample, confirm the fix pattern works, and hand off the bulk repetition as a scoped ticket rather than grinding through every instance.</p>
         </div>
+        </details>
       </div>
 
       <div class="form-card af-card">
