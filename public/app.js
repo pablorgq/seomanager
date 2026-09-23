@@ -2984,9 +2984,10 @@ function rtRender() {
     : emptyRow('No other keywords');
 }
 
+// Schema is a single site-wide plugin run now (WEEKLY_CATEGORIES.schemaOpt,
+// scope:'client'), not per-keyword work — so it has no flag here.
 const TASK_FIELDS = [
   { key: 'spc',     label: 'SPC',  title: 'Support Pages Creation' },
-  { key: 'schema',  label: 'SCH',  title: 'Schema Optimization' },
   { key: 'co',      label: 'CO',   title: 'Content Optimization' },
   { key: 'offpage', label: 'OPG',  title: 'Off-Page Campaign' },
 ];
@@ -4277,10 +4278,15 @@ const WEEKLY_DAYS = [
 ];
 const WEEKLY_CATEGORIES = [
   { key: 'supportPages', label: 'Support Pages Creation', short: 'Pages',    scope: 'mk' },
-  { key: 'schemaOpt',    label: 'Schema Optimization',    short: 'Schema',   scope: 'page' },
+  // The site-wide plugin installs schema on every page in one run, so this is
+  // one task per client — not one per page or per keyword like the others.
+  { key: 'schemaOpt',    label: 'Schema Optimization',    short: 'Schema',   scope: 'client' },
   { key: 'contentOpt',   label: 'Content Optimization',   short: 'Content', scope: 'page' },
   { key: 'offPage',      label: 'Off-Page Campaign',      short: 'Off-Page', scope: 'mk' },
 ];
+// The single row a scope:'client' category renders — there is no per-page or
+// per-keyword id to key its status against, so this constant stands in.
+const SCHEMA_TASK_KEY = 'sitewide';
 const WEEKLY_STATUSES = [
   { key: 'not_started', label: 'Not Started', cls: 'wk-status-not' },
   { key: 'in_progress', label: 'In Progress', cls: 'wk-status-progress' },
@@ -4411,31 +4417,14 @@ async function weeklyLoadFromServer() {
   }
 }
 
-// Unique target pages derived from a client's Main Keywords
-function weeklyClientPages(client, categoryKey) {
+// Unique target pages derived from a client's Main Keywords — the row set for
+// the remaining page-scoped category (contentOpt; schema moved to scope:'client').
+function weeklyClientPages(client) {
   const pages = new Set();
   (client?.keywords || []).filter(k => k.mainKeyword).forEach(k => {
     const page = (k.targetUrl || k.url || '').trim();
     if (page) pages.add(page);
   });
-  // Schema is judged against the whole site, not only the pages that happen to
-  // carry a tracked keyword — the Schema tab audits every page, so the checklist
-  // should list every page. Other page-scoped categories keep the keyword set,
-  // which is the work they are actually about.
-  if (categoryKey === 'schemaOpt') {
-    // Dedupe on a normalised key so /services and /services/ do not become two
-    // checklist rows and double the task count, while the row keeps whichever
-    // form was already there (task status is stored against that exact string).
-    const key = u => { try { const x = new URL(u); return (x.origin + x.pathname.replace(/\/+$/, '')).toLowerCase(); } catch { return String(u).replace(/\/+$/, '').toLowerCase(); } };
-    const seen = new Set([...pages].map(key));
-    for (const u of client?.pageUrls || []) {
-      if (!u) continue;
-      const k = key(u);
-      if (seen.has(k)) continue;
-      seen.add(k);
-      pages.add(u);
-    }
-  }
   return [...pages];
 }
 
@@ -4449,7 +4438,9 @@ function weeklyClientTaskCounts(client) {
   for (const cat of WEEKLY_CATEGORIES) {
     const itemKeys = cat.scope === 'mk'
       ? (client.keywords || []).filter(k => k.mainKeyword).map(k => k.id)
-      : weeklyClientPages(client, cat.key);
+      : cat.scope === 'client'
+      ? [SCHEMA_TASK_KEY]
+      : weeklyClientPages(client);
     let done = 0, blocked = 0;
     for (const itemKey of itemKeys) {
       const status = weeklyGetStatus(client.id, cat.key, itemKey);
@@ -4620,7 +4611,9 @@ function weeklyCategorySectionHtml(client, category) {
   const mkKws = (client.keywords || []).filter(k => k.mainKeyword);
   const items = category.scope === 'mk'
     ? mkKws.map(k => ({ key: k.id, label: k.keyword || '(blank)', kw: k }))
-    : weeklyClientPages(client, category.key).map(page => ({ key: page, label: page, kw: null }));
+    : category.scope === 'client'
+    ? [{ key: SCHEMA_TASK_KEY, label: 'Install schema (site-wide plugin)', kw: null }]
+    : weeklyClientPages(client).map(page => ({ key: page, label: page, kw: null }));
 
   if (!items.length) {
     const emptyMsg = category.scope === 'mk'
@@ -9238,8 +9231,9 @@ function weekplanCandidates(client) {
   const push = (c) => out.push({ id: `${client.id}:${out.length}`, clientId: client.id, ...c });
   const kws = client.keywords || [];
 
-  // 1. Rank Tracker task flags — 0 and 1 are outstanding, 2 is done
-  const FLAG_TO_CAT = { spc: 'supportPages', schema: 'schemaOpt', co: 'contentOpt', offpage: 'offPage' };
+  // 1. Rank Tracker task flags — 0 and 1 are outstanding, 2 is done. Schema has
+  // no flag here — it is one site-wide task per client, handled in section 2.
+  const FLAG_TO_CAT = { spc: 'supportPages', co: 'contentOpt', offpage: 'offPage' };
   // Page-scoped categories are keyed by URL in Weekly, so two keywords pointing
   // at one page are one task there. Emitting both would put twin blocks on the
   // plan and leave one stranded when the other is ticked.
@@ -9288,34 +9282,33 @@ function weekplanCandidates(client) {
     }
   }
 
-  // 2. Schema gaps, from the same evaluation the Schema tab renders
-  const store = schemaStore?.[client.id];
-  if (store?.pages?.length) {
-    const gaps = new Map();
-    let invalid = 0;
-    for (const p of store.pages) {
-      const ev = schemaEvaluate(p);
-      if (ev.status === 'blocked') invalid++;
-      for (const m of ev.missing) gaps.set(m, (gaps.get(m) || 0) + 1);
+  // 2. Schema — one task for the whole client, not one per page: the plugin
+  // installs it site-wide in a single run. Surfaced until that single Weekly
+  // row is marked done; the Schema tab's crawl (when there is one) only adds
+  // context to the "why", the same evidence it shows on its own audit table.
+  if (weeklyGetStatus(client.id, 'schemaOpt', SCHEMA_TASK_KEY) !== 'done') {
+    let why = 'not started';
+    const store = schemaStore?.[client.id];
+    if (store?.pages?.length) {
+      let invalid = 0;
+      const gaps = new Map();
+      for (const p of store.pages) {
+        const ev = schemaEvaluate(p);
+        if (ev.status === 'blocked') invalid++;
+        for (const m of ev.missing) gaps.set(m, (gaps.get(m) || 0) + 1);
+      }
+      const topGap = [...gaps.entries()].sort((a, b) => b[1] - a[1])[0];
+      const parts = [];
+      if (invalid) parts.push(`${invalid} page(s) invalid`);
+      if (topGap)  parts.push(`${topGap[0]} missing on ${topGap[1]} page(s)`);
+      if (parts.length) why = parts.join(' · ');
     }
-    if (invalid) {
-      push({
-        category: 'schemaOpt',
-        label: `Fix ${invalid} page(s) with invalid JSON-LD`,
-        why: 'Google drops the whole block when it will not parse',
-        priority: 12, minutes: 30 * Math.min(invalid, 4), itemKey: '',
-      });
-    }
-    for (const [type, count] of [...gaps.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3)) {
-      push({
-        category: 'schemaOpt',
-        label: `Add ${type} markup`,
-        why: `missing on ${count} of ${store.pages.length} page(s)`,
-        priority: 5 + Math.min(3, Math.floor(count / 5)),
-        minutes: count > 10 ? 90 : 45,
-        itemKey: '',
-      });
-    }
+    push({
+      category: 'schemaOpt',
+      label: 'Install schema (site-wide plugin)',
+      why, itemKey: SCHEMA_TASK_KEY,
+      priority: 8, minutes: 20,
+    });
   }
 
   // 3. Pages with no POP score yet — nothing has been measured
