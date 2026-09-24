@@ -2917,13 +2917,20 @@ async function extTokenRefresh() {
 function populateGlobalClientSelect() {
   const sel = document.getElementById('global-client-select');
   if (!sel || !rtData) return;
-  const active = rtData.activeClientId;
-  sel.innerHTML = (rtData.clients || [])
-    .map(c => `<option value="${escHtml(c.id)}"${c.id === active ? ' selected' : ''}>${escHtml(c.name)}</option>`)
-    .join('') || '<option value="">No clients yet</option>';
+  const activeId = rtData.activeClientId;
+  const clients  = rtData.clients || [];
+  const opt = c => `<option value="${escHtml(c.id)}"${c.id === activeId ? ' selected' : ''}>${escHtml(c.name)}</option>`;
+  const live     = clients.filter(c => c.active !== false).map(opt).join('');
+  // Inactive clients stay selectable — nothing about a client is ever deleted
+  // by this toggle — just grouped out of the way so they don't clutter the
+  // day-to-day list of who you're actually working on right now.
+  const inactive = clients.filter(c => c.active === false).map(opt).join('');
+  sel.innerHTML = (live || inactive)
+    ? live + (inactive ? `<optgroup label="Inactive">${inactive}</optgroup>` : '')
+    : '<option value="">No clients yet</option>';
   // Nothing to configure until a client exists
   const editBtn = document.getElementById('rt-editClientBtn');
-  if (editBtn) editBtn.disabled = !(rtData.clients || []).length;
+  if (editBtn) editBtn.disabled = !clients.length;
 }
 
 function rtRankBadge(rank, prev) {
@@ -4079,10 +4086,15 @@ function dbRender() {
     return;
   }
 
-  const clients = rtData?.clients ?? [];
+  const allClients = rtData?.clients ?? [];
+  const clients     = allClients.filter(c => c.active !== false);
 
-  if (!clients.length) {
+  if (!allClients.length) {
     grid.innerHTML = '<div class="db-empty">No clients yet — add clients in Rank Tracker to see performance here.</div>';
+    return;
+  }
+  if (!clients.length) {
+    grid.innerHTML = '<div class="db-empty">No active clients — every client is marked inactive. Reactivate one in Client Setup.</div>';
     return;
   }
 
@@ -4678,8 +4690,11 @@ function weeklyRender() {
 
   strip.innerHTML = WEEKLY_DAYS.map(d => {
     const dayClientIds = weeklyData.schedule[d.key] || [];
+    // An already-scheduled client keeps showing even if marked inactive since
+    // then — nothing about the toggle removes an existing assignment. Only
+    // the "+ add client" list is limited to active ones.
     const dayClients   = dayClientIds.map(id => clients.find(c => c.id === id)).filter(Boolean);
-    const unassigned   = clients.filter(c => !dayClientIds.includes(c.id));
+    const unassigned   = clients.filter(c => c.active !== false && !dayClientIds.includes(c.id));
     const isToday      = d.key === todayKey;
     const isSelected   = d.key === weeklySelectedDay;
 
@@ -6097,6 +6112,7 @@ async function rtLoadPopLanguages() {
 function rtShowAddClient() {
   document.getElementById('setup-title').textContent       = 'New Client';
   document.getElementById('rt-clientName').value           = '';
+  document.getElementById('rt-clientActive').checked       = true;
   document.getElementById('rt-campaignId').value           = '';
   document.getElementById('rt-wpUrl').value                = '';
   document.getElementById('rt-sitemapUrl').value           = '';
@@ -6136,6 +6152,7 @@ function rtShowAddClient() {
 function rtShowEditClientFields(c) {
   if (!c) return;
   document.getElementById('rt-clientName').value           = c.name;
+  document.getElementById('rt-clientActive').checked       = c.active !== false;
   document.getElementById('rt-campaignId').value           = c.aaCampaignId || '';
   document.getElementById('rt-wpUrl').value                = c.wpUrl  || '';
   document.getElementById('rt-sitemapUrl').value           = c.sitemapUrl || '';
@@ -6178,6 +6195,7 @@ function rtShowEditClient() {
 
 async function rtSaveClient() {
   const name        = document.getElementById('rt-clientName').value.trim();
+  const active      = document.getElementById('rt-clientActive').checked;
   const cid         = document.getElementById('rt-campaignId').value.trim();
   const wpUrl       = document.getElementById('rt-wpUrl').value.trim();
   const sitemapUrl  = document.getElementById('rt-sitemapUrl').value.trim();
@@ -6204,7 +6222,7 @@ async function rtSaveClient() {
   const mode        = document.getElementById('rt-saveClientBtn').dataset.mode;
   if (!name) { setupSetSaved('Client name is required.', true); return; }
   if (mode === 'add') {
-    const client = { id: rtUid(), name, aaCampaignId: cid, wpUrl, sitemapUrl, wpUser, wpPass, popLocation, popLanguage, popGnl, pageUrls, biz, clickupListId: cuId || '', clickupListName: cuName || '', keywords: [] };
+    const client = { id: rtUid(), name, active, aaCampaignId: cid, wpUrl, sitemapUrl, wpUser, wpPass, popLocation, popLanguage, popGnl, pageUrls, biz, clickupListId: cuId || '', clickupListName: cuName || '', keywords: [] };
     rtData.clients.push(client);
     rtData.activeClientId = client.id;
   } else {
@@ -6213,7 +6231,7 @@ async function rtSaveClient() {
     // real state — a fresh install, or right after deleting the last client.
     // Saying "Saved" while writing nothing would be a lie.
     if (!c) { setupSetSaved('No client selected — use + to add one.', true); return; }
-    c.name = name; c.aaCampaignId = cid; c.wpUrl = wpUrl; c.sitemapUrl = sitemapUrl; c.wpUser = wpUser; c.wpPass = wpPass; c.popLocation = popLocation; c.popLanguage = popLanguage; c.popGnl = popGnl; c.pageUrls = pageUrls; c.biz = biz;
+    c.name = name; c.active = active; c.aaCampaignId = cid; c.wpUrl = wpUrl; c.sitemapUrl = sitemapUrl; c.wpUser = wpUser; c.wpPass = wpPass; c.popLocation = popLocation; c.popLanguage = popLanguage; c.popGnl = popGnl; c.pageUrls = pageUrls; c.biz = biz;
     if (cuId !== null) { c.clickupListId = cuId; c.clickupListName = cuName; }
   }
   rtSave();

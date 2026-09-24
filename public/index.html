@@ -901,6 +901,11 @@
             <label class="form-label">Client Name</label>
             <input type="text" id="rt-clientName" class="form-input" placeholder="e.g. Seven Oaks Dental">
           </div>
+          <label class="toggle-label" style="margin-bottom:14px">
+            <input type="checkbox" id="rt-clientActive" class="toggle-input" checked>
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            Active Client <span style="font-weight:400;color:var(--text-muted);font-size:11px">(inactive clients are hidden from the selector, dashboard and weekly tasks — nothing is deleted)</span>
+          </label>
         <div id="rt-campaignPickWrap" class="form-group hidden" style="margin-bottom:14px">
           <label class="form-label">Search AA Campaign</label>
           <select id="rt-campaignPick" class="form-input" style="cursor:pointer">
