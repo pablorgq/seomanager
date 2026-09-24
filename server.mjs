@@ -2851,7 +2851,12 @@ app.post('/api/audit/run', apiGuard, async (req, res) => {
       id: 'i_' + Math.random().toString(36).slice(2, 8),
       area: i.area || '', page: i.page || '', issue: i.issue || '', evidence: i.evidence || '',
       severity: i.severity || 'Medium', effort: i.effort || 'M', fix: i.fix || '',
-      owner: i.owner || 'client', outcome: '', ticket: null, clickup: null, note: '',
+      // The model doesn't always match the schema's exact casing ("Agency"
+      // instead of "agency") — every owner === 'agency' check downstream is
+      // a strict match, so an uncoerced value silently reads as client/dev.
+      owner: ['agency', 'developer', 'client'].includes(String(i.owner || '').trim().toLowerCase())
+        ? String(i.owner).trim().toLowerCase() : 'client',
+      outcome: '', ticket: null, clickup: null, note: '',
     })),
     plan7: synthesis.plan7 || '', plan306090: synthesis.plan306090 || '',
     openItems: [

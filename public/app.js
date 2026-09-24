@@ -9660,7 +9660,18 @@ async function auditLoadReports() {
   try {
     const r = await fetch('/api/auditreports');
     if (r.ok) auditReports = await r.json() || {};
-  } catch { auditReports = {}; }
+  } catch { auditReports = {}; return; }
+  // Heals audits saved before the server started normalizing owner casing —
+  // every owner === 'agency' check below is a strict match, so a stray
+  // "Agency" from an older run would otherwise still read as client/dev.
+  for (const list of Object.values(auditReports)) {
+    for (const audit of list) {
+      for (const issue of audit.issues || []) {
+        const o = String(issue.owner || '').trim().toLowerCase();
+        issue.owner = ['agency', 'developer', 'client'].includes(o) ? o : 'client';
+      }
+    }
+  }
 }
 
 /* Pre-fills the run form from the active client's existing data — the same
