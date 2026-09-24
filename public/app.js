@@ -9872,6 +9872,7 @@ async function auditClickupHandleClick(btn, audit) {
     `Evidence: ${issue.evidence || '—'}`,
     `Severity: ${issue.severity || '—'} · Effort: ${issue.effort || '—'}`,
     `Fix: ${issue.fix || '—'}`,
+    issue.note ? `Note: ${issue.note}` : '',
   ].filter(Boolean).join('\n');
 
   clickupSetBtnState(btn, 'busy');
@@ -9891,7 +9892,7 @@ async function auditClickupHandleClick(btn, audit) {
     // Pushing to ClickUp is the same signal as picking an Outcome by hand —
     // agency work just got logged as done, everything else just got handed off.
     issue.outcome = issue.owner === 'agency' ? 'Fixed & verified live' : 'Handed off — see ticket';
-    auditSetOutcome(clientId, audit.id, issue.id, issue.outcome, issue.clickup);
+    auditPatchIssue(clientId, audit.id, issue.id, { outcome: issue.outcome, clickup: issue.clickup });
 
     clickupSetBtnState(btn, 'done', `Added to ClickUp as "${data.taskName}" on ${new Date().toLocaleString()}`);
     const sel = document.querySelector(`.audit-outcome-select[data-issue="${CSS.escape(issue.id)}"]`);
@@ -9922,6 +9923,10 @@ function auditIssueRowHtml(clientId, issue) {
           ${outcomes.map(o => `<option value="${escHtml(o)}"${issue.outcome === o ? ' selected' : ''}>${escHtml(o || '—')}</option>`).join('')}
         </select>
       </td>
+      <td>
+        <textarea class="audit-note-input" data-issue="${escHtml(issue.id)}" rows="2"
+                  placeholder="Note — goes on the ClickUp task too">${escHtml(issue.note || '')}</textarea>
+      </td>
     </tr>`;
 }
 
@@ -9950,7 +9955,7 @@ function auditFixPanelRender() {
     ${active.issues?.length ? `
       <div class="audit-issues-table-wrap">
         <table class="audit-issues-table">
-          <thead><tr><th>Area</th><th>Issue</th><th>Sev</th><th>Effort</th><th>Owner</th><th>Fix / Ticket</th><th>ClickUp</th><th>Outcome</th></tr></thead>
+          <thead><tr><th>Area</th><th>Issue</th><th>Sev</th><th>Effort</th><th>Owner</th><th>Fix / Ticket</th><th>ClickUp</th><th>Outcome</th><th>Note</th></tr></thead>
           <tbody>${active.issues.map(i => auditIssueRowHtml(c.id, i)).join('')}</tbody>
         </table>
       </div>
@@ -9975,20 +9980,28 @@ function auditFixPanelRender() {
     btn.addEventListener('click', () => auditClickupHandleClick(btn, active));
   });
   root.querySelectorAll('.audit-outcome-select').forEach(sel => {
-    sel.addEventListener('change', () => auditSetOutcome(c.id, active.id, sel.dataset.issue, sel.value));
+    sel.addEventListener('change', () => auditPatchIssue(c.id, active.id, sel.dataset.issue, { outcome: sel.value }));
+  });
+  root.querySelectorAll('.audit-note-input').forEach(ta => {
+    // Kept live in memory on every keystroke so a CU click right after typing
+    // (before the field is blurred) still picks up what was just written;
+    // only actually saved to the server once the field loses focus.
+    ta.addEventListener('input', () => {
+      const issue = active.issues.find(i => i.id === ta.dataset.issue);
+      if (issue) issue.note = ta.value;
+    });
+    ta.addEventListener('blur', () => auditPatchIssue(c.id, active.id, ta.dataset.issue, { note: ta.value }));
   });
 }
 
-async function auditSetOutcome(clientId, auditId, issueId, outcome, clickup) {
+async function auditPatchIssue(clientId, auditId, issueId, patch) {
   const audit = (auditReports[clientId] || []).find(a => a.id === auditId);
   const issue = audit?.issues?.find(i => i.id === issueId);
-  if (issue) issue.outcome = outcome;   // optimistic — the Outcome dropdown already reflects it
+  if (issue) Object.assign(issue, patch);   // optimistic — the control already reflects it
   try {
-    const body = { clientId, auditId, issueId, outcome };
-    if (clickup !== undefined) body.clickup = clickup;
     await fetch('/api/auditreports/outcome', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ clientId, auditId, issueId, ...patch }),
     });
   } catch (_) {}
 }

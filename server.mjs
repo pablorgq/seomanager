@@ -919,7 +919,7 @@ app.get('/api/auditreports', apiGuard, (req, res) => res.json(loadAuditReports()
    only field the Fix Issues panel writes back, so this stays a small merge
    rather than round-tripping the whole report. */
 app.post('/api/auditreports/outcome', apiGuard, (req, res) => {
-  const { clientId, auditId, issueId, outcome, ticket, clickup } = req.body || {};
+  const { clientId, auditId, issueId, outcome, ticket, clickup, note } = req.body || {};
   if (!clientId || !auditId || !issueId) {
     return res.status(400).json({ error: { message: 'clientId, auditId and issueId required.' } });
   }
@@ -930,6 +930,7 @@ app.post('/api/auditreports/outcome', apiGuard, (req, res) => {
   if (outcome !== undefined) issue.outcome = outcome;
   if (ticket  !== undefined) issue.ticket  = ticket;
   if (clickup !== undefined) issue.clickup = clickup;
+  if (note    !== undefined) issue.note    = note;
   saveAuditReports(data);
   res.json({ ok: true });
 });
@@ -2850,7 +2851,7 @@ app.post('/api/audit/run', apiGuard, async (req, res) => {
       id: 'i_' + Math.random().toString(36).slice(2, 8),
       area: i.area || '', page: i.page || '', issue: i.issue || '', evidence: i.evidence || '',
       severity: i.severity || 'Medium', effort: i.effort || 'M', fix: i.fix || '',
-      owner: i.owner || 'client', outcome: '', ticket: null, clickup: null,
+      owner: i.owner || 'client', outcome: '', ticket: null, clickup: null, note: '',
     })),
     plan7: synthesis.plan7 || '', plan306090: synthesis.plan306090 || '',
     openItems: [

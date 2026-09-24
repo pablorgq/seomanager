@@ -2215,3 +2215,9 @@ button.sch-filter-status.sch-filter-on { outline-color: var(--accent); }
   max-width: 320px; white-space: pre-wrap;
 }
 .audit-issues-table .form-select { font-size: 11.5px; padding: 5px 8px; min-width: 160px; }
+.audit-note-input {
+  width: 180px; min-height: 44px; font-size: 11.5px; font-family: inherit; line-height: 1.4;
+  padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; resize: vertical;
+  background: var(--surface); color: var(--text-primary);
+}
+.audit-note-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
