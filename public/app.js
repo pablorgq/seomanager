@@ -9811,7 +9811,69 @@ function auditTicketText(issue) {
     `**How to confirm it worked:** Re-check the same evidence once the change is live.`;
 }
 
-function auditIssueRowHtml(issue) {
+/* Same button/state as the Weekly Tasks CU button (clickupSetBtnState is
+   shared as-is), but the link lives on the issue itself — audit issues
+   aren't keyed into weeklyData the way a checklist row is. */
+function auditClickupBtnHtml(clientId, issue) {
+  const client = rtData?.clients?.find(c => c.id === clientId);
+  const link   = issue.clickup;
+  const data   = `data-client="${escHtml(clientId)}" data-issue="${escHtml(issue.id)}"`;
+
+  if (!hasClickUp) {
+    return `<button class="wk-cu-btn wk-cu-off" ${data} title="ClickUp is not configured on the server">CU</button>`;
+  }
+  if (!client?.clickupListId) {
+    return `<button class="wk-cu-btn wk-cu-off" ${data} title="No ClickUp List set for this client — set one in Client Setup">CU</button>`;
+  }
+  if (link?.syncedTs) {
+    const when = new Date(link.syncedTs).toLocaleString();
+    return `<button class="wk-cu-btn wk-cu-done" ${data} title="Added to ClickUp as &quot;${escHtml(link.taskName || '')}&quot; on ${escHtml(when)}">✓</button>`;
+  }
+  return `<button class="wk-cu-btn" ${data} title="Add as a ClickUp task">CU</button>`;
+}
+
+async function auditClickupHandleClick(btn, audit) {
+  const clientId = btn.dataset.client;
+  const client   = rtData?.clients?.find(c => c.id === clientId);
+  const issue    = audit.issues.find(i => i.id === btn.dataset.issue);
+  if (!issue) return;
+
+  if (!hasClickUp) { alert('ClickUp API token is not configured on the server.'); return; }
+  if (!client?.clickupListId) {
+    alert(`Set the ClickUp List for "${client?.name || 'this client'}" in Client Setup first.`);
+    return;
+  }
+  if (issue.clickup?.syncedTs && !confirm(`Already added to ClickUp as "${issue.clickup.taskName}". Add another task?`)) return;
+
+  const taskName = `${issue.area} — ${issue.issue}`;
+  clickupSetBtnState(btn, 'busy');
+  try {
+    const r = await fetch('/api/clickup/create-task', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ listId: client.clickupListId, name: taskName }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data?.error?.message || `ClickUp error ${r.status}`);
+
+    issue.clickup = {
+      taskId: data.taskId, taskName: data.taskName,
+      listName: data.listName || client.clickupListName || '', syncedTs: Date.now(),
+    };
+    // Pushing to ClickUp is the same signal as picking an Outcome by hand —
+    // agency work just got logged as done, everything else just got handed off.
+    issue.outcome = issue.owner === 'agency' ? 'Fixed & verified live' : 'Handed off — see ticket';
+    auditSetOutcome(clientId, audit.id, issue.id, issue.outcome, issue.clickup);
+
+    clickupSetBtnState(btn, 'done', `Added to ClickUp as "${data.taskName}" on ${new Date().toLocaleString()}`);
+    const sel = document.querySelector(`.audit-outcome-select[data-issue="${CSS.escape(issue.id)}"]`);
+    if (sel) sel.value = issue.outcome;
+  } catch (e) {
+    clickupSetBtnState(btn, 'err', `ClickUp: ${e.message}`);
+  }
+}
+
+function auditIssueRowHtml(clientId, issue) {
   const isAgency = issue.owner === 'agency';
   const outcomes = ['', 'Fixed & verified live', 'Handed off — see ticket', 'Already resolved, no action needed', 'Blocked'];
   const sevCls = { critical: 'wk-status-blocked', high: 'wk-status-progress', medium: 'wk-status-not', low: 'wk-status-not' }[(issue.severity || '').toLowerCase()] || 'wk-status-not';
@@ -9826,6 +9888,7 @@ function auditIssueRowHtml(issue) {
         <div class="audit-fix-text">${escHtml(issue.fix || '')}</div>
         <button class="btn-sm audit-copy-btn" data-issue="${escHtml(issue.id)}">${isAgency ? 'Copy fix' : 'Copy ticket'}</button>
       </td>
+      <td>${auditClickupBtnHtml(clientId, issue)}</td>
       <td>
         <select class="form-select audit-outcome-select" data-issue="${escHtml(issue.id)}">
           ${outcomes.map(o => `<option value="${escHtml(o)}"${issue.outcome === o ? ' selected' : ''}>${escHtml(o || '—')}</option>`).join('')}
@@ -9859,8 +9922,8 @@ function auditFixPanelRender() {
     ${active.issues?.length ? `
       <div class="audit-issues-table-wrap">
         <table class="audit-issues-table">
-          <thead><tr><th>Area</th><th>Issue</th><th>Sev</th><th>Effort</th><th>Owner</th><th>Fix / Ticket</th><th>Outcome</th></tr></thead>
-          <tbody>${active.issues.map(auditIssueRowHtml).join('')}</tbody>
+          <thead><tr><th>Area</th><th>Issue</th><th>Sev</th><th>Effort</th><th>Owner</th><th>Fix / Ticket</th><th>ClickUp</th><th>Outcome</th></tr></thead>
+          <tbody>${active.issues.map(i => auditIssueRowHtml(c.id, i)).join('')}</tbody>
         </table>
       </div>
       ${active.plan7 ? `<div class="af-section-divider">7-day plan</div><p class="af-lead">${escHtml(active.plan7)}</p>` : ''}
@@ -9880,19 +9943,24 @@ function auditFixPanelRender() {
       copyText(e.currentTarget, issue.owner === 'agency' ? (issue.fix || '') : auditTicketText(issue));
     });
   });
+  root.querySelectorAll('.wk-cu-btn').forEach(btn => {
+    btn.addEventListener('click', () => auditClickupHandleClick(btn, active));
+  });
   root.querySelectorAll('.audit-outcome-select').forEach(sel => {
     sel.addEventListener('change', () => auditSetOutcome(c.id, active.id, sel.dataset.issue, sel.value));
   });
 }
 
-async function auditSetOutcome(clientId, auditId, issueId, outcome) {
+async function auditSetOutcome(clientId, auditId, issueId, outcome, clickup) {
   const audit = (auditReports[clientId] || []).find(a => a.id === auditId);
   const issue = audit?.issues?.find(i => i.id === issueId);
   if (issue) issue.outcome = outcome;   // optimistic — the Outcome dropdown already reflects it
   try {
+    const body = { clientId, auditId, issueId, outcome };
+    if (clickup !== undefined) body.clickup = clickup;
     await fetch('/api/auditreports/outcome', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ clientId, auditId, issueId, outcome }),
+      body: JSON.stringify(body),
     });
   } catch (_) {}
 }
