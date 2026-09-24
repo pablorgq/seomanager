@@ -9861,6 +9861,32 @@ function auditClickupBtnHtml(clientId, issue) {
   return `<button class="wk-cu-btn" ${data} title="Add as a ClickUp task">CU</button>`;
 }
 
+function auditClickupDescription(issue) {
+  return [
+    issue.page ? `Page: ${issue.page}` : '',
+    `Evidence: ${issue.evidence || '—'}`,
+    `Severity: ${issue.severity || '—'} · Effort: ${issue.effort || '—'}`,
+    `Fix: ${issue.fix || '—'}`,
+    issue.note ? `Note: ${issue.note}` : '',
+  ].filter(Boolean).join('\n');
+}
+
+/* A later Outcome pick or Note edit on an issue that already has a ClickUp
+   task belongs on that same task — appended as a comment, so the task keeps
+   a running history rather than a second task or an overwritten description.
+   Throws on failure; callers decide whether that's shown or swallowed. */
+async function auditClickupPostUpdate(issue) {
+  const text = [`Outcome: ${issue.outcome || '(none set)'}`, issue.note ? `Note: ${issue.note}` : '']
+    .filter(Boolean).join('\n');
+  const r = await fetch('/api/clickup/comment', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ taskId: issue.clickup.taskId, text }),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data?.error?.message || `ClickUp error ${r.status}`);
+}
+
 async function auditClickupHandleClick(btn, audit) {
   const clientId = btn.dataset.client;
   const client   = rtData?.clients?.find(c => c.id === clientId);
@@ -9872,26 +9898,30 @@ async function auditClickupHandleClick(btn, audit) {
     alert(`Set the ClickUp List for "${client?.name || 'this client'}" in Client Setup first.`);
     return;
   }
-  if (issue.clickup?.syncedTs && !confirm(`Already added to ClickUp as "${issue.clickup.taskName}". Add another task?`)) return;
+
+  // Already linked — update that same task instead of asking to duplicate it.
+  if (issue.clickup?.taskId) {
+    clickupSetBtnState(btn, 'busy');
+    try {
+      await auditClickupPostUpdate(issue);
+      clickupSetBtnState(btn, 'done', `Added to ClickUp as "${issue.clickup.taskName}" — just posted the current outcome/note as an update.`);
+    } catch (e) {
+      clickupSetBtnState(btn, 'err', `ClickUp: ${e.message}`);
+    }
+    return;
+  }
 
   // Title names the page the issue actually sits on, when there is one —
   // "robots.txt blocks GPTBot" needs no page, "Missing meta description"
   // is meaningless without knowing which page.
   const taskName = `${issue.area} — ${issue.issue}${issue.page ? ` (${issue.page})` : ''}`;
-  const taskDescription = [
-    issue.page ? `Page: ${issue.page}` : '',
-    `Evidence: ${issue.evidence || '—'}`,
-    `Severity: ${issue.severity || '—'} · Effort: ${issue.effort || '—'}`,
-    `Fix: ${issue.fix || '—'}`,
-    issue.note ? `Note: ${issue.note}` : '',
-  ].filter(Boolean).join('\n');
 
   clickupSetBtnState(btn, 'busy');
   try {
     const r = await fetch('/api/clickup/create-task', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ listId: client.clickupListId, name: taskName, description: taskDescription }),
+      body: JSON.stringify({ listId: client.clickupListId, name: taskName, description: auditClickupDescription(issue) }),
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data?.error?.message || `ClickUp error ${r.status}`);
@@ -9935,7 +9965,7 @@ function auditIssueRowHtml(clientId, issue) {
         </select>
       </td>
       <td>
-        <textarea class="audit-note-input" data-issue="${escHtml(issue.id)}" rows="2"
+        <textarea class="audit-note-input" data-issue="${escHtml(issue.id)}" data-orig="${escHtml(issue.note || '')}" rows="2"
                   placeholder="Note — goes on the ClickUp task too">${escHtml(issue.note || '')}</textarea>
       </td>
     </tr>`;
@@ -9991,17 +10021,31 @@ function auditFixPanelRender() {
     btn.addEventListener('click', () => auditClickupHandleClick(btn, active));
   });
   root.querySelectorAll('.audit-outcome-select').forEach(sel => {
-    sel.addEventListener('change', () => auditPatchIssue(c.id, active.id, sel.dataset.issue, { outcome: sel.value }));
+    sel.addEventListener('change', () => {
+      const issue = active.issues.find(i => i.id === sel.dataset.issue);
+      if (issue) issue.outcome = sel.value;
+      auditPatchIssue(c.id, active.id, sel.dataset.issue, { outcome: sel.value });
+      // Already on a ClickUp task — it belongs there too, not just in this app.
+      if (issue?.clickup?.taskId) auditClickupPostUpdate(issue).catch(() => {});
+    });
   });
   root.querySelectorAll('.audit-note-input').forEach(ta => {
     // Kept live in memory on every keystroke so a CU click right after typing
     // (before the field is blurred) still picks up what was just written;
-    // only actually saved to the server once the field loses focus.
+    // only actually saved to the server (and, if linked, to ClickUp) once the
+    // field loses focus and only when it actually changed — tabbing through
+    // an untouched note would otherwise still fire an update.
     ta.addEventListener('input', () => {
       const issue = active.issues.find(i => i.id === ta.dataset.issue);
       if (issue) issue.note = ta.value;
     });
-    ta.addEventListener('blur', () => auditPatchIssue(c.id, active.id, ta.dataset.issue, { note: ta.value }));
+    ta.addEventListener('blur', () => {
+      if (ta.value === ta.dataset.orig) return;
+      ta.dataset.orig = ta.value;
+      const issue = active.issues.find(i => i.id === ta.dataset.issue);
+      auditPatchIssue(c.id, active.id, ta.dataset.issue, { note: ta.value });
+      if (issue?.clickup?.taskId) auditClickupPostUpdate(issue).catch(() => {});
+    });
   });
 }
 

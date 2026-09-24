@@ -1347,6 +1347,27 @@ app.post('/api/clickup/create-task', apiGuard, async (req, res) => {
   }
 });
 
+/* A later change to an issue (Outcome, a Note) that already has a ClickUp
+   task belongs on that same task, not a second one — this appends a comment
+   rather than overwriting the description, so the task keeps a running
+   history of what changed instead of just its latest state. */
+app.post('/api/clickup/comment', apiGuard, async (req, res) => {
+  if (clickupGuard(res)) return;
+  const taskId = String(req.body?.taskId || '').trim();
+  const text   = String(req.body?.text   || '').trim();
+  if (!taskId) return res.status(400).json({ error: { message: 'taskId required' } });
+  if (!text)   return res.status(400).json({ error: { message: 'text required' } });
+  try {
+    const comment = await clickupFetch(`/task/${taskId}/comment`, {
+      method: 'POST',
+      body: JSON.stringify({ comment_text: text }),
+    });
+    res.json({ ok: true, id: comment.id });
+  } catch (e) {
+    res.status(e.status || 502).json({ error: { message: e.message } });
+  }
+});
+
 /* ─────────────────────────────────────────────
    AHREFS API PROXY
 ───────────────────────────────────────────── */
