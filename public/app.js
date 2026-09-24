@@ -9679,6 +9679,8 @@ function auditResultsHtml(a) {
   }).join(' ');
   const warn = !a.synthesized
     ? `<p class="af-note" style="color:var(--red);font-style:normal">AI synthesis unavailable — ${escHtml(a.synthesisError || 'unknown error')}. Evidence was still collected below; try running again once that's resolved.</p>`
+    : a.synthesisTruncated
+    ? `<p class="af-note" style="color:var(--text-primary);font-style:normal">The AI write-up was cut off partway through — the issues list may be incomplete and the 7-day/30-60-90 plans were not recovered. Consider running again.</p>`
     : '';
   return `
     <div class="audit-results">
@@ -9787,9 +9789,11 @@ async function auditRunAudit() {
     if (!r.ok) throw new Error(data?.error?.message || `Server returned ${r.status}`);
     auditReports[c.id] = [data, ...(auditReports[c.id] || [])].slice(0, 5);
     auditState.selectedAuditId = data.id;
-    auditState.message = data.synthesized
-      ? { text: 'Audit complete.', tone: 'green' }
-      : { text: 'Evidence collected — AI synthesis unavailable, see note below.', tone: 'amber' };
+    auditState.message = !data.synthesized
+      ? { text: 'Evidence collected — AI synthesis unavailable, see note below.', tone: 'amber' }
+      : data.synthesisTruncated
+      ? { text: 'Audit complete, but the write-up was cut off — see note below.', tone: 'amber' }
+      : { text: 'Audit complete.', tone: 'green' };
   } catch (e) {
     auditState.message = { text: `Run failed: ${e.message}`, tone: 'red' };
   } finally {

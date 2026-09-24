@@ -2699,6 +2699,11 @@ Rate every issue:
 - Severity: Critical (blocks indexing/ranking or losing revenue now: noindex on a money page, sitewide robots block, broken HTTPS, an orphaned money page) / High (clear ranking impact: missing business schema, duplicate/missing titles on money pages, thin content vs. competitors) / Medium (real optimization gains: meta descriptions, alt text, internal linking) / Low (hygiene).
 - Effort: S / M / L.
 
+BE CONCISE — your output has a hard token ceiling and a truncated response is worse than a short one:
+- At most 20 issues, the most important ones by Severity × Effort, not an exhaustive list of every minor thing on every page.
+- "evidence" and "fix" are one or two sentences each, never a paragraph.
+- "plan7" and "plan306090" are each under 120 words.
+
 Return ONLY a valid JSON object, no prose and no markdown fences, exactly this shape:
 {
   "execSummary": ["bullet 1", "bullet 2", "bullet 3", "bullet 4", "bullet 5"],
@@ -2710,6 +2715,39 @@ Return ONLY a valid JSON object, no prose and no markdown fences, exactly this s
 }
 The first bullet of execSummary must state an overall health score out of 100. Owner "agency" means a copy edit, schema field, sitemap exclusion, alt text or title/meta rewrite — anything needing hosting/server access, a Google Business Profile login, a social login, or DNS is "developer" or "client", never "agency".`;
 
+/* A response cut off mid-JSON (hit the token ceiling before finishing) fails
+   JSON.parse with an "unterminated string"-type error. Rather than throw away
+   a mostly-good report, salvage everything up to the last fully-closed object
+   inside "issues" — execSummary/scorecard sit before it in the schema, so
+   they survive; only a partial issues list and the trailing plan/openItems
+   fields are lost, and the caller is told so via the returned truncated flag. */
+function repairTruncatedAuditJson(text) {
+  try {
+    const issuesKey = text.indexOf('"issues"');
+    if (issuesKey === -1) return null;
+    const arrStart = text.indexOf('[', issuesKey);
+    if (arrStart === -1) return null;
+    let depth = 0, inStr = false, esc = false, lastGoodEnd = -1;
+    for (let i = arrStart + 1; i < text.length; i++) {
+      const ch = text[i];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === '\\') esc = true;
+        else if (ch === '"') inStr = false;
+        continue;
+      }
+      if (ch === '"') { inStr = true; continue; }
+      if (ch === '{') depth++;
+      else if (ch === '}') { depth--; if (depth === 0) lastGoodEnd = i; }
+      else if (ch === ']' && depth === 0) break;   // array closed cleanly — nothing truncated here
+    }
+    if (lastGoodEnd === -1) return null;
+    const repaired = text.slice(0, issuesKey) + '"issues": ' + text.slice(arrStart, lastGoodEnd + 1) + ']}';
+    JSON.parse(repaired);   // throws (and is caught by the caller) if still broken
+    return repaired;
+  } catch { return null; }
+}
+
 async function auditSynthesize(evidence) {
   if (!ANTHROPIC_KEY) return { synthesized: false, reason: 'ANTHROPIC_API_KEY not configured on the server.' };
   try {
@@ -2718,19 +2756,27 @@ async function auditSynthesize(evidence) {
       headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({
         model: 'claude-sonnet-5',
-        max_tokens: 8000,
+        max_tokens: 16000,
         system: AUDIT_SYNTHESIS_SYSTEM_PROMPT,
         messages: [{ role: 'user', content: `Evidence collected for this audit:\n\n${JSON.stringify(evidence, null, 2)}` }],
       }),
-      signal: AbortSignal.timeout(90000),
+      signal: AbortSignal.timeout(120000),
     });
     const data = await up.json();
     if (!up.ok || data?.error) throw new Error(data?.error?.message || `Anthropic returned ${up.status}`);
     let text = data.content?.find(b => b.type === 'text')?.text || '{}';
     text = text.replace(/^\s*```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
-    const parsed = JSON.parse(text);
+    let parsed, truncated = false;
+    try {
+      parsed = JSON.parse(text);
+    } catch (parseErr) {
+      const repaired = repairTruncatedAuditJson(text);
+      if (!repaired) throw parseErr;
+      parsed = JSON.parse(repaired);
+      truncated = true;
+    }
     if (!Array.isArray(parsed.issues)) throw new Error('Model response had no issues array');
-    return { synthesized: true, ...parsed };
+    return { synthesized: true, truncated, ...parsed };
   } catch (e) {
     return { synthesized: false, reason: e.message };
   }
@@ -2795,6 +2841,7 @@ app.post('/api/audit/run', apiGuard, async (req, res) => {
     domain, cms, businessModel, serviceArea, moneyPages: moneyPages || [], competitors: competitors || [], accessAvailable: accessAvailable || [],
     synthesized: synthesis.synthesized,
     synthesisError: synthesis.synthesized ? null : synthesis.reason,
+    synthesisTruncated: !!synthesis.truncated,
     execSummary: synthesis.execSummary || [],
     scorecard: synthesis.scorecard || [],
     issues: (synthesis.issues || []).map(i => ({
@@ -2804,7 +2851,10 @@ app.post('/api/audit/run', apiGuard, async (req, res) => {
       owner: i.owner || 'client', outcome: '', ticket: null,
     })),
     plan7: synthesis.plan7 || '', plan306090: synthesis.plan306090 || '',
-    openItems: [...(synthesis.openItems || []), ...alwaysOpen],
+    openItems: [
+      ...(synthesis.truncated ? ['The AI write-up was cut off partway through — the issues list above may be incomplete and the 7-day plan / 30-60-90 roadmap were not recovered. Re-run if this looks short.'] : []),
+      ...(synthesis.openItems || []), ...alwaysOpen,
+    ],
     evidenceMeta: {
       pagesChecked: pages.filter(p => !p.error).length, pagesFailed: pages.filter(p => p.error).length,
       robotsOk: robots.exists === true, httpsOk: https.httpsOk === true,
