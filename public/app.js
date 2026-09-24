@@ -9845,13 +9845,23 @@ async function auditClickupHandleClick(btn, audit) {
   }
   if (issue.clickup?.syncedTs && !confirm(`Already added to ClickUp as "${issue.clickup.taskName}". Add another task?`)) return;
 
-  const taskName = `${issue.area} — ${issue.issue}`;
+  // Title names the page the issue actually sits on, when there is one —
+  // "robots.txt blocks GPTBot" needs no page, "Missing meta description"
+  // is meaningless without knowing which page.
+  const taskName = `${issue.area} — ${issue.issue}${issue.page ? ` (${issue.page})` : ''}`;
+  const taskDescription = [
+    issue.page ? `Page: ${issue.page}` : '',
+    `Evidence: ${issue.evidence || '—'}`,
+    `Severity: ${issue.severity || '—'} · Effort: ${issue.effort || '—'}`,
+    `Fix: ${issue.fix || '—'}`,
+  ].filter(Boolean).join('\n');
+
   clickupSetBtnState(btn, 'busy');
   try {
     const r = await fetch('/api/clickup/create-task', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ listId: client.clickupListId, name: taskName }),
+      body: JSON.stringify({ listId: client.clickupListId, name: taskName, description: taskDescription }),
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data?.error?.message || `ClickUp error ${r.status}`);

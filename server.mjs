@@ -1317,8 +1317,9 @@ app.get('/api/clickup/lists', apiGuard, async (req, res) => {
    the names it does have instead of failing opaquely. */
 app.post('/api/clickup/create-task', apiGuard, async (req, res) => {
   if (clickupGuard(res)) return;
-  const listId = String(req.body?.listId || '').trim();
-  const name   = String(req.body?.name   || '').trim();
+  const listId      = String(req.body?.listId      || '').trim();
+  const name        = String(req.body?.name        || '').trim();
+  const description = String(req.body?.description || '').trim();
   if (!listId) return res.status(400).json({ error: { message: 'listId required' } });
   if (!name)   return res.status(400).json({ error: { message: 'name required' } });
   try {
@@ -1334,7 +1335,7 @@ app.post('/api/clickup/create-task', apiGuard, async (req, res) => {
 
     const task = await clickupFetch(`/list/${listId}/task`, {
       method: 'POST',
-      body: JSON.stringify({ name, status: closing.status }),
+      body: JSON.stringify({ name, status: closing.status, ...(description ? { description } : {}) }),
     });
     res.json({
       ok: true, taskId: task.id, taskName: task.name, listName: list.name,
@@ -2709,7 +2710,7 @@ Return ONLY a valid JSON object, no prose and no markdown fences, exactly this s
 {
   "execSummary": ["bullet 1", "bullet 2", "bullet 3", "bullet 4", "bullet 5"],
   "scorecard": [{"area":"Technical","rating":"Pass|Needs work|Fail"}, {"area":"On-page","rating":"..."}, {"area":"Schema","rating":"..."}, {"area":"Off-page","rating":"..."}],
-  "issues": [{"area":"Technical|On-page|Schema|Off-page","issue":"...","evidence":"the URL and what was actually seen","severity":"Critical|High|Medium|Low","effort":"S|M|L","fix":"the exact fix — literal text or field to change","owner":"agency|developer|client"}],
+  "issues": [{"area":"Technical|On-page|Schema|Off-page","page":"the one specific page URL this issue is about, or empty string if it's site-wide (robots.txt, backlinks, etc.)","issue":"...","evidence":"the URL and what was actually seen","severity":"Critical|High|Medium|Low","effort":"S|M|L","fix":"the exact fix — literal text or field to change","owner":"agency|developer|client"}],
   "plan7": "7-day fix plan as a short paragraph or bullet list in one string",
   "plan306090": "30/60/90-day roadmap as one string with the three checkpoints",
   "openItems": ["anything the evidence could not settle"]
@@ -2847,7 +2848,7 @@ app.post('/api/audit/run', apiGuard, async (req, res) => {
     scorecard: synthesis.scorecard || [],
     issues: (synthesis.issues || []).map(i => ({
       id: 'i_' + Math.random().toString(36).slice(2, 8),
-      area: i.area || '', issue: i.issue || '', evidence: i.evidence || '',
+      area: i.area || '', page: i.page || '', issue: i.issue || '', evidence: i.evidence || '',
       severity: i.severity || 'Medium', effort: i.effort || 'M', fix: i.fix || '',
       owner: i.owner || 'client', outcome: '', ticket: null, clickup: null,
     })),
