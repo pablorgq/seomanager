@@ -9384,7 +9384,9 @@ async function weekplanGenerate() {
   if (weekPlans[key] && !confirm(`A plan for ${weekplanLabel(key)} already exists. Replace it?`)) return;
 
   const hours = weekplanState.hoursPerClient;
-  const byId  = new Map((rtData?.clients || []).map(c => [c.id, c]));
+  // Inactive clients keep their weekly schedule (nothing is removed), but a
+  // plan is only for the work you're doing now, so they're left out of it.
+  const byId  = new Map((rtData?.clients || []).filter(c => c.active !== false).map(c => [c.id, c]));
 
   // The schedule stays owned by the Weekly tab — this only reads it
   const schedule = WEEKLY_DAYS
