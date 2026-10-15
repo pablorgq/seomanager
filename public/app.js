@@ -6133,6 +6133,9 @@ function rtShowAddClient() {
   document.getElementById('rt-popLocation').value          = '';
   document.getElementById('rt-popLanguage').value          = 'english';
   document.getElementById('rt-popGnl').checked             = false;
+  document.getElementById('rt-auditCms').value              = 'WordPress';
+  document.getElementById('rt-auditCompetitors').value      = '';
+  document.querySelectorAll('#rt-auditAccessRow input').forEach(cb => { cb.checked = false; });
   document.getElementById('rt-deleteClientBtn').classList.add('hidden');
   document.getElementById('rt-saveClientBtn').dataset.mode = 'add';
   if (hasAA) rtLoadCampaigns();
@@ -6173,6 +6176,11 @@ function rtShowEditClientFields(c) {
   document.getElementById('rt-popLocation').value          = c.popLocation || '';
   document.getElementById('rt-popLanguage').value          = c.popLanguage || 'english';
   document.getElementById('rt-popGnl').checked             = !!c.popGnl;
+  document.getElementById('rt-auditCms').value              = c.auditCms || 'WordPress';
+  document.getElementById('rt-auditCompetitors').value      = (c.auditCompetitors || []).join('\n');
+  document.querySelectorAll('#rt-auditAccessRow input').forEach(cb => {
+    cb.checked = (c.auditAccess || []).includes(cb.value);
+  });
   document.getElementById('rt-deleteClientBtn').classList.remove('hidden');
   document.getElementById('rt-saveClientBtn').dataset.mode = 'edit';
   if (hasAA) rtLoadCampaigns(c.aaCampaignId);
@@ -6204,6 +6212,10 @@ async function rtSaveClient() {
   const popLocation = document.getElementById('rt-popLocation').value;
   const popLanguage = document.getElementById('rt-popLanguage').value;
   const popGnl      = document.getElementById('rt-popGnl').checked;
+  const auditCms    = document.getElementById('rt-auditCms').value;
+  const auditCompetitors = (document.getElementById('rt-auditCompetitors').value || '')
+    .split('\n').map(s => s.trim()).filter(Boolean);
+  const auditAccess = [...document.querySelectorAll('#rt-auditAccessRow input:checked')].map(cb => cb.value);
   const bizVal = id => document.getElementById(id)?.value.trim() || '';
   const biz = {
     type: bizVal('rt-bizType'), street: bizVal('rt-bizStreet'), city: bizVal('rt-bizCity'),
@@ -6222,7 +6234,7 @@ async function rtSaveClient() {
   const mode        = document.getElementById('rt-saveClientBtn').dataset.mode;
   if (!name) { setupSetSaved('Client name is required.', true); return; }
   if (mode === 'add') {
-    const client = { id: rtUid(), name, active, aaCampaignId: cid, wpUrl, sitemapUrl, wpUser, wpPass, popLocation, popLanguage, popGnl, pageUrls, biz, clickupListId: cuId || '', clickupListName: cuName || '', keywords: [] };
+    const client = { id: rtUid(), name, active, aaCampaignId: cid, wpUrl, sitemapUrl, wpUser, wpPass, popLocation, popLanguage, popGnl, auditCms, auditCompetitors, auditAccess, pageUrls, biz, clickupListId: cuId || '', clickupListName: cuName || '', keywords: [] };
     rtData.clients.push(client);
     rtData.activeClientId = client.id;
   } else {
@@ -6231,7 +6243,7 @@ async function rtSaveClient() {
     // real state — a fresh install, or right after deleting the last client.
     // Saying "Saved" while writing nothing would be a lie.
     if (!c) { setupSetSaved('No client selected — use + to add one.', true); return; }
-    c.name = name; c.active = active; c.aaCampaignId = cid; c.wpUrl = wpUrl; c.sitemapUrl = sitemapUrl; c.wpUser = wpUser; c.wpPass = wpPass; c.popLocation = popLocation; c.popLanguage = popLanguage; c.popGnl = popGnl; c.pageUrls = pageUrls; c.biz = biz;
+    c.name = name; c.active = active; c.aaCampaignId = cid; c.wpUrl = wpUrl; c.sitemapUrl = sitemapUrl; c.wpUser = wpUser; c.wpPass = wpPass; c.popLocation = popLocation; c.popLanguage = popLanguage; c.popGnl = popGnl; c.auditCms = auditCms; c.auditCompetitors = auditCompetitors; c.auditAccess = auditAccess; c.pageUrls = pageUrls; c.biz = biz;
     if (cuId !== null) { c.clickupListId = cuId; c.clickupListName = cuName; }
   }
   rtSave();
@@ -9683,6 +9695,10 @@ function auditSyncClient() {
   const c  = rtActiveClient();
   const mk = (c?.keywords || []).filter(k => k.mainKeyword);
   const moneyPages = mk.map(k => (k.targetUrl || k.url || '').trim()).filter(Boolean);
+  // CMS, Competitors and Access Available have no derived source — once a
+  // client has them saved (Client Setup, or a previous edit on this tab),
+  // that saved value wins; only a client that has never set them falls back
+  // to a guess.
   const comps = new Set();
   mk.forEach(k => {
     (k.popReport?.competitors || []).forEach(u => comps.add(u));
@@ -9690,12 +9706,12 @@ function auditSyncClient() {
   });
   auditState.form = {
     domain: ahrefsBareHost(c?.wpUrl) || '',
-    cms: 'WordPress',
+    cms: c?.auditCms || 'WordPress',
     businessModel: c?.biz?.type || '',
     serviceArea: [c?.biz?.city, c?.biz?.region].filter(Boolean).join(', '),
     moneyPages: moneyPages.join('\n'),
-    competitors: [...comps].join('\n'),
-    accessAvailable: [],
+    competitors: (c?.auditCompetitors?.length ? c.auditCompetitors : [...comps]).join('\n'),
+    accessAvailable: c?.auditAccess || [],
   };
   auditState.message = null;
   const list = c ? (auditReports[c.id] || []) : [];
@@ -9777,9 +9793,24 @@ function auditRunPanelRender() {
   `;
 
   document.getElementById('audit-runBtn')?.addEventListener('click', auditRunAudit);
+  // CMS, Competitors and Access Available have nowhere else to come from, so
+  // they save to the client as you go — the same fields on Client Setup stay
+  // in sync since both write to c.auditCms/auditCompetitors/auditAccess.
+  document.getElementById('audit-cms')?.addEventListener('change', e => {
+    auditState.form.cms = e.target.value;
+    c.auditCms = e.target.value;
+    rtSave();
+  });
+  document.getElementById('audit-competitors')?.addEventListener('blur', e => {
+    auditState.form.competitors = e.target.value;
+    c.auditCompetitors = e.target.value.split('\n').map(s => s.trim()).filter(Boolean);
+    rtSave();
+  });
   root.querySelectorAll('.audit-access-chip input').forEach(cb => {
     cb.addEventListener('change', () => {
       auditState.form.accessAvailable = [...root.querySelectorAll('.audit-access-chip input:checked')].map(x => x.value);
+      c.auditAccess = auditState.form.accessAvailable;
+      rtSave();
     });
   });
 }
@@ -9799,6 +9830,13 @@ async function auditRunAudit() {
     competitors: document.getElementById('audit-competitors')?.value || '',
     accessAvailable: auditState.form.accessAvailable,
   };
+  // Belt-and-suspenders: the field-level listeners already save these as you
+  // go, but Run is the one moment guaranteed to reflect exactly what's on
+  // screen, including a value typed and never blurred.
+  c.auditCms = auditState.form.cms;
+  c.auditCompetitors = auditState.form.competitors.split('\n').map(s => s.trim()).filter(Boolean);
+  c.auditAccess = auditState.form.accessAvailable;
+  rtSave();
 
   auditState.busy = true;
   auditState.message = { text: 'Running… this can take a minute.' };

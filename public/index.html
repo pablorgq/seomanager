@@ -1025,6 +1025,34 @@
             <label style="display:flex;align-items:center;gap:6px;padding:6px 0"><input type="checkbox" id="rt-popGnl"> <span style="font-size:12px">Enable</span></label>
           </div>
         </div>
+
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin:12px 0 6px">Audit Defaults <span style="font-weight:400;text-transform:none;letter-spacing:0">— pre-fills Run Audit so these don't need retyping on every run</span></div>
+        <div style="display:flex;gap:8px;margin-bottom:14px">
+          <div class="form-group" style="flex:1;margin-bottom:0">
+            <label class="form-label">CMS</label>
+            <select id="rt-auditCms" class="form-input">
+              <option value="WordPress" selected>WordPress</option>
+              <option value="Shopify">Shopify</option>
+              <option value="Wix">Wix</option>
+              <option value="Custom">Custom</option>
+              <option value="Unknown">Unknown</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group" style="margin-bottom:14px">
+          <label class="form-label">Competitors <span style="font-weight:400;color:var(--text-muted)">(one per line)</span></label>
+          <textarea id="rt-auditCompetitors" class="form-textarea" rows="3" placeholder="https://competitor1.com&#10;https://competitor2.com"></textarea>
+        </div>
+        <div class="form-group" style="margin-bottom:14px">
+          <label class="form-label">Access Available</label>
+          <div id="rt-auditAccessRow" style="display:flex;flex-wrap:wrap;gap:8px">
+            <label class="audit-access-chip"><input type="checkbox" value="Google Search Console"> Google Search Console</label>
+            <label class="audit-access-chip"><input type="checkbox" value="GA4"> GA4</label>
+            <label class="audit-access-chip"><input type="checkbox" value="Google Business Profile"> Google Business Profile</label>
+            <label class="audit-access-chip"><input type="checkbox" value="CMS admin"> CMS admin</label>
+            <label class="audit-access-chip"><input type="checkbox" value="None of these"> None of these</label>
+          </div>
+        </div>
         </div>
 
         <div class="form-card">
