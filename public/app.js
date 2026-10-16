@@ -5179,6 +5179,37 @@ async function gscRunAI(siteUrl, days) {
     `${r.keys?.[0] || ''} | clicks:${r.clicks} | imp:${r.impressions} | ctr:${(r.ctr*100).toFixed(1)}% | pos:${r.position.toFixed(1)}`
   ).join('\n');
 
+  // The query-only table above has no URL at all — GSC only returns one when
+  // asked for the 'page' dimension. A second, query+page pull builds a
+  // query → its top page lookup so the audit can cite a real URL per to-do
+  // instead of describing the page from the query text. Non-fatal: without
+  // it the audit still runs, just without page-level citations.
+  let pageMapText = '(not available — page-level data could not be loaded)';
+  try {
+    const { startDate, endDate } = gscDateRange(days);
+    const r = await fetch('/api/gsc/queries', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ siteUrl, startDate, endDate, rowLimit: 2000, dimensions: ['query', 'page'] }),
+    });
+    if (r.ok) {
+      const d = await r.json();
+      const byQuery = new Map();   // query -> best page so far (highest clicks)
+      for (const row of (d.rows || [])) {
+        const [q, page] = row.keys || [];
+        if (!q || !page) continue;
+        const prev = byQuery.get(q);
+        if (!prev || row.clicks > prev.clicks) byQuery.set(q, { page, clicks: row.clicks });
+      }
+      if (byQuery.size) {
+        pageMapText = rows
+          .map(r => r.keys?.[0] || '')
+          .filter(q => byQuery.has(q))
+          .map(q => `${q} → ${byQuery.get(q).page}`)
+          .join('\n') || '(none of the top queries matched a page)';
+      }
+    }
+  } catch (_) { /* non-fatal — see pageMapText default above */ }
+
   const systemPrompt = `You are a senior SEO analyst with 10+ years of hands-on experience auditing Google Search Console (GSC) data. You think like a consultant, not a report generator. The person reading this is not a technical SEO — they need to know WHAT to do, WHY the problem exists, and IN WHAT ORDER.
 
 You are precise and evidence-based, and you never invent data. If a metric isn't in the data provided, say so rather than guessing.
@@ -5202,12 +5233,13 @@ Then write these sections, each as a level-2 heading, in this order. Skip any se
 ### 🟡 Do next
 ### 🟢 Do later
 
-Under each of those three priority headings, list the to-dos. **Every to-do uses exactly this shape — a checkbox line, then four indented sub-bullets, all four every time, never fewer:**
+Under each of those three priority headings, list the to-dos. **Every to-do uses exactly this shape — a checkbox line, then five indented sub-bullets, all five every time, never fewer:**
 
 - [ ] **<action, verb first, max 12 words>**
+  - **Page:** <the exact URL from the QUERY → PAGE lookup below for this to-do's query. If the query has no entry there, write exactly "not available in this data — GSC did not return a matching page" and do not guess or construct a URL.>
   - **Problem:** <what the data shows — name the exact query and quote its real numbers>
   - **Why it's happening:** <the diagnosis: the SEO reason those numbers look like that>
-  - **Fix:** <the concrete step, naming the page or query it applies to>
+  - **Fix:** <the concrete step — what changes on that page>
   - **Expected gain:** <estimated clicks/month or position move, always labelled "(estimate)">
 
 Aim for 3–5 items under 🔴, 3–5 under 🟡, and 2–4 under 🟢. Order them within each group by size of gain. Do not put anything in 🔴 unless the data shows a real, quantified loss.
@@ -5271,6 +5303,9 @@ TOP QUERIES:
 Query | Clicks | Impressions | CTR | Avg Position
 ${tableText}
 
+QUERY → PAGE (each query's top-clicked page in this period — use these exact URLs for the Page bullet, never invent one):
+${pageMapText}
+
 RANK TRACKER CROSS-CHECK: ${
   rt.matched  ? `CONFIRMED — the keywords below belong to "${rt.client.name}", which is verified by domain as the owner of this property. Comparing them against this data is valid.`
   : rt.client ? `UNCONFIRMED — the keywords below belong to "${rt.client.name}", the client currently selected in the app. Nothing verifies that this client owns ${siteUrl}. Do NOT report these keywords as missing, mistargeted or underperforming on this site; they may belong to an entirely different client. State that the cross-check could not be confirmed and skip the "Not Being Tracked" section.`
@@ -5279,7 +5314,7 @@ RANK TRACKER CROSS-CHECK: ${
 KEYWORDS ${rt.client ? `TRACKED FOR "${rt.client.name}"` : 'TRACKED'}:
 ${rt.keywords.slice(0, 40).join(', ') || 'none'}
 
-Run the audit on this data in the exact format specified. Every to-do must carry its Problem, Why it's happening, Fix and Expected gain.`;
+Run the audit on this data in the exact format specified. Every to-do must carry its Page, Problem, Why it's happening, Fix and Expected gain.`;
 
   const key = gscReportKey(siteUrl, days);
 
@@ -5474,7 +5509,11 @@ function gscRenderMd(rawText, checkedItems = []) {
   const checkedSet = new Set(checkedItems);
   const inl = s => escHtml(s)
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/`([^`]+)`/g, '<code class="gsc-code">$1</code>');
+    .replace(/`([^`]+)`/g, '<code class="gsc-code">$1</code>')
+    // The Page bullet is a bare URL, not markdown-link syntax — linkify it so
+    // it's one click to the actual page, not just visible text. Trailing
+    // sentence punctuation stays outside the link.
+    .replace(/\bhttps?:\/\/[^\s<]+[^\s<.,;:)\]]/g, m => `<a href="${m}" target="_blank" rel="noopener" class="gsc-ai-link">${m}</a>`);
 
   function renderLines(lines) {
     const out   = [];

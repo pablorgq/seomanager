@@ -3504,8 +3504,11 @@ app.get('/api/gsc/sites', apiGuard, async (req, res) => {
 
 app.post('/api/gsc/queries', apiGuard, async (req, res) => {
   if (!gscTokens?.refresh_token) return res.status(401).json({ error: 'Not connected to Google Search Console' });
-  const { siteUrl, startDate, endDate, rowLimit = 500 } = req.body || {};
+  const { siteUrl, startDate, endDate, rowLimit = 500, dimensions } = req.body || {};
   if (!siteUrl || !startDate || !endDate) return res.status(400).json({ error: 'Missing params: siteUrl, startDate, endDate' });
+  // Defaults to query-only (every existing caller's shape); the AI audit also
+  // asks for ['query','page'] to learn which URL each query actually belongs to.
+  const dims = Array.isArray(dimensions) && dimensions.length ? dimensions : ['query'];
   try {
     const encodedSite = encodeURIComponent(siteUrl);
     const r = await gscApiFetch(
@@ -3513,7 +3516,7 @@ app.post('/api/gsc/queries', apiGuard, async (req, res) => {
       {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ startDate, endDate, dimensions: ['query'], rowLimit: Math.min(Number(rowLimit) || 500, 1000) }),
+        body:    JSON.stringify({ startDate, endDate, dimensions: dims, rowLimit: Math.min(Number(rowLimit) || 500, 1000) }),
       }
     );
     if (!r) return res.status(401).json({ error: 'Token expired — please reconnect' });

@@ -1089,6 +1089,8 @@ mark.term-both { background: rgba(234,179,8,.28);  color: inherit; border-radius
 .gsc-setup-desc  { font-size: 13px; color: var(--text-secondary); margin-bottom: 14px; }
 .gsc-setup-steps { font-size: 13px; color: var(--text-secondary); padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
 .gsc-code { font-family: monospace; font-size: 12px; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; color: var(--accent); }
+.gsc-ai-link { color: var(--accent); word-break: break-all; }
+.gsc-ai-link:hover { text-decoration: underline; }
 .gsc-connect-prompt {
   display: flex; align-items: center; gap: 12px;
   background: var(--surface-alt); border: 1px solid var(--border);
