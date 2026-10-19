@@ -915,11 +915,11 @@ function saveAuditReports(data) {
 
 app.get('/api/auditreports', apiGuard, (req, res) => res.json(loadAuditReports()));
 
-/* Patch one issue's Outcome (and optional ticket) within a saved audit — the
-   only field the Fix Issues panel writes back, so this stays a small merge
-   rather than round-tripping the whole report. */
+/* Patch one issue's Outcome/Ticket/ClickUp link/Note/Solve chat within a
+   saved audit — the only fields the Fix Issues panel writes back, so this
+   stays a small merge rather than round-tripping the whole report. */
 app.post('/api/auditreports/outcome', apiGuard, (req, res) => {
-  const { clientId, auditId, issueId, outcome, ticket, clickup, note } = req.body || {};
+  const { clientId, auditId, issueId, outcome, ticket, clickup, note, chat } = req.body || {};
   if (!clientId || !auditId || !issueId) {
     return res.status(400).json({ error: { message: 'clientId, auditId and issueId required.' } });
   }
@@ -931,6 +931,7 @@ app.post('/api/auditreports/outcome', apiGuard, (req, res) => {
   if (ticket  !== undefined) issue.ticket  = ticket;
   if (clickup !== undefined) issue.clickup = clickup;
   if (note    !== undefined) issue.note    = note;
+  if (chat    !== undefined) issue.chat    = chat;
   saveAuditReports(data);
   res.json({ ok: true });
 });
@@ -2877,7 +2878,7 @@ app.post('/api/audit/run', apiGuard, async (req, res) => {
       // a strict match, so an uncoerced value silently reads as client/dev.
       owner: ['agency', 'developer', 'client'].includes(String(i.owner || '').trim().toLowerCase())
         ? String(i.owner).trim().toLowerCase() : 'client',
-      outcome: '', ticket: null, clickup: null, note: '',
+      outcome: '', ticket: null, clickup: null, note: '', chat: [],
     })),
     plan7: synthesis.plan7 || '', plan306090: synthesis.plan306090 || '',
     openItems: [

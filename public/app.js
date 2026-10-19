@@ -9707,6 +9707,8 @@ let auditState = {
   message: null,           // { text, tone }
   selectedAuditId: null,    // which saved run the Fix panel is showing
   form: { domain: '', cms: 'WordPress', businessModel: '', serviceArea: '', moneyPages: '', competitors: '', accessAvailable: [] },
+  openChatIssueId: null,    // which issue's Solve panel is expanded, if any
+  chatBusy: new Set(),      // issue ids currently waiting on a Claude reply
 };
 
 async function auditLoadReports() {
@@ -10047,6 +10049,11 @@ function auditIssueRowHtml(clientId, issue) {
         <textarea class="audit-note-input" data-issue="${escHtml(issue.id)}" data-orig="${escHtml(issue.note || '')}" rows="2"
                   placeholder="Note — goes on the ClickUp task too">${escHtml(issue.note || '')}</textarea>
       </td>
+      <td>
+        <button class="btn-sm audit-solve-btn" data-issue="${escHtml(issue.id)}">
+          ${(issue.chat || []).length ? '💬 Continue' : '💬 Solve'}
+        </button>
+      </td>
     </tr>`;
 }
 
@@ -10075,8 +10082,10 @@ function auditFixPanelRender() {
     ${active.issues?.length ? `
       <div class="audit-issues-table-wrap">
         <table class="audit-issues-table">
-          <thead><tr><th>Area</th><th>Issue</th><th>Sev</th><th>Effort</th><th>Owner</th><th>Fix / Ticket</th><th>ClickUp</th><th>Outcome</th><th>Note</th></tr></thead>
-          <tbody>${active.issues.map(i => auditIssueRowHtml(c.id, i)).join('')}</tbody>
+          <thead><tr><th>Area</th><th>Issue</th><th>Sev</th><th>Effort</th><th>Owner</th><th>Fix / Ticket</th><th>ClickUp</th><th>Outcome</th><th>Note</th><th>Solve</th></tr></thead>
+          <tbody>${active.issues.map(i =>
+            auditIssueRowHtml(c.id, i) + (auditState.openChatIssueId === i.id ? auditChatThreadHtml(i, 10) : '')
+          ).join('')}</tbody>
         </table>
       </div>
       ${active.plan7 ? `<div class="af-section-divider">7-day plan</div><p class="af-lead">${escHtml(active.plan7)}</p>` : ''}
@@ -10126,6 +10135,29 @@ function auditFixPanelRender() {
       if (issue?.clickup?.taskId) auditClickupPostUpdate(issue).catch(() => {});
     });
   });
+  root.querySelectorAll('.audit-solve-btn').forEach(btn => {
+    btn.addEventListener('click', () => auditSolveToggle(c, active, btn.dataset.issue));
+  });
+  const sendFromPanel = ta => {
+    const issue = active.issues.find(i => i.id === ta.dataset.issue);
+    if (!issue || !ta.value.trim()) return;
+    const text = ta.value;
+    ta.value = '';
+    auditChatSend(c, active, issue, text);
+  };
+  root.querySelectorAll('.audit-chat-send').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const ta = root.querySelector(`.audit-chat-input[data-issue="${CSS.escape(btn.dataset.issue)}"]`);
+      if (ta) sendFromPanel(ta);
+    });
+  });
+  root.querySelectorAll('.audit-chat-input').forEach(ta => {
+    // Enter sends, Shift+Enter still makes a new line — same convention as
+    // every chat UI, so it needs no explanation in the placeholder.
+    ta.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendFromPanel(ta); }
+    });
+  });
 }
 
 async function auditPatchIssue(clientId, auditId, issueId, patch) {
@@ -10138,6 +10170,108 @@ async function auditPatchIssue(clientId, auditId, issueId, patch) {
       body: JSON.stringify({ clientId, auditId, issueId, ...patch }),
     });
   } catch (_) {}
+}
+
+/* ── SOLVE — a saved, per-issue chat with Claude as an SEO expert ──
+   Advisory only: it explains and guides, same as a Claude Desktop
+   conversation would, except it already has the issue's real evidence/fix/
+   note/client context and the whole thread saves with that issue — so
+   revisiting an audit later shows exactly what was discussed and decided,
+   instead of that living only in a separate chat window. */
+
+// Transient, per-issue — a failed turn is never persisted (see auditChatSend),
+// so there is nothing here worth saving either; it just clears the next try.
+let auditChatErrors = new Map();
+
+function auditChatSystemPrompt(issue, client) {
+  return `You are a senior SEO expert helping an agency actually execute the fix for ONE specific audit issue — not generic advice, the exact steps for this exact issue on this exact client's site.
+
+Never invent facts about the client or the page beyond what is given below. If you need something that isn't provided (an exact CMS field name, a plugin's settings screen), say what to check rather than guessing.
+
+CLIENT: ${client?.name || 'Unknown'}${client?.wpUrl ? ` — ${client.wpUrl}` : ''}${client?.biz?.type ? ` — ${client.biz.type}` : ''}
+
+THE ISSUE:
+Area: ${issue.area || '—'}
+Page: ${issue.page || '(site-wide)'}
+Issue: ${issue.issue || '—'}
+Evidence: ${issue.evidence || '—'}
+Severity: ${issue.severity || '—'} · Effort: ${issue.effort || '—'}
+Owner: ${issue.owner || '—'}
+Planned fix: ${issue.fix || '—'}
+${issue.note ? `Current note on this issue: ${issue.note}` : ''}
+
+This is a back-and-forth conversation, not a one-shot report. Your FIRST reply must be a thorough, step-by-step walkthrough of exactly how to execute the fix — name the real screens/fields, and give finished text or code where the fix calls for it, never a placeholder. Every reply after the first answers the specific follow-up directly and stays focused; do not repeat the whole walkthrough again.`;
+}
+
+async function auditChatSend(client, audit, issue, text) {
+  if (!text?.trim() || auditState.chatBusy.has(issue.id)) return;
+  issue.chat = issue.chat || [];
+  issue.chat.push({ role: 'user', content: text.trim(), ts: Date.now() });
+  auditState.chatBusy.add(issue.id);
+  auditChatErrors.delete(issue.id);
+  auditFixPanelRender();
+
+  try {
+    const r = await fetch('/api/claude/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-5',
+        max_tokens: 3000,
+        system: auditChatSystemPrompt(issue, client),
+        messages: issue.chat.map(m => ({ role: m.role, content: m.content })),
+      }),
+    });
+    const data = await r.json();
+    if (!r.ok || data?.error) throw new Error(data?.error?.message || `Claude error ${r.status}`);
+    const reply = data.content?.find(b => b.type === 'text')?.text || '(no response)';
+    issue.chat.push({ role: 'assistant', content: reply, ts: Date.now() });
+    auditPatchIssue(client.id, audit.id, issue.id, { chat: issue.chat });
+  } catch (e) {
+    issue.chat.pop();   // don't persist a question that never got answered
+    auditChatErrors.set(issue.id, e.message);
+  } finally {
+    auditState.chatBusy.delete(issue.id);
+    auditFixPanelRender();
+  }
+}
+
+function auditSolveToggle(client, audit, issueId) {
+  if (auditState.openChatIssueId === issueId) { auditState.openChatIssueId = null; auditFixPanelRender(); return; }
+  auditState.openChatIssueId = issueId;
+  auditFixPanelRender();
+  const issue = audit.issues.find(i => i.id === issueId);
+  // First time opening this issue's panel — kick it off with a sensible
+  // default rather than making the user type an opening question by hand.
+  if (issue && !(issue.chat || []).length) {
+    auditChatSend(client, audit, issue, 'Walk me through exactly how to solve this issue, step by step.');
+  }
+}
+
+function auditChatThreadHtml(issue, colspan) {
+  const chat  = issue.chat || [];
+  const busy  = auditState.chatBusy.has(issue.id);
+  const error = auditChatErrors.get(issue.id);
+  const bubbles = chat.map(m => `
+    <div class="audit-chat-msg audit-chat-${m.role}">
+      <div class="audit-chat-role">${m.role === 'user' ? 'You' : 'SEO Expert'}</div>
+      <div class="audit-chat-text">${escHtml(m.content)}</div>
+    </div>`).join('');
+  return `
+    <tr class="audit-chat-row">
+      <td colspan="${colspan}">
+        <div class="audit-chat">
+          <div class="audit-chat-thread">${bubbles}</div>
+          ${busy  ? '<div class="audit-chat-typing">SEO expert is thinking…</div>' : ''}
+          ${error ? `<div class="audit-chat-error">⚠ ${escHtml(error)}</div>` : ''}
+          <div class="audit-chat-inputrow">
+            <textarea class="audit-chat-input" data-issue="${escHtml(issue.id)}" rows="2"
+                      placeholder="Ask a follow-up…"${busy ? ' disabled' : ''}></textarea>
+            <button class="btn-sm audit-chat-send" data-issue="${escHtml(issue.id)}"${busy ? ' disabled' : ''}>Send</button>
+          </div>
+        </div>
+      </td>
+    </tr>`;
 }
 
 /* ═══════════════════════════════════════════════
